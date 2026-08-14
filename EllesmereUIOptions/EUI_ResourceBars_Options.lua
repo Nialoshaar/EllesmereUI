@@ -7453,6 +7453,17 @@ initFrame:SetScript("OnEvent", function(self)
                               })
                           end
                       end },
+		-- Texture cog: Continous texture for pip-style resources		  
+				  { type = "toggle", label = "Continuous texture for pip resources",
+				  tooltip = "Pip-style class resources (Holy Power, Arcane charges, etc.) use a continuous texture instead of restarting at every pip, useful if you use a gradient texture.",
+				  get = function()
+					  local p = DB(); return (p and p.secondary.useContinuousTexture) or false
+				  end,
+				  set = function(v)
+					  local p = DB(); if not p then return end
+					  p.secondary.useContinuousTexture = v
+					  RebuildClass()
+				  end },
                 },
             })
             local cogBtn = CreateFrame("Button", nil, lrgn)
