@@ -3318,22 +3318,60 @@ initFrame:SetScript("OnEvent", function(self)
                     label:SetPoint("LEFT", cell, "LEFT", GRID_SIDE_PAD, 0)
                     label:SetText(item.label)
 
-                    -- Color swatch (right side)
-                    local swatch, updateSwatch = EllesmereUI.BuildColorSwatch(cell, cell:GetFrameLevel() + 2,
-                        function()
-                            local c = item.getColor()
-                            return c.r, c.g, c.b, 1
-                        end,
-                        function(r, g, b)
-                            local c = item.getColor()
-                            c.r = r; c.g = g; c.b = b
-                            item.setColor(c)
-                            local rl = EllesmereUI._widgetRefreshList
-                            if rl then for i2 = 1, #rl do rl[i2]() end end
-                        end, false, SWATCH_SZ)
-                    swatch:SetPoint("RIGHT", cell, "RIGHT", -GRID_SIDE_PAD, 0)
-                    -- Repaint on page refresh/show (SelectPage re-runs the refresh list on show) so swatches survive a profile/global-source change.
-                    EllesmereUI.RegisterWidgetRefresh(updateSwatch)
+                    -- Color swatch (right side). A multi-swatch item uses the same
+                    -- cell and reset button; each swatch keeps its own accessor.
+                    local swatch, updateSwatch
+                    if item.swatches then
+                        local updates = {}
+                        local rightAnchor
+                        for si = #item.swatches, 1, -1 do
+                            local colorItem = item.swatches[si]
+                            local s, update = EllesmereUI.BuildColorSwatch(cell, cell:GetFrameLevel() + 2,
+                                function()
+                                    local c = colorItem.getColor()
+                                    return c.r, c.g, c.b, 1
+                                end,
+                                function(r, g, b)
+                                    local c = colorItem.getColor()
+                                    c.r = r; c.g = g; c.b = b
+                                    colorItem.setColor(c)
+                                    local rl = EllesmereUI._widgetRefreshList
+                                    if rl then for i2 = 1, #rl do rl[i2]() end end
+                                end, false, SWATCH_SZ)
+                            if rightAnchor then
+                                s:SetPoint("RIGHT", rightAnchor, "LEFT", -8, 0)
+                            else
+                                s:SetPoint("RIGHT", cell, "RIGHT", -GRID_SIDE_PAD, 0)
+                            end
+                            s:SetScript("OnEnter", function()
+                                EllesmereUI.ShowWidgetTooltip(s, colorItem.tooltip)
+                            end)
+                            s:SetScript("OnLeave", function() EllesmereUI.HideWidgetTooltip() end)
+                            rightAnchor = s
+                            swatch = s
+                            updates[#updates + 1] = update
+                            EllesmereUI.RegisterWidgetRefresh(update)
+                        end
+                        updateSwatch = function()
+                            for ui = 1, #updates do updates[ui]() end
+                        end
+                    else
+                        swatch, updateSwatch = EllesmereUI.BuildColorSwatch(cell, cell:GetFrameLevel() + 2,
+                            function()
+                                local c = item.getColor()
+                                return c.r, c.g, c.b, 1
+                            end,
+                            function(r, g, b)
+                                local c = item.getColor()
+                                c.r = r; c.g = g; c.b = b
+                                item.setColor(c)
+                                local rl = EllesmereUI._widgetRefreshList
+                                if rl then for i2 = 1, #rl do rl[i2]() end end
+                            end, false, SWATCH_SZ)
+                        swatch:SetPoint("RIGHT", cell, "RIGHT", -GRID_SIDE_PAD, 0)
+                        -- Repaint on page refresh/show (SelectPage re-runs the refresh list on show) so swatches survive a profile/global-source change.
+                        EllesmereUI.RegisterWidgetRefresh(updateSwatch)
+                    end
 
                     -- Undo (reset) button
                     local undoBtn = CreateFrame("Button", nil, cell)
@@ -4381,9 +4419,24 @@ initFrame:SetScript("OnEvent", function(self)
                 { key = "SweepingStrikes", label = "Sweeping Strikes" },
             }
             local resourceItems = {}
+            local function SpecResourceColorItem(resourceKey, specKey, tooltip)
+                return {
+                    tooltip = tooltip,
+                    getColor = function()
+                        local cdb = GetCustomColorsDB()
+                        local colors = cdb.classResource
+                        return (colors and colors[specKey])
+                            or EllesmereUI.GetClassResourceColor(resourceKey)
+                            or { r = 1, g = 1, b = 1 }
+                    end,
+                    setColor = function(c)
+                        SaveColorEntry("classResource", specKey, c)
+                    end,
+                }
+            end
             for _, it in ipairs(items) do
                 local key = it.key
-                resourceItems[#resourceItems + 1] = {
+                local resourceItem = {
                     label = EllesmereUI.L(it.label),
                     getColor = function()
                         return EllesmereUI.GetClassResourceColor(key)
@@ -4397,6 +4450,34 @@ initFrame:SetScript("OnEvent", function(self)
                         if cdb.classResource then cdb.classResource[key] = nil end
                     end,
                 }
+                if key == "Runes" then
+                    resourceItem.swatches = {
+                        SpecResourceColorItem("Runes", "RunesBlood", "Blood"),
+                        SpecResourceColorItem("Runes", "RunesFrost", "Frost"),
+                        SpecResourceColorItem("Runes", "RunesUnholy", "Unholy"),
+                    }
+                    resourceItem.resetFn = function()
+                        local cdb = GetCustomColorsDB()
+                        local colors = cdb.classResource
+                        if not colors then return end
+                        colors.RunesBlood = nil
+                        colors.RunesFrost = nil
+                        colors.RunesUnholy = nil
+                    end
+                elseif key == "SoulFragments" then
+                    resourceItem.swatches = {
+                        SpecResourceColorItem("SoulFragments", "SoulFragmentsVengeance", "Vengeance"),
+                        SpecResourceColorItem("SoulFragments", "SoulFragmentsDevourer", "Devourer"),
+                    }
+                    resourceItem.resetFn = function()
+                        local cdb = GetCustomColorsDB()
+                        local colors = cdb.classResource
+                        if not colors then return end
+                        colors.SoulFragmentsVengeance = nil
+                        colors.SoulFragmentsDevourer = nil
+                    end
+                end
+                resourceItems[#resourceItems + 1] = resourceItem
             end
             h = BuildColorGrid(parent, y, resourceItems)
         end
