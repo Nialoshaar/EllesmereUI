@@ -1187,6 +1187,7 @@ local DEFAULTS = {
             borderTexture = "solid",
             darkTheme   = false,
             useBlizzardAtlas = false,  -- bar-style class resources use Blizzard's player-frame power atlas as the fill
+            useContinuousTexture = false,  -- pip-style resources use a continuous texture
             classColored = true,
             resourceColored = false,  -- "Class Resource Color" fill mode (per-spec resource/power color); takes precedence over classColored when on
             fillR       = 0.95, fillG = 0.90, fillB = 0.60, fillA = 1,
@@ -1828,6 +1829,19 @@ local function CreateStatusBar(parent, name, w, h, borderSize, borderR, borderG,
     return bar
 end
 
+function ns.ApplyPipContinuousTexCoord(pip, tex)
+    if not tex then return end
+    if pip._continuousTexture then
+        if pip._continuousVertical then
+            tex:SetTexCoord(0, 1, pip._continuousStart, pip._continuousEnd)
+        else
+            tex:SetTexCoord(pip._continuousStart, pip._continuousEnd, 0, 1)
+        end
+    else
+        tex:SetTexCoord(0, 1, 0, 1)
+    end
+end
+
 -- Create a single pip (for combo points, holy power, etc.)
 local function CreatePip(parent, w, h, idx, borderSize, borderR, borderG, borderB, borderA)
     local pip = CreateFrame("Frame", nil, parent)
@@ -1852,12 +1866,37 @@ local function CreatePip(parent, w, h, idx, borderSize, borderR, borderG, border
         self._border:ApplyStyle(sz, r, g, b, a, textureKey, texOffset, texOffsetY, shiftX, shiftY, addonKey, sizeKey)
     end
 
-    function pip:ApplyTexture(texKey)
+    function pip:ApplyTexture(texKey, continuousStart, continuousEnd, continuousVertical)
+        local hadContinuous = self._continuousTexture
+        self._continuousTexture = continuousStart and true or nil
+        self._continuousStart = continuousStart
+        self._continuousEnd = continuousEnd
+        self._continuousVertical = continuousVertical or nil
         self._texKey = texKey
         local path = EllesmereUI.ResolveTexturePath(_G._ERB_BarTextures, texKey, "Interface\\Buttons\\WHITE8x8")
         self._fill:SetTexture(path)
         if self._rechargeBar then
             self._rechargeBar:SetStatusBarTexture(path)
+        end
+        if self._continuousTexture or hadContinuous then
+            ns.ApplyPipContinuousTexCoord(self, self._fill)
+            if self._rechargeBar then
+                ns.ApplyPipContinuousTexCoord(self, self._rechargeBar:GetStatusBarTexture())
+            end
+            if self._secretBar then
+                ns.ApplyPipContinuousTexCoord(self, self._secretBar:GetStatusBarTexture())
+            end
+            if self._secretThreshBar then
+                ns.ApplyPipContinuousTexCoord(self, self._secretThreshBar:GetStatusBarTexture())
+            end
+            if self._bandResetBar then
+                ns.ApplyPipContinuousTexCoord(self, self._bandResetBar:GetStatusBarTexture())
+            end
+            if self._bandBars then
+                for i = 1, #self._bandBars do
+                    ns.ApplyPipContinuousTexCoord(self, self._bandBars[i]:GetStatusBarTexture())
+                end
+            end
         end
     end
 
@@ -3582,7 +3621,11 @@ local function BuildBars()
                 rf["_barAnim_ph"] = pipH
                 ApplyRunePos()
                 runeFrames[i]:ApplyBorder(0, 0, 0, 0, 0)
-                runeFrames[i]:ApplyTexture(g.barTexture or "none")
+                if sp.useContinuousTexture then
+                    runeFrames[i]:ApplyTexture(g.barTexture or "none", x0 / widthSnapped, x1 / widthSnapped, isVertical)
+                else
+                    runeFrames[i]:ApplyTexture(g.barTexture or "none")
+                end
                 runeFrames[i]._bg:SetColorTexture(ERB.PipBgColor(sp))
                 -- Fill Opacity: same stamp as regular pips (consumed by
                 -- SetActive in the rune update). Inert at 100 unless restoring.
@@ -3650,7 +3693,11 @@ local function BuildBars()
                 else
                     pips[i]:ApplyBorder(0, 0, 0, 0, 0)
                 end
-                pips[i]:ApplyTexture(g.barTexture or "none")
+                if sp.useContinuousTexture then
+                    pips[i]:ApplyTexture(g.barTexture or "none", x0 / widthSnapped, x1 / widthSnapped, isVertical)
+                else
+                    pips[i]:ApplyTexture(g.barTexture or "none")
+                end
                 pips[i]._bg:SetColorTexture(ERB.PipBgColor(sp))
                 -- Fill Opacity: stamp the per-pip factor (consumed by SetActive
                 -- and the secret renderer). Inert at 100 unless restoring.
@@ -4982,7 +5029,12 @@ local function UpdateSecondaryResource()
                             -- Apply the same bar texture if one is set
                             if rf._texKey then
                                 local path = EllesmereUI.ResolveTexturePath(_G._ERB_BarTextures, rf._texKey, nil)
-                                if path then sb:SetStatusBarTexture(path) end
+                                if path then
+                                    sb:SetStatusBarTexture(path)
+                                    if rf._continuousTexture then
+                                        ns.ApplyPipContinuousTexCoord(rf, sb:GetStatusBarTexture())
+                                    end
+                                end
                             end
                             rf._rechargeBar = sb
                         end
@@ -5469,6 +5521,9 @@ local function UpdateSecondaryResource()
                         local sb = CreateFrame("StatusBar", nil, pip)
                         sb:SetAllPoints(pip._fill)
                         sb:SetStatusBarTexture(texPath)
+                        if pip._continuousTexture then
+                            ns.ApplyPipContinuousTexCoord(pip, sb:GetStatusBarTexture())
+                        end
                         sb._texPath = texPath
                         sb:SetStatusBarColor(r, g, b, a)
                         sb:SetFrameLevel(pip:GetFrameLevel())
@@ -5477,6 +5532,9 @@ local function UpdateSecondaryResource()
                         -- A path swap mints a brand-new inner texture and runs the
                         -- parent's pixel-snap hook: NEVER re-set the current path.
                         pip._secretBar:SetStatusBarTexture(texPath)
+                        if pip._continuousTexture then
+                            ns.ApplyPipContinuousTexCoord(pip, pip._secretBar:GetStatusBarTexture())
+                        end
                         pip._secretBar._texPath = texPath
                     end
                     pip._secretBar:SetMinMaxValues(i - 1, i)
@@ -5500,6 +5558,9 @@ local function UpdateSecondaryResource()
                             -- loop fires pips x bands redundant calls.
                             if bb._texPath ~= texPath then
                                 bb:SetStatusBarTexture(texPath); bb._texPath = texPath
+                                if pip._continuousTexture then
+                                    ns.ApplyPipContinuousTexCoord(pip, bb:GetStatusBarTexture())
+                                end
                             end
                             local _lvl = pip:GetFrameLevel() + k
                             if bb._lvl ~= _lvl then
@@ -5524,6 +5585,9 @@ local function UpdateSecondaryResource()
                             end
                             if pip._bandResetBar._texPath ~= texPath then
                                 pip._bandResetBar:SetStatusBarTexture(texPath)
+                                if pip._continuousTexture then
+                                    ns.ApplyPipContinuousTexCoord(pip, pip._bandResetBar:GetStatusBarTexture())
+                                end
                                 pip._bandResetBar._texPath = texPath
                             end
                             pip._bandResetBar:SetFrameLevel(pip:GetFrameLevel() + #_tsBands + 1)
@@ -5551,11 +5615,17 @@ local function UpdateSecondaryResource()
                                 local tb = CreateFrame("StatusBar", nil, pip)
                                 tb:SetAllPoints(pip._fill)
                                 tb:SetStatusBarTexture(texPath)
+                                if pip._continuousTexture then
+                                    ns.ApplyPipContinuousTexCoord(pip, tb:GetStatusBarTexture())
+                                end
                                 tb._texPath = texPath
                                 tb:SetFrameLevel(pip:GetFrameLevel() + 1)
                                 pip._secretThreshBar = tb
                             elseif pip._secretThreshBar._texPath ~= texPath then
                                 pip._secretThreshBar:SetStatusBarTexture(texPath)
+                                if pip._continuousTexture then
+                                    ns.ApplyPipContinuousTexCoord(pip, pip._secretThreshBar:GetStatusBarTexture())
+                                end
                                 pip._secretThreshBar._texPath = texPath
                             end
                             -- Fills only when cur >= max(i, threshCount): the pip is
@@ -5842,7 +5912,12 @@ local function UpdateSecondaryResource()
                 sb:SetMinMaxValues(0, 1)
                 if nextPip._texKey then
                     local path = EllesmereUI.ResolveTexturePath(_G._ERB_BarTextures, nextPip._texKey, nil)
-                    if path then sb:SetStatusBarTexture(path) end
+                    if path then
+                        sb:SetStatusBarTexture(path)
+                        if nextPip._continuousTexture then
+                            ns.ApplyPipContinuousTexCoord(nextPip, sb:GetStatusBarTexture())
+                        end
+                    end
                 end
                 nextPip._rechargeBar = sb
             end
