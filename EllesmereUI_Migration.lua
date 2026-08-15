@@ -2502,6 +2502,37 @@ EllesmereUI.RegisterMigration({
     end,
 })
 
+-- Tertiary visibility now lives entirely in the reorderable Stats to Show
+-- checklist. Preserve the removed toggle's effective state for every profile:
+-- checked enables all three tertiary rows; unchecked leaves all three hidden.
+EllesmereUI.RegisterMigration({
+    id          = "qol_tertiary_stats_checklist_v1",
+    scope       = "profile",
+    description = "Convert Show Tertiary Stats into the per-stat visibility checklist.",
+    body        = function(ctx)
+        local profile = ctx.profile
+        if type(profile.addons) ~= "table" then profile.addons = {} end
+        local qol = profile.addons.EllesmereUIQoL
+        if type(qol) ~= "table" then
+            qol = {}
+            profile.addons.EllesmereUIQoL = qol
+        end
+
+        local enabled = qol.showTertiaryStats
+        if enabled == nil then
+            enabled = EllesmereUIDB and EllesmereUIDB.showTertiaryStats
+        end
+        if type(qol.secondaryStatsHidden) ~= "table" then
+            qol.secondaryStatsHidden = {}
+        end
+        local hidden = enabled ~= true
+        qol.secondaryStatsHidden.leech = hidden
+        qol.secondaryStatsHidden.avoidance = hidden
+        qol.secondaryStatsHidden.speed = hidden
+        qol.showTertiaryStats = nil
+    end,
+})
+
 -- "Disable Slug Outline" (neverShowSlug) and "Outline Icon Text" (outlineIconText)
 -- moved from account-wide root into the per-profile fonts DB for export/import +
 -- module sync. Seeds the live working fonts table (active profile) AND every

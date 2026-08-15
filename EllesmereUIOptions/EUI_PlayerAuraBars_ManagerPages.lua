@@ -690,7 +690,7 @@ local function BuildCoreFields(frame, fontPath, sy, cfg, apply, isBuff)
     local sizeRow
     sizeRow, hh = W:DualRow(frame, sy,
         {
-            type = "slider", text = "Icon Size", min = 16, max = 60, step = 1, trackWidth = 120,
+            type = "slider", text = "Icon Size", min = 16, max = 400, step = 1, trackWidth = 120,
             getValue = function() return cfg.iconSize or 32 end,
             setValue = function(v) cfg.iconSize = v; apply() end
         },
@@ -812,7 +812,7 @@ local function BuildCoreFields(frame, fontPath, sy, cfg, apply, isBuff)
         rgn._lastInline = swatch
         EllesmereUI.RegisterWidgetRefresh(updateSwatch)
         AttachCog(rgn, "Duration Text", {
-            { type = "slider", label = "Text Size", min = 6, max = 24, step = 1,
+            { type = "slider", label = "Text Size", min = 6, max = 60, step = 1,
               get = function() return cfg.durationTextSize or 11 end,
               set = function(v) cfg.durationTextSize = v; apply() end },
             { type = "slider", label = "Offset X", min = -50, max = 50, step = 1,
@@ -841,7 +841,7 @@ local function BuildCoreFields(frame, fontPath, sy, cfg, apply, isBuff)
         rgn._lastInline = swatch
         EllesmereUI.RegisterWidgetRefresh(updateSwatch)
         AttachCog(rgn, "Stacks Text", {
-            { type = "slider", label = "Text Size", min = 6, max = 24, step = 1,
+            { type = "slider", label = "Text Size", min = 6, max = 60, step = 1,
               get = function() return cfg.stackTextSize or 11 end,
               set = function(v) cfg.stackTextSize = v; apply() end },
             { type = "slider", label = "Offset X", min = -50, max = 50, step = 1,
@@ -1209,7 +1209,7 @@ local function BuildFxEffects(frame, sy, cfg, apply)
             { type = "slider", text = "Border", min = 0, max = 4, step = 1, trackWidth = 120,
               getValue = function() return e.borderSize or 0 end,
               setValue = function(v) e.borderSize = v; apply() end },
-            { type = "slider", text = "Size", min = 0, max = 60, step = 1, trackWidth = 120,
+            { type = "slider", text = "Size", min = 0, max = 400, step = 1, trackWidth = 120,
               getValue = function() return e.size or 0 end,
               setValue = function(v)
                   e.size = (v and v > 0) and v or nil

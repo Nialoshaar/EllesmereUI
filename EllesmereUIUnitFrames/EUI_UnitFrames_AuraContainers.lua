@@ -756,20 +756,62 @@ local function BuildStyle(unit, base, s, unitFrame)
     }
 end
 
--- A cast bar that was free-moved off the frame in unlock mode no longer sits
--- between the frame and a bottom-anchored aura stack, so the stack must not
--- reserve its height. Detached = the unlock anchor record is gone AND a saved
--- free position exists; with neither (fresh install, anchor seed not yet run)
--- the reserve is kept.
-local CB_UNLOCK_KEYS = { player = "playerCastbar", target = "targetCastbar", focus = "focusCastbar" }
-local function CastbarDetached(unit)
-    local key = CB_UNLOCK_KEYS[unit]
-    if not key then return false end
-    if EllesmereUI.IsUnlockAnchored and EllesmereUI.IsUnlockAnchored(key) then return false end
-    local db = ns.db
-    local pos = db and db.profile and db.profile.positions
-    return (pos and pos[key]) ~= nil
+-- Does the unit's cast bar occupy the strip directly below the frame -- the
+-- space a bottom-anchored aura stack would otherwise take? Answered from LIVE
+-- GEOMETRY, not from "has the user ever moved it": a bar that was free-moved in
+-- unlock mode but still parks under its frame (the common case) keeps the
+-- reserve, and only a bar genuinely somewhere else drops it.
+--
+-- The previous rule read ns.db, which is assigned one frame LATER than every
+-- other input here (SetupOptionsPanel runs off C_Timer.After(0), while the
+-- settings come from ns.UF_GetSettings, live since frame creation). Whether the
+-- deferred container build landed before or after that frame decided the answer,
+-- so the reserve differed between a cold login and a /reload with identical
+-- saved data.
+--
+-- Fails toward KEEPING the reserve: no frame, no bounds yet (pre-layout) or a
+-- unit with no movable cast bar of its own (boss) all answer true, which is what
+-- the bottom-anchor path did before. The saved cast bar position lands on the
+-- unlock system's deferred pass, so the settle timers further down re-run this
+-- once the bar is actually where the user put it.
+local CB_STRIP_SLACK = 8 -- physical pixels of tolerance on the strip's edges
+local CB_FRAME_NAMES = {
+    player = "EllesmereUIUnitFrames_Player",
+    target = "EllesmereUIUnitFrames_Target",
+    focus  = "EllesmereUIUnitFrames_Focus",
+}
+local function CastbarBelowFrame(unit, frame)
+    if not CB_FRAME_NAMES[unit] then return true end
+    frame = frame or _G[CB_FRAME_NAMES[unit]]
+    -- frame.Castbar is the status bar; its PARENT is the holder the unlock
+    -- system moves (see CreateCastBar in EllesmereUIUnitFrames.lua).
+    local cb = frame and frame.Castbar and frame.Castbar:GetParent()
+    if not cb then return true end
+    local fl, fr, fb = frame:GetLeft(), frame:GetRight(), frame:GetBottom()
+    local cl, cr, ct, cbot = cb:GetLeft(), cb:GetRight(), cb:GetTop(), cb:GetBottom()
+    if not (fl and fr and fb and cl and cr and ct and cbot) then return true end
+    -- Physical pixels: the holder is positioned independently of the frame and
+    -- can carry its own effective scale, so raw coordinates are not comparable.
+    local fs, cs = frame:GetEffectiveScale(), cb:GetEffectiveScale()
+    fl, fr, fb = fl * fs, fr * fs, fb * fs
+    cl, cr, ct, cbot = cl * cs, cr * cs, ct * cs, cbot * cs
+    -- Beside the frame rather than under it: nothing to reserve.
+    if cl >= fr or cr <= fl then return false end
+    -- How far the bar's top edge hangs below the frame's bottom: 0 is flush, a
+    -- hand-aligned bar is a few pixels either way. The reserve itself is a fixed
+    -- -castbarHeight, so it only ever clears a bar sitting AT the frame's edge;
+    -- once the drop reaches a full bar height the reserve would park the icons
+    -- on top of the bar rather than above it, so the stack docks to the frame
+    -- instead. Overlap into the frame stays allowed within the tolerance.
+    local h = ct - cbot
+    if h <= 0 then h = 14 end
+    local drop = fb - ct
+    return drop < h and drop >= -CB_STRIP_SLACK
 end
+ns.UF_CastbarBelowFrame = CastbarBelowFrame
+-- Cross-addon: the options preview mirrors this decision so its layout matches
+-- the live frames (EllesmereUIOptions/EUI_UnitFrames_Options.lua).
+EllesmereUI.UF_CastbarBelowFrame = CastbarBelowFrame
 
 -- Container anchoring: mirrors the legacy element's SetPoint(ia, frame, fp,
 -- ox + userX, oy + castbarPush + userY) with gap = 1.
@@ -840,7 +882,7 @@ local function AnchorContainer(container, frame, unit, base, s, buffContainer)
     -- (field case: boss left-anchored debuffs sat ~castbarHeight low). The
     -- oUF-element anchor path has always been bottom-only; this matches it.
     if showCb and (anchor == "bottomleft" or anchor == "bottomright")
-        and not CastbarDetached(unit) then
+        and CastbarBelowFrame(unit, frame) then
         if not cbH or cbH <= 0 then cbH = 14 end
         cbOff = -cbH
     end
@@ -1092,7 +1134,7 @@ end
 -- (computed values like ElementSize and the pixel-scaled spacings capture
 -- scale changes implicitly). The chain composition is covered separately by
 -- entry.sig; a sig change swaps the container and forces this pass anyway.
-local function CfgFP(unit, base, s)
+local function CfgFP(unit, base, s, frame)
     local PP = EllesmereUI.PP
     local isBuff = (base == "HELPFUL")
     local size, h = ElementSize(unit, base, s)
@@ -1131,7 +1173,7 @@ local function CfgFP(unit, base, s)
         mAB, mAB and s.debuffAnchor or nil, mAB and s.debuffGrowth or nil,
         mAB and s.debuffOffsetX or nil, mAB and s.debuffOffsetY or nil,
         mAB and s.debuffSpacingY or nil,
-        CastbarDetached(unit),
+        CastbarBelowFrame(unit, frame),
         -- Tracked Auras lists: ApplyGroupConfig reads both (the shared
         -- excludes), and TRI-STATE flips don't move the chain sig -- an
         -- entry's enable checkbox must re-drive this pass.
@@ -1449,7 +1491,7 @@ function ns.UF_ReloadAuraContainers(frame, unit)
         end
 
         if container then
-            local cfgV = CfgFP(unit, base, s)
+            local cfgV = CfgFP(unit, base, s, frame)
             if force or st.cfg ~= cfgV then
                 st.cfg = cfgV
                 AnchorContainer(container, frame, unit, base, s, entry.buffs) -- self-skips on anchor "none"
@@ -1547,6 +1589,51 @@ function ns.UF_ReloadAllAuraContainers()
         if entry.frame then
             ns.UF_ReloadAuraContainers(entry.frame, unitKey)
         end
+    end
+end
+
+-- Cast bar settle: the bar's saved position is applied by the unlock system's
+-- deferred login pass (EUI_UnlockMode.lua fires it ~1.5s after
+-- PLAYER_ENTERING_WORLD, or CDM owns it), which lands AFTER these containers
+-- anchored -- so the bottom-anchor reserve was decided against the bar's
+-- provisional position. Re-run the pass once the positions are in, and again
+-- whenever unlock mode closes (the bar may have been dragged into or out of the
+-- strip below the frame). Both are no-ops unless the reserve actually changed:
+-- UF_ReloadAuraContainers only re-anchors on a config fingerprint change.
+-- A profile swap needs no trigger of its own: it runs through RefreshAllAddons
+-- -> ReloadFrames, which ends in UF_ReloadAllAuraContainers already.
+-- Cost: two login timers, one unlock listener. No per-frame work, no allocation
+-- on any chatty event.
+--
+-- Deliberately NOT a hook on EllesmereUI._applySavedPositions: that field is
+-- passed by reference into C_Timer.After by the action bars module
+-- (EllesmereUIActionBars.lua), and replacing it there made that call raise.
+do
+    local pending = false
+    local function Settle()
+        pending = false
+        ns.UF_ReloadAllAuraContainers()
+    end
+    local function Queue()
+        if pending then return end
+        pending = true
+        C_Timer.After(0, Settle)
+    end
+    local settleWatcher = CreateFrame("Frame")
+    settleWatcher:RegisterEvent("PLAYER_ENTERING_WORLD")
+    settleWatcher:SetScript("OnEvent", function(self)
+        self:UnregisterEvent("PLAYER_ENTERING_WORLD")
+        -- Two passes: the first clears the unlock system's own deferred pass
+        -- (~1.5s after this event), the second covers a CDM-owned run of it,
+        -- which waits for async icon population and can land later. Whichever
+        -- lands second is a no-op unless the reserve actually changed.
+        C_Timer.After(2, Queue)
+        C_Timer.After(5, Queue)
+    end)
+    if EllesmereUI.RegisterUnlockModeListener then
+        EllesmereUI:RegisterUnlockModeListener("EUF_AuraContainers", function(unlockActive)
+            if not unlockActive then Queue() end
+        end)
     end
 end
 

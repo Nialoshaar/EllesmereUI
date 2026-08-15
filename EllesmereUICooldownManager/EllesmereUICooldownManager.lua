@@ -6107,16 +6107,75 @@ ns.EnsureFocusCastProxy = EnsureFocusCastProxy
 -- clean canonical id via GetCanonicalSpellIDForFrame (the same id the options menu writes the
 -- setting under) -- never index a table with the live secret id. Hooked-frame + throttle state
 -- live in a do-block, off the Blizzard frame table per the no-custom-props rule. Reuses the
--- FocusKick sound table (option list identical to Focus Cast Sound); the two edges use separate throttle tables so they never suppress each other.
+-- FocusKick sound table (option list identical to Focus Cast Sound). Edges are COALESCED to
+-- the end of the frame rather than played on the spot: some auras are reapplied by REPLACING
+-- the instance instead of refreshing it, and Blizzard checks its removed-alert triggers before
+-- the item frames adopt the new instance, so the drop edge fires while the buff is still up.
+-- Death and Decay does this on every entry into the circle, cueing a loss at the moment the
+-- buff was GAINED. One frame is the whole window -- both alerts fire inside a single
+-- ProcessUnitAuraEvent -- so both edges on one spell in one frame is that replacement.
 do
     local _soundHooked = setmetatable({}, { __mode = "k" })
-    local _soundThrottle = {}            -- [spellID] = last GetTime() (gain dedupe)
-    local _soundThrottleLost = {}        -- [spellID] = last GetTime() (loss dedupe)
+    -- Edges seen this frame: [spellID] = sound key, or false for "edge happened,
+    -- configured silent". A silent edge MUST still be recorded or a replacement
+    -- whose gain has no sound (the usual setup -- loss cue only) never pairs.
+    local _pendGain = {}
+    local _pendLoss = {}
+    local _flushQueued = false
+    local _pendStamp = 0                 -- GetTime() of the frame the pending edges belong to
+    -- Overlap guard, NOT an edge filter: two cues for the same spell and edge closer
+    -- together than this would talk over each other. Replacements are cancelled by the
+    -- pairing above, so this no longer hides them.
+    local _soundThrottle = {}            -- [spellID] = last GetTime() (gain)
+    local _soundThrottleLost = {}        -- [spellID] = last GetTime() (loss)
     local SOUND_MIN_GAP = 0.3
-    -- Resolve the per-icon sound for one edge and play it (throttled). `field` is
-    -- the spell-setting key ("buffActiveSoundKey" gain / "buffLostSoundKey" loss);
-    -- `throttle` is the matching dedupe table. Identical resolution for both edges.
-    local function PlayBuffEdgeSound(f, field, throttle)
+
+    -- Per-spell tier then bar tier, for one setting key. nil = silent.
+    local function PickBuffSoundKey(ss, sid, field)
+        local k = ss and ss[field]
+        if not k then k = ns.FindBuffSoundKey and ns.FindBuffSoundKey(sid, field) end
+        if not k or k == "none" then return nil end
+        return k
+    end
+
+    local function PlayThrottled(key, sid, throttle)
+        if not key then return end
+        local now = GetTime()
+        local last = throttle[sid]
+        if last and (now - last) < SOUND_MIN_GAP then return end
+        throttle[sid] = now
+        local path = FOCUSKICK_SOUND_PATHS[key]
+        if path then PlaySoundFile(path, "Master") end
+    end
+
+    local function FlushBuffEdges()
+        _flushQueued = false
+        -- Still inside the frame these edges were recorded in (the timer can tick
+        -- after some of the frame's aura events but before the rest): a later edge
+        -- could still pair with them, so decide next frame instead.
+        if GetTime() == _pendStamp then
+            _flushQueued = true
+            C_Timer.After(0, FlushBuffEdges)
+            return
+        end
+        -- Entries are cleared BEFORE playing so a throw inside PlaySoundFile cannot
+        -- strand one and have it cancel an unrelated edge on a later flush.
+        for sid, key in pairs(_pendLoss) do
+            -- Paired with a gain this frame = replacement: the buff never left, so
+            -- NEITHER cue is real. A true gain fires in its own, earlier frame.
+            local paired = _pendGain[sid] ~= nil
+            _pendGain[sid] = nil
+            _pendLoss[sid] = nil
+            if not paired then PlayThrottled(key, sid, _soundThrottleLost) end
+        end
+        for sid, key in pairs(_pendGain) do
+            _pendGain[sid] = nil
+            PlayThrottled(key, sid, _soundThrottle)
+        end
+    end
+
+    -- Record one edge for the end-of-frame flush. gainEdge picks the side.
+    local function RecordBuffEdge(f, gainEdge)
         -- Loading screen / login settle: buffs re-apply and viewer frames re-show
         -- across a zone/login, firing phantom apply/remove alerts. Drop them.
         if ns._cdmSoundSuppressed and ns._cdmSoundSuppressed() then return end
@@ -6126,23 +6185,37 @@ do
         -- handles variant/override spells). Falls back to an id-only lookup for the
         -- FIRST gain after login, whose alert fires before DecorateFrame populates
         -- _ecmeFC -- keying off that context dropped the very first cue.
-        local key
+        local ss
         local fc = _ecmeFC[f]
         local barKey = fc and fc.barKey
         if barKey then
             local sd = ns.GetBarSpellData and ns.GetBarSpellData(barKey)
-            local ss = ns.ResolveSpellSettings and ns.ResolveSpellSettings(f, sid, sd, barKey)
-            key = ss and ss[field]
+            ss = ns.ResolveSpellSettings and ns.ResolveSpellSettings(f, sid, sd, barKey)
         end
-        if not key then key = ns.FindBuffSoundKey and ns.FindBuffSoundKey(sid, field) end
-        if not key or key == "none" then return end
+        -- A silent edge still has to be recorded so it can cancel its partner, but only
+        -- when the OTHER edge has a cue -- so the second lookup runs only on that path.
+        local key = PickBuffSoundKey(ss, sid, gainEdge and "buffActiveSoundKey" or "buffLostSoundKey")
+        if not key and not PickBuffSoundKey(ss, sid, gainEdge and "buffLostSoundKey" or "buffActiveSoundKey") then
+            return
+        end
+        -- A new frame closes the previous batch: pairing must never reach across the
+        -- boundary, or a real drop and an unrelated real gain a frame later cancel out.
         local now = GetTime()
-        local last = throttle[sid]
-        if last and (now - last) < SOUND_MIN_GAP then return end
-        throttle[sid] = now
-        local path = FOCUSKICK_SOUND_PATHS[key]
-        if path then PlaySoundFile(path, "Master") end
+        if now ~= _pendStamp then
+            FlushBuffEdges()
+            _pendStamp = now
+        end
+        if gainEdge then
+            _pendGain[sid] = key or false
+        else
+            _pendLoss[sid] = key or false
+        end
+        if not _flushQueued then
+            _flushQueued = true
+            C_Timer.After(0, FlushBuffEdges)
+        end
     end
+
     function ns.EnsureBuffSoundHook(frame)
         if not frame or _soundHooked[frame] then return end
         -- Own placeholder/custom frames (and anything that isn't a Blizzard buff
@@ -6153,12 +6226,12 @@ do
         end
         _soundHooked[frame] = true
         hooksecurefunc(frame, "TriggerAuraAppliedAlert", function(f)
-            PlayBuffEdgeSound(f, "buffActiveSoundKey", _soundThrottle)
+            RecordBuffEdge(f, true)
         end)
         -- Loss edge: Blizzard fires TriggerAuraRemovedAlert when the buff drops.
         if type(frame.TriggerAuraRemovedAlert) == "function" then
             hooksecurefunc(frame, "TriggerAuraRemovedAlert", function(f)
-                PlayBuffEdgeSound(f, "buffLostSoundKey", _soundThrottleLost)
+                RecordBuffEdge(f, false)
             end)
         end
     end
@@ -7849,6 +7922,9 @@ end
 -- (buff-family excluded -- picker-authoritative). The export path nil-checks this, so a disabled CDM child is a clean no-op.
 EllesmereUI.CDMReconcileActiveSpecSpells = function()
     ns.ReseedAssignedSpellsFromLiveIcons(true)
+    -- Export serializes immediately after this bridge: erase any item rows
+    -- the reseed just mirrored so exports can never ship them.
+    if ns.PruneEquipmentBuffRows then ns.PruneEquipmentBuffRows() end
 end
 
 -- Shared PLAYER_REGEN_ENABLED waiter for the automatic keep/drop pass below.
@@ -7882,7 +7958,7 @@ end
 --- no profile, no migration, mid-import, data not yet loaded, provider
 --- unreachable, or combat all return the bar's spell data unchanged rather
 --- than risk dropping a legitimately-owned entry.
-function ns.ReconcileAssignedSpellDrops(barKey, collect)
+function ns.ReconcileAssignedSpellDrops(barKey)
     local sd = ns.GetBarSpellData(barKey)
     if not sd then return sd end
 
@@ -7897,8 +7973,8 @@ function ns.ReconcileAssignedSpellDrops(barKey, collect)
     if aprof._importGhostMode then return sd end
     if not ns._cdmDataLoaded then return sd end
 
-    -- GHOST BAR EXEMPTION (field 2026-08-13, hunter Scare Beast keep=false in the
-    -- /cdmrec dump): the ghost store holds spells the user DELIBERATELY removed --
+    -- GHOST BAR EXEMPTION (field 2026-08-13, hunter Scare Beast classified
+    -- keep=false in a reconcile dry-run): the ghost store holds spells the user DELIBERATELY removed --
     -- not-shown by definition, often uncatalogued -- and dropping a ghost entry
     -- erases the removal decision, so the spell re-materializes onto the visible
     -- bar. The classification ladder must never see this pseudo-bar.
@@ -7978,7 +8054,6 @@ function ns.ReconcileAssignedSpellDrops(barKey, collect)
                     end
                     local verdict = ns.CDMEntryHiddenOrRemoved(ce.cdID, nil, info, lsl)
                     if verdict == "hidden" or verdict == "removed" then skip = true end
-                    if collect then collect.cat[#collect.cat + 1] = { ce.cdID, ce.category, ce.sid, info and info.spellID, info and info.isKnown, verdict or "keep" } end
                 end
                 if not skip then
                     local s = ce.sid
@@ -8082,11 +8157,6 @@ function ns.ReconcileAssignedSpellDrops(barKey, collect)
                 -- an untalented assignment.
                 keep = true
             end
-        end
-        if collect then
-            local dl = displayed[id] or displayed[NormalizeToBase(id)] or displayed[ResolveToLive(id) or -1] or false
-            local ch = catalogSet and (catalogSet[id] or catalogSet[NormalizeToBase(id)] or catalogSet[ResolveToLive(id) or -1]) or false
-            collect.ids[#collect.ids + 1] = { id, keep, dl, ch }
         end
         if keep then
             sd.assignedSpells[writeIdx] = id
@@ -8201,6 +8271,11 @@ function ns.RequestCDMDropPass(reason)
             end
         end
     end
+    -- Items are preset-lane-only: whatever intake lane just ran (reseed,
+    -- spillover, materializer) may have mirrored a native equipment entry
+    -- into a store -- the same pass class erases it, so item rows can never
+    -- persist. Tracking an item in Blizzard's CDM becomes a store no-op.
+    if ns.PruneEquipmentBuffRows then ns.PruneEquipmentBuffRows() end
 end
 
 -------------------------------------------------------------------------------
@@ -8251,52 +8326,6 @@ end
 -- idiom). Returns nil (never an empty table) on failure so a caller checking
 -- lookup[id] can tell "couldn't build" from "confirmed empty" -- collapsing the two
 -- would make a dead provider read as "everything in this category is gone".
--- ==== TEMP DEBUG -- REMOVE BEFORE RELEASE (Gust-of-Wind reconcile drop hunt, 2026-08-13) ====
--- /cdmrec: DRY-RUNS the reconcile classification for every CD/utility bar and prints
--- each stored id's fate WITHOUT writing the store (operates on a copy). Also dumps the
--- catalog enumeration per entry: cdID | category | sid | rawSpellID | isKnown | verdict.
-SLASH_EUICDMREC1 = "/cdmrec"
-SlashCmdList.EUICDMREC = function()
-    local p = ECME and ECME.db and ECME.db.profile
-    if not (p and p.cdmBars) then print("cdmrec: no profile") return end
-    -- Ghost store dumped RAW (the reconcile exempts it, so the classifier
-    -- collector never sees it): these are the user's deliberate removals.
-    local gsd = ns.GetBarSpellData and ns.GetBarSpellData(ns.GHOST_CD_BAR_KEY or "__ghost_cd")
-    if gsd and gsd.assignedSpells and #gsd.assignedSpells > 0 then
-        local out = {}
-        for gi = 1, #gsd.assignedSpells do out[gi] = tostring(gsd.assignedSpells[gi]) end
-        print("|cff0cd29fcdmrec|r ghost store: " .. table.concat(out, ", "))
-    else
-        print("|cff0cd29fcdmrec|r ghost store: empty")
-    end
-    for barKey, bd in pairs(barDataByKey) do
-        local bt = bd and bd.barType
-        if bt == "cooldowns" or bt == "utility" then
-            local sd = ns.GetBarSpellData(barKey)
-            local live = sd and sd.assignedSpells
-            if live and #live > 0 then
-                local backup = {}
-                for i2 = 1, #live do backup[i2] = live[i2] end
-                local collect = { cat = {}, ids = {} }
-                ns.ReconcileAssignedSpellDrops(barKey, collect)
-                -- restore the store: this command must never mutate
-                for i2 = #live, 1, -1 do live[i2] = nil end
-                for i2 = 1, #backup do live[i2] = backup[i2] end
-                print(format("|cff0cd29fcdmrec|r %s: %d stored, catalog rows %d", tostring(barKey), #backup, #collect.cat))
-                for _, c in ipairs(collect.cat) do
-                    if c[2] and c[2] >= 4 then
-                        print(format("  cat%s cd=%s sid=%s raw=%s known=%s %s", tostring(c[2]), tostring(c[1]), tostring(c[3]), tostring(c[4]), tostring(c[5]), tostring(c[6])))
-                    end
-                end
-                for _, r2 in ipairs(collect.ids) do
-                    print(format("  id=%s keep=%s shown=%s catalog=%s", tostring(r2[1]), tostring(r2[2]), tostring(r2[3]), tostring(r2[4])))
-                end
-            end
-        end
-    end
-end
--- ==== END TEMP DEBUG ====
-
 function ns.CDMBuildLiveCategorySetLookup(category)
     if type(category) ~= "number" then return nil end
     if not (C_CooldownViewer and C_CooldownViewer.GetCooldownViewerCategorySet) then return nil end
@@ -9023,6 +9052,14 @@ function ECME:OnEnable()
             end
         end)
     end
+
+    -- NO spec-swap drop-pass guard lives here, deliberately (a PSC-edge
+    -- unlatch was built and REMOVED same day): the destructive pass rode
+    -- SPELLS_CHANGED, which can dispatch before PLAYER_SPECIALIZATION_CHANGED,
+    -- and the latch probe only proves the layout manager EXISTS -- neither
+    -- edge can prove the catalog serves the NEW spec. The fix is upstream:
+    -- the swap-path rebuild tail requests no drop pass at all (see the
+    -- reanchor tail in CdmHooks). Removal sync = settled-state triggers only.
 
     -- Enable CDM cooldown viewer (keep Blizzard CDM running in background so we can read its children even while hidden)
     if C_CVar and C_CVar.SetCVar then

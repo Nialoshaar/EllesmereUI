@@ -4180,7 +4180,17 @@ initFrame:SetScript("OnEvent", function(self)
               tooltip="Allows free camera movement while holding and dragging right mouse button over raid frames. Right-click tap still opens the unit menu.",
               getValue=function() return SVal("freeRightClickCamera", false) end,
               setValue=function(v) SSet("freeRightClickCamera", v); if ns.FRCM_Refresh then ns.FRCM_Refresh() end end },
-            { type="label", text="" });  y = y - h
+            { type="dropdown", text="Frame Strata",
+              tooltip="Controls the display order of raid and party frames. Set higher to show above other elements.",
+              values=EllesmereUI.FRAME_STRATA_LABELS,
+              order=EllesmereUI.FRAME_STRATA_ORDER_BASE,
+              getValue=function() return SVal("frameStrata", "LOW") end,
+              setValue=function(v)
+                  -- Reload after changing strata to restore child frame levels.
+                  SWrite("frameStrata", v)
+                  if ns.ApplyFrameStrata then ns.ApplyFrameStrata() end
+                  ReloadAndUpdate()
+              end });  y = y - h
 
         if onSection then onSection("rangeTooltip", _secY, y) end
         return y
@@ -5770,6 +5780,7 @@ initFrame:SetScript("OnEvent", function(self)
         "raid", "frames", "group", "health", "power", "absorb", "shield",
         "debuff", "dispel", "threat", "role", "marker", "ready", "check",
         "border", "range", "tooltip", "layout", "spacing", "buff", "manager",
+        "strata", "layer", "overlap",
         "click", "cast", "binding", "keybind", "spell", "macro", "mouseover",
     }
 

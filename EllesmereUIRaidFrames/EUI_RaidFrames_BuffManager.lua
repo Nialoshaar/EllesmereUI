@@ -1186,6 +1186,7 @@ function ns.BM_CreatePreviewIndicators(f, health, PP)
     f._bmIconPool      = iconPool
     f._bmBarPool       = barPool
     f._bmHCOverlay     = hcOverlay
+    f._bmHCBar         = health
     f._bmBGOverlay     = bgOverlay
     f._bmEffectBorder  = effectBorder
 end
@@ -1384,7 +1385,8 @@ function ns.BM_ApplyPreviewIndicators(f, index, s)
                         if wantShow then
                             if indType == "healthcolor" and f._bmHCOverlay then
                                 local c = ind.color or { r=0, g=1, b=0 }
-                                f._bmHCOverlay:SetColorTexture(c.r, c.g, c.b, (ind.opacity or 100) / 100)
+                                ns.RF_TintOverBarFill(f._bmHCOverlay, f._bmHCBar,
+                                    c.r, c.g, c.b, (ind.opacity or 100) / 100)
                                 f._bmHCOverlay:Show()
                             elseif indType == "bgcolor" and f._bmBGOverlay then
                                 local c = ind.color or { r=0, g=1, b=0 }

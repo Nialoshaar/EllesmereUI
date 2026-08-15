@@ -20,7 +20,15 @@ EllesmereUI._ModuleNS["EllesmereUIQoL"] = select(2, ...)  -- LOD options files r
 local _qolExtrasDB
 local function QoLExtrasProfile()
     if not _qolExtrasDB and EllesmereUI and EllesmereUI.Lite and EllesmereUI.Lite.NewDB then
-        _qolExtrasDB = EllesmereUI.Lite.NewDB("EllesmereUIQoLDB", { profile = {} })
+        _qolExtrasDB = EllesmereUI.Lite.NewDB("EllesmereUIQoLDB", {
+            profile = {
+                secondaryStatsHidden = {
+                    leech = true,
+                    avoidance = true,
+                    speed = true,
+                },
+            },
+        })
     end
     return _qolExtrasDB and _qolExtrasDB.profile
 end
@@ -1683,6 +1691,31 @@ do
         mastery = "55aaff",   -- blue
         vers    = "c77dff",   -- violet
     }
+    local DEFAULT_STAT_ORDER = {
+        "crit", "haste", "mastery", "vers", "leech", "avoidance", "speed",
+    }
+    local VALID_STAT = {
+        crit = true, haste = true, mastery = true, vers = true,
+        leech = true, avoidance = true, speed = true,
+    }
+
+    local function SecondaryStatsOrder()
+        local saved = EllesmereUI.QoLExtrasGet("secondaryStatsOrder")
+        if type(saved) ~= "table" then return DEFAULT_STAT_ORDER end
+
+        local order, added = {}, {}
+        for _, key in ipairs(saved) do
+            if VALID_STAT[key] and not added[key] then
+                added[key] = true
+                order[#order + 1] = key
+            end
+        end
+        for _, key in ipairs(DEFAULT_STAT_ORDER) do
+            if not added[key] then order[#order + 1] = key end
+        end
+        return order
+    end
+    EllesmereUI._secondaryStatsOrder = SecondaryStatsOrder
     -- Tertiaries keep the original default: the player's class color.
 
     -- SECRET STATS. In restricted content the stat getters return secret
@@ -1827,6 +1860,16 @@ do
             vers = versRating + versBase
             statsFrame._versLastClean = vers
         end
+        local showBoth = EllesmereUI.QoLExtrasGet("showSecondaryStatsBoth")
+        local showRawOnly = not showBoth and EllesmereUI.QoLExtrasGet("showSecondaryStatsRaw")
+        local showRawValues = showRawOnly or showBoth
+        local critRaw, hasteRaw, masteryRaw, versRaw
+        if showRawValues then
+            critRaw = GetCombatRating(CR_CRIT_MELEE)
+            hasteRaw = GetCombatRating(CR_HASTE_MELEE)
+            masteryRaw = GetCombatRating(CR_MASTERY)
+            versRaw = GetCombatRating(CR_VERSATILITY_DAMAGE_DONE)
+        end
 
         -- One template line per row, plus the figures to fill it. Nothing here
         -- reads a figure -- see the SECRET STATS note above.
@@ -1835,18 +1878,31 @@ do
         -- Values are white unless Colored Values is on, which colors
         -- each value with its row so the stat reads as one piece.
         local coloredPct = EllesmereUI.QoLExtrasGet("coloredPercentages")
-        local function Row(hex, label, value)
-            -- A "%.2f%%" placeholder when there is a figure to draw, so the
-            -- number itself travels as an argument; a literal "?" when there
-            -- is genuinely nothing. issecretvalue FIRST -- a nil test is fine
-            -- on a secret, but nothing below it would be.
-            local body = "%.2f%%"
-            if value == nil then
+        local abbreviateLabels = EllesmereUI.QoLExtrasGet("secondaryStatsAbbreviateLabels")
+        local function Label(long, short)
+            return abbreviateLabels and short or EllesmereUI.L(long)
+        end
+        local function Row(hex, label, value, raw)
+            local body, first, second
+            if showRawOnly then
+                body, first = "%.0f", raw
+            elseif showBoth then
+                body, first, second = "%.0f (%.2f%%)", raw, value
+            else
+                body, first = "%.2f%%", value
+            end
+            -- The selected figures travel as arguments so secret values are
+            -- never inspected. A nil test is safe on a secret.
+            if first == nil or (showBoth and second == nil) then
                 statUnreadable = true
                 body = "?"
             else
-                if issecretvalue(value) then anySecret = true end
-                vals[#vals + 1] = value
+                if issecretvalue(first) then anySecret = true end
+                vals[#vals + 1] = first
+                if showBoth then
+                    if issecretvalue(second) then anySecret = true end
+                    vals[#vals + 1] = second
+                end
             end
             rows[#rows + 1] = format("|cff%s%s:|r%s|cff%s%s|r",
                 hex, Esc(label), LABEL_GAP, coloredPct and hex or "ffffff", body)
@@ -1860,25 +1916,48 @@ do
             rows[#rows + 1] = format("|cff%s%s:|r%s%s",
                 hex, Esc(label), LABEL_GAP, Esc(body))
         end
-        Row(customHex or STAT_HEX.crit,    EllesmereUI.L("Crit"),    crit)
-        Row(customHex or STAT_HEX.haste,   EllesmereUI.L("Haste"),   haste)
-        Row(customHex or STAT_HEX.mastery, EllesmereUI.L("Mastery"), mastery)
-        Row(customHex or STAT_HEX.vers,    EllesmereUI.L("Vers"),    vers)
-
-        if EllesmereUI.QoLExtrasGet("showTertiaryStats") then
+        local hiddenStats = EllesmereUI.QoLExtrasGet("secondaryStatsHidden")
+        if type(hiddenStats) ~= "table" then hiddenStats = nil end
+        local hasVisibleTertiary = not (hiddenStats
+            and hiddenStats.leech and hiddenStats.avoidance and hiddenStats.speed)
+        local tertHex, leech, avoidance, speed
+        local leechRaw, avoidanceRaw, speedRaw
+        if hasVisibleTertiary then
             local tc = EllesmereUI.QoLExtrasGet("tertiaryStatsColor")
             local tmode = EllesmereUI.QoLExtrasGet("tertiaryStatsColorMode")
                 or (tc and "custom" or "class")
-            local tertHex = (tmode == "custom" and tc)
+            tertHex = (tmode == "custom" and tc)
                 and format("%02x%02x%02x", tc.r * 255, tc.g * 255, tc.b * 255)
                 or statsFrame._classHex or "ffffff"
 
-            local leech = GetLifesteal()
-            local avoidance = GetAvoidance()
-            local speed = GetSpeed()
-            Row(tertHex, EllesmereUI.L("Leech"),     leech)
-            Row(tertHex, EllesmereUI.L("Avoidance"), avoidance)
-            Row(tertHex, EllesmereUI.L("Speed"),     speed)
+            leech = GetLifesteal()
+            avoidance = GetAvoidance()
+            speed = GetSpeed()
+            if showRawValues then
+                leechRaw = GetCombatRating(CR_LIFESTEAL)
+                avoidanceRaw = GetCombatRating(CR_AVOIDANCE)
+                speedRaw = GetCombatRating(CR_SPEED)
+            end
+        end
+
+        for _, key in ipairs(SecondaryStatsOrder()) do
+            if not (hiddenStats and hiddenStats[key]) then
+                if key == "crit" then
+                    Row(customHex or STAT_HEX.crit, Label("Crit", "C"), crit, critRaw)
+                elseif key == "haste" then
+                    Row(customHex or STAT_HEX.haste, Label("Haste", "H"), haste, hasteRaw)
+                elseif key == "mastery" then
+                    Row(customHex or STAT_HEX.mastery, Label("Mastery", "M"), mastery, masteryRaw)
+                elseif key == "vers" then
+                    Row(customHex or STAT_HEX.vers, Label("Vers", "V"), vers, versRaw)
+                elseif key == "leech" then
+                    Row(tertHex, Label("Leech", "L"), leech, leechRaw)
+                elseif key == "avoidance" then
+                    Row(tertHex, Label("Avoidance", "A"), avoidance, avoidanceRaw)
+                elseif key == "speed" then
+                    Row(tertHex, Label("Speed", "S"), speed, speedRaw)
+                end
+            end
         end
 
         -- FPS and latency, drawn here rather than by the standalone counter

@@ -1078,6 +1078,7 @@ function ns.CollectDefaultBuffTrackEntries()
         end
     end
 
+    if ns.PruneEquipmentBuffRows then ns.PruneEquipmentBuffRows() end
     local out = {}
     local seen = {}
     local entries = ns.EnumerateCDMViewerSpells and ns.EnumerateCDMViewerSpells(true) or {}
@@ -1086,7 +1087,13 @@ function ns.CollectDefaultBuffTrackEntries()
         -- slots can share a spellID but are distinct cooldownIDs; keying on
         -- sid would re-merge what EnumerateCDMViewerSpells keeps separate.
         local key = BuffDisplayStableKey(e.sid, e.cdID)
-        if e.sid and not ResolveVariantValue(diverted, e.sid)
+        -- Native equipment tracked-buff rows (12.1 EquipSlot* categories) are
+        -- preset-lane-only: never surface them as default-bar buff entries.
+        local eqInfo = e.cdID and C_CooldownViewer
+            and C_CooldownViewer.GetCooldownViewerCooldownInfo
+            and C_CooldownViewer.GetCooldownViewerCooldownInfo(e.cdID)
+        if e.sid and not (eqInfo and eqInfo.equipSlot)
+           and not ResolveVariantValue(diverted, e.sid)
            and not (e.cdID and divertedCd[e.cdID])
            and key and not seen[key] then
             seen[key] = true
@@ -1982,3 +1989,77 @@ function ns.RemoveCDMBar(key)
     return false
 end
 
+
+-- Native equipment rows that the dual-lane era auto-added into buff bar
+-- stores (12.1 EquipSlot* tracked-buff mirroring): pruned automatically.
+-- POSITIVE identification only -- a stored sid drops solely when a live
+-- viewer entry with that sid carries equipSlot; absence keeps the row
+-- (zero-values law: an unequipped item resolves nothing and must not be
+-- convicted). Runs OOC-cheap from the buff entry collector, so every
+-- options open and reconcile pass self-heals the store.
+function ns.PruneEquipmentBuffRows()
+    local equip, any = {}, false
+    -- Viewer source: trusted only with CDM data loaded and a populated
+    -- enumeration. These guards gate THIS source alone -- the equipped-item
+    -- source below needs neither and must run regardless.
+    local entries = ns._cdmDataLoaded and ns.EnumerateCDMViewerSpells
+        and ns.EnumerateCDMViewerSpells(true) or nil
+    local gci = C_CooldownViewer and C_CooldownViewer.GetCooldownViewerCooldownInfo
+    if entries and entries[1] and gci then
+        for _, e in ipairs(entries) do
+            if e.sid and e.cdID then
+                local info = gci(e.cdID)
+                if info and info.equipSlot then
+                    StoreVariantValue(equip, e.sid, true, false)
+                    any = true
+                end
+            end
+        end
+    end
+    -- Second proof source, viewer-independent: an EQUIPPED item vouches for
+    -- its own use-spell (GetItemSpell). Covers rows whose native viewer entry
+    -- is gone (untracked in Blizzard's CDM) while the item is still worn.
+    local gis = (C_Item and C_Item.GetItemSpell) or GetItemSpell
+    if gis and GetInventoryItemID then
+        for slot = 1, 19 do
+            local itemID = GetInventoryItemID("player", slot)
+            if itemID then
+                local _, useSid = gis(itemID)
+                if type(useSid) == "number" and useSid > 0 then
+                    StoreVariantValue(equip, useSid, true, false)
+                    any = true
+                end
+            end
+        end
+    end
+    if not any then return end
+    local p = ECME and ECME.db and ECME.db.profile
+    local bars = p and p.cdmBars and p.cdmBars.bars
+    if not bars then return end
+    for _, bd in ipairs(bars) do
+        -- Every bar type: dual-lane-era auto-adds landed item use-spells on
+        -- cooldowns/utility bars too, not just buff bars. Only positive ids
+        -- matching the proven equipment set drop -- markers and real spells
+        -- cannot match.
+        if bd.key ~= (ns.GHOST_CD_BAR_KEY or "__ghost_cd") then
+            local sd = ns.GetBarSpellData(bd.key)
+            local list = sd and sd.assignedSpells
+            if list then
+                local w = 1
+                for i = 1, #list do
+                    local sid = list[i]
+                    -- User-typed custom spell ids are exempt: a deliberate
+                    -- entry that happens to equal a worn item's use-spell
+                    -- (tinkers, embellishments) must never be convicted.
+                    if not (type(sid) == "number" and sid > 0
+                        and ResolveVariantValue(equip, sid)
+                        and not (sd.customSpellIDs and sd.customSpellIDs[sid])) then
+                        list[w] = sid
+                        w = w + 1
+                    end
+                end
+                for i = #list, w, -1 do list[i] = nil end
+            end
+        end
+    end
+end

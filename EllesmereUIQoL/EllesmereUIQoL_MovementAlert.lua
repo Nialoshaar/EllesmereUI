@@ -1086,16 +1086,19 @@ end
 
 -- buffActive engine-lane handles (declared here so HideMovementDisplay -- the
 -- universal off-path -- can park the host; defined in the lane block below).
-local buffAlertHost, buffAlertBuilt, buffAlertRegenArm
+local buffAlertHost, buffAlertBuilt, buffAlertRegenArm, buffAlertLastCount
 
-local function HideMovementDisplay()
+-- keepBuffLane: the cooldown display is going away but the buffActive lane is
+-- not. A buffActive spell takes no slot, so an empty cooldown stack is its
+-- NORMAL state -- parking the host there would hide the alert permanently.
+local function HideMovementDisplay(keepBuffLane)
     wipe(readyAlertShown)
     movementFrame:Hide()
     for _, slot in ipairs(displayPool) do
         slot.text:Hide(); slot.icon:Hide(); slot.icon.cooldown:Clear(); slot.bar:Hide(); HideEngineCountdown(slot); slot:Hide()
     end
     activeSlotCount = 0
-    if buffAlertHost then buffAlertHost:Hide() end
+    if buffAlertHost and not keepBuffLane then buffAlertHost:Hide() end
     CancelMovementCountdown()
 end
 
@@ -1440,13 +1443,13 @@ end
 -- counted stack height.
 local function RepositionBuffAlertHost(count)
     if not buffAlertHost then return end
-    ns._maLastSlotCount = count
+    buffAlertLastCount = count
     if InCombatLockdown() then
         if not buffAlertRegenArm then
             buffAlertRegenArm = CreateFrame("Frame")
             buffAlertRegenArm:SetScript("OnEvent", function(self)
                 self:UnregisterEvent("PLAYER_REGEN_ENABLED")
-                RepositionBuffAlertHost(ns._maLastSlotCount or 0)
+                RepositionBuffAlertHost(buffAlertLastCount or 0)
             end)
         end
         buffAlertRegenArm:RegisterEvent("PLAYER_REGEN_ENABLED")
@@ -1614,7 +1617,9 @@ CheckMovementCooldown = function()
         movementCountdownTimer = C_Timer.NewTimer(0.1, CheckMovementCooldown)
     else
         activeSlotCount = 0
-        HideMovementDisplay()
+        -- EnsureBuffAlertLane just showed/parked the host for this pass; leave
+        -- its verdict alone (see keepBuffLane).
+        HideMovementDisplay(true)
     end
 end
 EllesmereUI._CheckMovementCooldown = function() if CheckMovementCooldown then CheckMovementCooldown() end end

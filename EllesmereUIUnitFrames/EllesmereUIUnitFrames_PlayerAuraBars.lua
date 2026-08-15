@@ -657,7 +657,11 @@ local function PAB_ApplyExtraText(button, d, style)
     --      (post-instance-change re-shows do this).
     if d.cooldown then
         d.pabHideSwipe = style.hideSwipe == true
-        if not d._pabSwipeHooked then
+        -- Install lazily on the first apply that actually hides the swipe. The
+        -- hook reads the live flag, so a later toggle back on still works, and a
+        -- user who never turns the setting off never gets a closure or a secure
+        -- hook on this cooldown's Show at all.
+        if d.pabHideSwipe and not d._pabSwipeHooked then
             d._pabSwipeHooked = true
             hooksecurefunc(d.cooldown, "Show", function()
                 if d.pabHideSwipe then d.cooldown:Hide() end

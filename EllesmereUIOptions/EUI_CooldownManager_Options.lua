@@ -1132,6 +1132,14 @@ initFrame:SetScript("OnEvent", function(self)
                 if isCDMBar then
                     local cdmIcons = ns.cdmBarIcons and ns.cdmBarIcons[cdmBarKey]
                     realBtn = cdmIcons and cdmIcons[i]
+                    -- Native equipment frames are parked off the live bar (items
+                    -- are preset-lane-only), but the icon registry can still hold
+                    -- one from a prior pass -- never replicate it into the preview.
+                    if realBtn and realBtn.cooldownID and C_CooldownViewer
+                        and C_CooldownViewer.GetCooldownViewerCooldownInfo then
+                        local rinfo = C_CooldownViewer.GetCooldownViewerCooldownInfo(realBtn.cooldownID)
+                        if rinfo and rinfo.equipSlot then realBtn = nil end
+                    end
                 else
                     realBtn = prefix and _G[prefix .. i]
                 end
@@ -6494,10 +6502,13 @@ initFrame:SetScript("OnEvent", function(self)
                 local wantSet
                 if evc then
                     if barKeyE == "cooldowns" then
+                        -- EquipSlotEssential (7) deliberately absent: native
+                        -- equipment entries are never claimed (the preset
+                        -- slot/item lane owns items), so materializing their
+                        -- rows would mint permanent frameless rank-holders.
                         wantSet = {
                             [evc.Essential or 0] = true,
                             [evc.SpecAgnosticEssential or 5] = true,
-                            [evc.EquipSlotEssential or 7] = true,
                         }
                     else
                         wantSet = { [evc.Utility or 1] = true }

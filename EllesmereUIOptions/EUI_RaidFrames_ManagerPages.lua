@@ -2067,8 +2067,8 @@ function ns.DMP_RefreshPreview()
                         pv._dmHC = hc
                     end
                     local c = t.color or { r = 1, g = 0.25, b = 0.25 }
-                    hc:SetColorTexture(c.r or 1, c.g or 0.25, c.b or 0.25,
-                        (t.opacity or 45) / 100)
+                    ns.RF_TintOverBarFill(hc, health, c.r or 1, c.g or 0.25,
+                        c.b or 0.25, (t.opacity or 45) / 100)
                     hc:Show()
                 end
             elseif t.type == "glow" then

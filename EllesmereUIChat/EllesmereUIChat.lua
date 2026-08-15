@@ -2650,14 +2650,45 @@ local INPUT_TOP_DROP = 5
 -- reservation follows the edit box's SHOWN state on the permanent frames 1-10,
 -- whose edit boxes may be script-hooked. Temp windows (11+) must never be
 -- hooked (see SkinEditBox's taint note) and keep the static reservation.
+-- The box overlaying a window is NOT always that window's own. Blizzard's
+-- DEFAULT chatStyle ("classic") routes every window's input through
+-- DEFAULT_CHAT_FRAME's box -- ChatFrameUtil.ChooseBoxForSend returns
+-- DEFAULT_CHAT_FRAME.editBox outright in that mode, before it ever looks at
+-- the preferred frame -- so on any tab but the first, ChatFrame1EditBox is
+-- what appears over the text while that tab's OWN edit box stays hidden.
+-- Keying the strip off cf's own box therefore leaves every other tab unmasked
+-- and reserves a strip on ChatFrame1's hidden window instead. Docked windows
+-- share one rect, so a box shown on any docked frame is drawn over whichever
+-- docked frame is currently visible.
+local function DockedEditBoxShown()
+    for i = 1, 10 do
+        local owner = _G["ChatFrame" .. i]
+        local box = owner and _G["ChatFrame" .. i .. "EditBox"]
+        if box and box:IsShown() and owner.isDocked then return true end
+    end
+    return false
+end
+
 function ECHAT.InputTopStripActive(cf)
     if not ECHAT.DB().inputOnTop then return false end
     local name = cf:GetName()
     local eb = name and _G[name .. "EditBox"]
     if not eb then return false end
     local idx = tonumber(name:match("ChatFrame(%d+)"))
-    if idx and idx <= 10 then return eb:IsShown() end
-    return true
+    if not (idx and idx <= 10) then return true end
+    -- Own box up: "im" style, and any undocked window, keep the old rule.
+    if eb:IsShown() then return true end
+    return (cf.isDocked and cf:IsShown() and DockedEditBoxShown()) and true or false
+end
+
+-- Every managed frame, not just one: the box that showed belongs to ChatFrame1
+-- while the strip is owed to the selected tab (see InputTopStripActive), so a
+-- single-frame re-derive off the edit box hooks updates the wrong window.
+function ECHAT.RefreshInputTopStrips()
+    for i = 1, 20 do
+        local cf = _G["ChatFrame" .. i]
+        if cf and CFD(cf).bg then ECHAT.ApplyInputTopStrip(cf) end
+    end
 end
 
 -- Re-derive one frame's reserved strip. Only the text area moves: the panel
@@ -3796,10 +3827,10 @@ local function SkinEditBox(cf)
         -- height. OnShow/OnHide are C-side script hooks -- no field write onto
         -- the edit box, the hazard the block comment above describes.
         eb:HookScript("OnShow", function()
-            ECHAT.ApplyInputTopStrip(cf)
+            ECHAT.RefreshInputTopStrips()
         end)
         eb:HookScript("OnHide", function()
-            ECHAT.ApplyInputTopStrip(cf)
+            ECHAT.RefreshInputTopStrips()
         end)
 
         -- Plain Up/Down input recall. The Midnight edit box performs no native recall

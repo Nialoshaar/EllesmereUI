@@ -3956,7 +3956,8 @@ local function BuildCogPopup(opts)
     if opts.captureRegion and EllesmereUI.AddCaptureAccessor and opts.rows then
         for _, row in ipairs(opts.rows) do
             if row.get and row.set and not row.noCapture
-               and row.type ~= "button" and row.type ~= "reorder" then
+               and row.type ~= "button" and row.type ~= "reorder"
+               and row.type ~= "reordercheck" then
                 EllesmereUI.AddCaptureAccessor(opts.captureRegion, {
                     type = row.type, text = row.label, getValue = row.get, setValue = row.set,
                     min = row.min, max = row.max, step = row.step,
@@ -4013,7 +4014,7 @@ local function BuildCogPopup(opts)
                 tmpFS:SetText(EllesmereUI.L(row.label))
                 local w = tmpFS:GetStringWidth()
                 if w > maxLblW then maxLblW = w end
-            elseif row.type == "dropdown" or row.type == "segmented" then
+            elseif row.type == "dropdown" or row.type == "segmented" or row.type == "reordercheck" then
                 tmpFS:SetText(EllesmereUI.L(row.label))
                 local w = tmpFS:GetStringWidth()
                 if w > maxDDLblW then maxDDLblW = w end
@@ -4041,7 +4042,7 @@ local function BuildCogPopup(opts)
             if i > 1 then totalH = totalH + GAP end
             if row.type == "toggle" or row.type == "segmented" then
                 totalH = totalH + TOGGLE_ROW_H
-            elseif row.type == "dropdown" or row.type == "reorder" then
+            elseif row.type == "dropdown" or row.type == "reorder" or row.type == "reordercheck" then
                 totalH = totalH + DROPDOWN_ROW_H
             elseif row.type == "button" then
                 totalH = totalH + ROW_H + 4
@@ -4239,6 +4240,39 @@ local function BuildCogPopup(opts)
                 end
 
                 rowWidgets[#rowWidgets + 1] = { type = 'dropdown', btn = ddBtn, lbl = ddLbl, get = row.get, values = row.values, refresh = ddBtn._ddRefresh, disOverlay = ddDis, disCheck = row.disabled }
+                curY = curY - DROPDOWN_ROW_H
+            elseif row.type == 'reordercheck' then
+                local lbl = MakeFont(pf, 11, nil, 1, 1, 1); lbl:SetAlpha(0.6)
+                lbl:SetText(EllesmereUI.L(row.label))
+                lbl:SetPoint('LEFT', pf, 'TOPLEFT', SIDE_PAD, curY - DROPDOWN_ROW_H / 2 - 1)
+
+                local items = type(row.items) == "function" and row.items() or row.items or {}
+                local ddBtn, refresh = EllesmereUI.BuildReorderCBDropdown(
+                    pf, COG_DD_W, pf:GetFrameLevel() + 2, items,
+                    row.get,
+                    function(k, v)
+                        row.set(k, v)
+                        if pf._refresh then pf._refresh() end
+                    end,
+                    {
+                        hint = row.hint,
+                        hint2 = row.hint2,
+                        setOrder = function(keys)
+                            if row.setOrder then row.setOrder(keys) end
+                        end,
+                    })
+                local DD_SCALE = 0.9
+                ddBtn:SetScale(DD_SCALE)
+                ddBtn:ClearAllPoints()
+                ddBtn:SetPoint('RIGHT', pf, 'TOPRIGHT', -SIDE_PAD / DD_SCALE, (curY - DROPDOWN_ROW_H / 2) / DD_SCALE)
+                ddBtn:HookScript('OnClick', function(self)
+                    if self._ddMenu then
+                        self._ddMenu:SetFrameStrata(pf:GetFrameStrata())
+                        self._ddMenu:SetFrameLevel(pf:GetFrameLevel() + 30)
+                    end
+                end)
+
+                rowWidgets[#rowWidgets + 1] = { type = 'reordercheck', btn = ddBtn, refresh = refresh }
                 curY = curY - DROPDOWN_ROW_H
             elseif row.type == 'segmented' then
                 local lbl = MakeFont(pf, 11, nil, 1, 1, 1); lbl:SetAlpha(0.6)
@@ -4906,6 +4940,8 @@ local function BuildCogPopup(opts)
                             rw.disOverlay:Hide()
                         end
                     end
+                elseif rw.type == 'reordercheck' then
+                    if rw.refresh then rw.refresh() end
                 end
             end
         end
@@ -4913,7 +4949,7 @@ local function BuildCogPopup(opts)
         -- True while a dropdown menu opened from inside this popup is shown and moused over. Exposed so external close-logic (e.g. a parent menu driving this popup as a flyout with its own _clickOutside disabled) stays open when a clicked dropdown list extends below the popup's own rect.
         pf._anyDropdownHovered = function()
             for _, rw in ipairs(rowWidgets) do
-                if (rw.type == 'dropdown' or rw.type == 'reorder') and rw.btn and rw.btn._ddMenu
+                if (rw.type == 'dropdown' or rw.type == 'reorder' or rw.type == 'reordercheck') and rw.btn and rw.btn._ddMenu
                    and rw.btn._ddMenu:IsShown() and rw.btn._ddMenu:IsMouseOver() then
                     return true
                 end

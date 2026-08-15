@@ -309,39 +309,67 @@ local function ApplyStyleToRegions(button, style)
         end
     end
 
-    -- Engine dispel-type border (style.dispelBorder): one texture the engine shows
-    -- only on typed (dispellable) auras and tints per dispel type -- per-aura dispel
-    -- data is secret, so show/hide and color are ENGINE decisions. The Color style
-    -- never assigns a texture file, only vertex- tints: the ring ART is entirely ours
-    -- (media/textures/square-ring.png, a flat white band flush to a 64px canvas, 16
-    -- texels thick), registered purely as a tint target, and the user's dispel palette
-    -- rides in via customDispelColorMap (68824). The ring lives on a dedicated holder
-    -- one frame level over the static border host so the recolor always draws ON TOP
-    -- of the border strips; the text carrier sits one more above. Registration follows
-    -- the static border: no border configured, no dispel recolor (live parity). 68914
-    -- reworked the border API into the dispel-type texture system: the
-    -- tint-our-own-art style is now PreserveAsset on
+    -- Engine dispel-type border (style.dispelBorder): textures the engine shows only on
+    -- typed (dispellable) auras and tints per dispel type -- per-aura dispel data is
+    -- secret, so show/hide and color are ENGINE decisions. The ART is entirely ours,
+    -- registered purely as a tint target, and the user's dispel palette rides in via
+    -- customDispelColorMap (68824).
+    --
+    -- FOUR SOLID STRIPS, not one ring-shaped texture: the engine applies options,
+    -- visibility and SetVertexColor per registered texture (Blizzard_CustomAuraButton
+    -- iterates the whole list), so a four-texture ring is as legal as a one-texture
+    -- one. Thickness is GEOMETRY -- a cropped band texture goes sub-texel at large
+    -- icon sizes and bilinear-fades to alpha < 1, letting the static border bleed
+    -- into the dispel tint; solid strips never sample. Strips also stay off
+    -- SetTexCoord, which AddDispelTypeTexture stamps as a secret aspect on every
+    -- texture it takes (along with Alpha, VertexColor and Shown), and off
+    -- style.width: they hang from the holder, which SetAllPoints the button, so the
+    -- button rect drives the ring without ever being read (button rects are
+    -- restricted).
+    --
+    -- The strips live on a dedicated holder one frame level over the static border host
+    -- so the recolor always draws ON TOP of the border strips; the text carrier sits one
+    -- more above. Registration follows the static border: no border configured, no
+    -- dispel recolor (live parity). 68914 reworked the border API into the dispel-type
+    -- texture system: the tint-our-own-art style is now PreserveAsset on
     -- Enum.CustomAuraButtonDispelTypeTextureStyle (the old CustomAuraButtonBorderStyle
-    -- enum is deleted; its Color value is the ancestor, kept as a fallback for stale
-    -- PTR builds). The style MUST resolve: registering without it takes the
-    -- BorderWithIcon default, which stamps Blizzard atlas art over our ring texture.
+    -- enum is deleted; its Color value is the ancestor, kept as a fallback for stale PTR
+    -- builds). The style MUST resolve: registering without it takes the BorderWithIcon
+    -- default, which stamps Blizzard atlas art over ours. PreserveAsset is also the only
+    -- style that leaves our geometry alone -- it calls SetAuraBorderColor and nothing
+    -- else, no SetTexture and no SetTexCoord.
     local dispelTint = Enum and Enum.CustomAuraButtonDispelTypeTextureStyle
         and Enum.CustomAuraButtonDispelTypeTextureStyle.PreserveAsset
     if dispelTint == nil then
         local legacy = (Enum and Enum.CustomAuraButtonBorderStyle) or AuraButtonBorderStyle
         dispelTint = legacy and legacy.Color
     end
-    if style.dispelBorder and not d.dispelBorder and d.dispelHolder
+    if style.dispelBorder and not d.dispelStrips and d.dispelHolder
         and (button.AddDispelTypeTexture or button.SetAuraBorder) and dispelTint ~= nil then
-        d.dispelBorder = d.dispelHolder:CreateTexture(nil, "OVERLAY")
-        d.dispelBorder:SetTexture("Interface\\AddOns\\EllesmereUI\\media\\textures\\square-ring.png")
-        if d.dispelBorder.SetSnapToPixelGrid then
-            d.dispelBorder:SetSnapToPixelGrid(false)
-            d.dispelBorder:SetTexelSnappingBias(0)
+        -- Flat white: the engine multiplies its dispel color in through SetVertexColor,
+        -- so white is the neutral tint base. Written once here, while VertexColor is
+        -- still ours -- registration turns it into a secret aspect. Textures on our own
+        -- holder, never parented to the button, so creating them outside the button's
+        -- one legal creation window is fine.
+        --
+        -- Hidden on creation. A texture is shown by default, and the engine is what
+        -- shows these (per aura, on a typed one) -- if the registration below is denied
+        -- while auras are secret, an unhidden strip set would sit on the icon as a plain
+        -- WHITE ring until the restriction lifts and the deferred restyle re-runs.
+        local strips = {}
+        for i = 1, 4 do
+            local tex = d.dispelHolder:CreateTexture(nil, "OVERLAY")
+            tex:SetColorTexture(1, 1, 1, 1)
+            if tex.SetSnapToPixelGrid then
+                tex:SetSnapToPixelGrid(false)
+                tex:SetTexelSnappingBias(0)
+            end
+            tex:Hide()
+            strips[i] = tex
         end
-        d.dispelBorder:SetAllPoints(d.dispelHolder)
+        d.dispelStrips = strips
     end
-    if d.dispelBorder then
+    if d.dispelStrips then
         -- Level re-assert (change-guarded): a style can move the border host's level;
         -- the ring stays FOUR levels above it (PP strip container at +1, DM fx
         -- border-override container at +2, DM per-filter glow at +3 -- the dispel
@@ -353,17 +381,12 @@ local function ApplyStyleToRegions(button, style)
             if d.stackCarrier then d.stackCarrier:SetFrameLevel(bl + 5) end
             d.akDispelLvl = bl
         end
-        -- Physical-pixel thickness by SOURCE CROPPING, never stretching:
-        -- the art is a flush band of B = 16 texels on a C = 64 canvas
-        -- (B/C = 1/4). Shrinking the sampled window inward by fraction a
-        -- per side leaves (B - C*a) band texels over a C*(1-2a) span, so
-        -- the rendered thickness at drawn size s is
-        --   t = s*(B - C*a) / (C*(1-2a))   =>   a = (s - 4t) / (4*(s - 2t)).
-        -- t converts the user's physical-pixel setting into this frame's
-        -- units via the holder's effective scale (our frame -- readable);
-        -- s is the style size, never a rect read (button rects are
-        -- restricted). The cropped band stays solid at any icon size.
-        local sw = style.width or 18
+        -- Physical-pixel thickness by GEOMETRY. t converts the user's setting into this
+        -- frame's units via the holder's effective scale (our frame -- readable). The
+        -- side strips are inset by t top and bottom so no two strips ever overlap at a
+        -- corner: a dispel color carrying alpha < 1 would double-blend there and read as
+        -- four darker corner pixels. Change-guarded on t alone -- the anchors are fixed
+        -- to the holder, which tracks the button, so nothing else can move them.
         local px = style.dispelBorderPx or 2
         local t = px
         local eff = d.dispelHolder:GetEffectiveScale()
@@ -371,12 +394,25 @@ local function ApplyStyleToRegions(button, style)
             local PPx = EllesmereUI.PP
             t = px * ((PPx and PPx.perfect) or 0.75) / eff
         end
-        local a = 0
-        if sw > 4 * t then a = (sw - 4 * t) / (4 * (sw - 2 * t)) end
-        local cropKey = string.format("%s|%.4f", tostring(sw), a)
-        if d.akDispelCrop ~= cropKey then
-            d.dispelBorder:SetTexCoord(a, 1 - a, a, 1 - a)
-            d.akDispelCrop = cropKey
+        if d.akDispelT ~= t then
+            local st = d.dispelStrips
+            st[1]:ClearAllPoints()
+            st[1]:SetPoint("TOPLEFT", d.dispelHolder, "TOPLEFT", 0, 0)
+            st[1]:SetPoint("TOPRIGHT", d.dispelHolder, "TOPRIGHT", 0, 0)
+            st[1]:SetHeight(t)
+            st[2]:ClearAllPoints()
+            st[2]:SetPoint("BOTTOMLEFT", d.dispelHolder, "BOTTOMLEFT", 0, 0)
+            st[2]:SetPoint("BOTTOMRIGHT", d.dispelHolder, "BOTTOMRIGHT", 0, 0)
+            st[2]:SetHeight(t)
+            st[3]:ClearAllPoints()
+            st[3]:SetPoint("TOPLEFT", d.dispelHolder, "TOPLEFT", 0, -t)
+            st[3]:SetPoint("BOTTOMLEFT", d.dispelHolder, "BOTTOMLEFT", 0, t)
+            st[3]:SetWidth(t)
+            st[4]:ClearAllPoints()
+            st[4]:SetPoint("TOPRIGHT", d.dispelHolder, "TOPRIGHT", 0, -t)
+            st[4]:SetPoint("BOTTOMRIGHT", d.dispelHolder, "BOTTOMRIGHT", 0, t)
+            st[4]:SetWidth(t)
+            d.akDispelT = t
         end
         -- Registration follows the static border AND a nonzero thickness
         -- (0 = the user disabled the dispel recolor outright).
@@ -391,25 +427,50 @@ local function ApplyStyleToRegions(button, style)
             -- old set-semantics alias), so a re-registration must clear first -- and
             -- if the clear is denied, the add is skipped too, or the button would
             -- accumulate duplicate entries.
+            local clearFn = button.ClearDispelTypeTextures or button.ClearAuraBorder
             if want then
                 local proceed = true
                 if d.dispelBorderOn then
-                    local clearFn = button.ClearDispelTypeTextures or button.ClearAuraBorder
                     proceed = (clearFn and pcall(clearFn, button)) and true or false
                 end
-                local addFn = button.AddDispelTypeTexture or button.SetAuraBorder
-                if proceed and pcall(addFn, button, d.dispelBorder,
-                    { style = dispelTint, showWhenHarmful = true, showWhenHelpful = false,
-                      customDispelColorMap = style.dispelColorMap }) then
-                    d.dispelBorderOn = want
-                    d.akDispelMapFP = mapFP
+                if proceed then
+                    -- Four adds, ALL OR NOTHING. A denial can land on any one of them,
+                    -- and a partial set is worse than none: the engine would tint two or
+                    -- three sides and leave the rest sitting in the user's static border
+                    -- color. On any failure the whole set is cleared again (the clear is
+                    -- a full reset -- "self.dispelTypeTextures = {}") and the style key
+                    -- is deferred to the restriction lift, which re-runs this from a
+                    -- known-empty state. One options table for all four: the engine
+                    -- securecopies it per call, so sharing it cannot leak between them.
+                    local addFn = button.AddDispelTypeTexture or button.SetAuraBorder
+                    local opts = { style = dispelTint, showWhenHarmful = true,
+                        showWhenHelpful = false, customDispelColorMap = style.dispelColorMap }
+                    local added = true
+                    for i = 1, 4 do
+                        if not pcall(addFn, button, d.dispelStrips[i], opts) then
+                            added = false
+                            break
+                        end
+                    end
+                    if added then
+                        d.dispelBorderOn = want
+                        d.akDispelMapFP = mapFP
+                    else
+                        -- Rollback. dispelBorderOn goes FALSE rather than keeping its old
+                        -- value: the clear above already succeeded, so nothing is
+                        -- registered now whatever the flag said before.
+                        if clearFn then pcall(clearFn, button) end
+                        d.dispelBorderOn = false
+                        if d.styleKey and AK.AurasRestricted() then
+                            deferredRestyles[d.styleKey] = true
+                        end
+                    end
                 elseif d.styleKey and AK.AurasRestricted() then
                     deferredRestyles[d.styleKey] = true
                 end
             else
-                local clearFn = button.ClearDispelTypeTextures or button.ClearAuraBorder
                 if clearFn and pcall(clearFn, button) then
-                    d.dispelBorder:Hide()
+                    for i = 1, 4 do d.dispelStrips[i]:Hide() end
                     d.dispelBorderOn = want
                 elseif d.styleKey and AK.AurasRestricted() then
                     deferredRestyles[d.styleKey] = true
@@ -1019,7 +1080,7 @@ local BUILD_BUDGET_MS = 8
 -- fire only AFTER the loading screen drops, so their build jobs cannot be caught by
 -- the behind-the-screen burst -- they drain through the worker on low,
 -- streaming-world fps. At the mid-session 8ms budget that read as seconds of missing
--- auras. Inside the window the worker runs a near-burst budget instead: the whole
+-- auras. Outside raids, the window runs a near-burst budget instead: the whole
 -- post-login queue lands in a handful of frames during the world fade-in (the
 -- user-stated contract: "spread over a few frames on reload/login"), and the gentle
 -- budget resumes for everything mid-session.
@@ -1058,13 +1119,13 @@ local buildWorker = CreateFrame("Frame")
 buildWorker:Hide()
 buildWorker:SetScript("OnUpdate", function(self)
     local inCombat = InCombatLockdown()
-    -- The turbo budget is OOC-ONLY: combat frames run under the client's combat script
-    -- watchdog (a 250ms drain tick after an in-combat /reload tripped "script ran too
-    -- long"), and a quarter-second hitch is unacceptable while fighting anyway. In
-    -- combat the backlog drains at the gentle budget; the regen wake re-arms the turbo
-    -- (loginStamp) so whatever remains snaps in at regen.
+    -- The turbo budget is OOC and non-raid only: raid-instance login can use the lower
+    -- script watchdog before combat lockdown reflects the new world, so a 250ms drain
+    -- can abort this outer loop beyond the per-job pcall. Restricted frames drain at
+    -- the gentle budget; the regen wake re-arms the turbo for safe worlds.
     local budget = BUILD_BUDGET_MS
-    if not inCombat and GetTime() - loginStamp < LOGIN_WINDOW_S then
+    if not inCombat and select(2, IsInInstance()) ~= "raid"
+        and GetTime() - loginStamp < LOGIN_WINDOW_S then
         budget = BUILD_BUDGET_LOGIN_MS
     end
     local t0 = debugprofilestop()
@@ -1090,8 +1151,8 @@ buildWorker:SetScript("OnUpdate", function(self)
     self:Hide()
 end)
 
--- Regen wake: a backlog that accrued under the combat-clamped budget
--- snaps in at the turbo budget instead of trickling.
+-- Regen wake: a backlog that accrued under the gentle budget snaps in at the turbo
+-- budget instead of trickling when the current world allows it.
 buildWorker:RegisterEvent("PLAYER_REGEN_ENABLED")
 buildWorker:SetScript("OnEvent", function(self)
     if buildHead <= buildTail then
@@ -1116,9 +1177,9 @@ end
 -- every other addon's login work in ONE script execution and trips the client watchdog
 -- ("script ran too long") -- field-hit at 1500ms. It also cannot reach the RF/UF jobs,
 -- which are enqueued by timer-deferred module setup AFTER the screen drops. PEW only
--- opens the worker's login-window turbo budget: the whole demand- architecture queue
--- drains in a handful of 250ms frames DURING the world fade-in (per-frame executions
--- never approach the watchdog).
+-- opens the worker's login window: outside raids the whole demand-architecture queue
+-- drains in a handful of 250ms frames during the world fade-in; raids retain the safe
+-- 8ms budget.
 local burstFrame = CreateFrame("Frame")
 burstFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
 burstFrame:SetScript("OnEvent", function()

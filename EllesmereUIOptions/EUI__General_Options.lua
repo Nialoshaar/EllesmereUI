@@ -955,6 +955,51 @@ end
 -------------------------------------------------------------------------------
 EllesmereUI._WHATSNEW_PATCHES = {
     {
+        version = "8.8.8",
+        features = {
+            {
+                module = "Quality of Life",
+                title  = "Configurable Secondary Stats",
+                desc   = "Percent, raw rating or both, abbreviated labels, and a reorderable list of which stats show, tertiaries included",
+                nav    = { module = "EllesmereUIQoL", page = "QoL", section = "EXTRAS", highlight = "Secondary Stat Display" },
+            },
+            {
+                module = "Raid Frames",
+                title  = "Frame Strata Control",
+                desc   = "Lift raid and party frames above spell effects that overlapped them",
+                nav    = { module = "EllesmereUIRaidFrames", page = "Frames", section = "EXTRAS", highlight = "Frame Strata" },
+            },
+            {
+                module = "Cooldown Manager",
+                title  = "Simpler Item Tracking",
+                desc   = "Trinkets, potions and Healthstones come from EUI's own item system again; items tracked in Blizzard's Cooldown Manager render as plain unmanaged icons beside them",
+                nav    = { module = "EllesmereUICooldownManager", page = "CDM Bars" },
+            },
+        },
+        fixes = {
+            { module = "Chat", text = "Input on Top now masks the chat text on every tab, not just the first." },
+            { module = "Chat", text = "Links in restored chat history show as plain text instead of dead links that could misclick onto other lines." },
+            { module = "Cooldown Manager", text = "Fixed spec swaps deleting spells from custom bars; re-add any lost spells once and they now stay." },
+            { module = "Cooldown Manager", text = "Fixed unusable trinkets appearing and duplicate icons for one physical trinket." },
+            { module = "Cooldown Manager", text = "The Buff Loss sound no longer fires when a buff is gained or refreshed by replacement." },
+            { module = "General", text = "Fixed the dispel-type recolor on aura icons washing out and blending with the border color at large icon sizes, everywhere aura icons render." },
+            { module = "General", text = "Fixed a script-ran-too-long error when logging into or reloading inside raid instances." },
+            { module = "Nameplates", text = "The interact icon shows on nameplates again." },
+            { module = "Quality of Life", text = "Fixed buff-based movement alerts such as Burning Rush erroring and never showing." },
+            { module = "Quickdraw", text = "The Menu Cancel Action option stays hidden until a Toggled Menu Select Action key is bound." },
+            { module = "Raid Frames", text = "Heal prediction renders when Absorb Style is set to none, and repaints when only incoming heals change." },
+            { module = "Raid Frames", text = "Health Bar Color indicators keep the health bar's texture shading instead of painting a flat block, and inherit Fill Opacity." },
+            { module = "Resource Bars", text = "The player cast bar no longer sticks on screen with its timer running after some channeled casts." },
+            { module = "Resource Bars", text = "The channel end-tick line clears between channels when interior tick marks are off." },
+            { module = "Resource Bars", text = "Fixed a thin background ring around the cast bar at Border Size 0, and a phantom icon-width gap with the icon disabled." },
+            { module = "Unit Frames", text = "Bottom-anchored buffs and debuffs reserve cast bar space correctly on every login instead of randomly per session." },
+            { module = "Unit Frames", text = "Player Aura Bars icon sizes now go up to 400 and duration/stack text up to 60." },
+            { module = "Unit Frames", text = "Lower Player Aura Bars overhead for users who leave Show Duration Swipe on." },
+            { module = "Unit Frames", text = "The player frame shows the vehicle's name again while you are in a vehicle." },
+            { module = "Localization", text = "Traditional Chinese adds 125 strings; Brazilian Portuguese gets a major batch across QoL, Aura Buff Reminders, Resource Bars and more." },
+        },
+    },
+    {
         version = "8.8.7",
         heroes = {
             {

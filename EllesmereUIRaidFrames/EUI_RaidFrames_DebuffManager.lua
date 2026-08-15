@@ -689,6 +689,7 @@ local function FxCreateVisuals(button, dd, kind, hostBtn, health)
         f:Hide()
         dd.dmFxHcFrame = f
         dd.dmFxHc = tex
+        ns.RF_RegisterBarTint(health, tex, f, "dm")
     elseif kind == "square" then
         local f = CreateFrame("Frame", nil, button)
         f:SetPoint("CENTER", health, "CENTER")
@@ -749,7 +750,9 @@ local function FxApplyInner(button, dd, refs, fx)
         local tex = dd.dmFxHc
         if not (f and tex) then return end -- created in extraInit
         -- Level tie set at creation; NO re-check here -- subtree reads (ours included) are denied outside the creation window and would kill this branch.
-        tex:SetColorTexture(fx.r or 1, fx.g or 0.2, fx.b or 0.2, fx.a or 0.5)
+        -- The bar itself is OURS and outside that subtree, so the tint can read its
+        -- fill texture here and keep the health bar's shading instead of flattening it.
+        ns.RF_TintOverBarFill(tex, refs.health, fx.r or 1, fx.g or 0.2, fx.b or 0.2, fx.a or 0.5)
         f:Show()
 
     elseif fx.kind == "square" then
@@ -1479,9 +1482,15 @@ function ns.DM_ApplyDebuffConfig(container, d, s, styleKey)
         if dmTiles then
             for i = 1, #dmTiles do present[dmTiles[i].id] = true end
         end
+        local stale = false
         for id, c in pairs(live) do
-            if not present[id] then c:Hide() end
+            if not present[id] then c:Hide(); stale = true end
         end
+        -- A parked container keeps its slot buttons, so any healthcolor overlay it
+        -- built stays registered on the health bar and every later layout pass
+        -- walks it. Nothing releases these, so without this they accumulate for
+        -- the session. Live tiles re-register on their next paint.
+        if stale and d.rfcHealth then ns.RF_ClearBarTints(d.rfcHealth, "dm") end
     end
     d.dmGatedTiles = gatedTiles
 end

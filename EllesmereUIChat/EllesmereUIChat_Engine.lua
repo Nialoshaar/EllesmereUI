@@ -1172,6 +1172,14 @@ function ECHAT.EngineGetMessageLines(cf, out)
     return n
 end
 
+-- Backfilled lines have no matching entry in the real chat frame, so a
+-- click on one can't resolve to a real hyperlink target. Strip link escape
+-- codes down to plain text to avoid handing a bad link to the click handler.
+local function StripHyperlinks(text)
+    if type(text) ~= "string" then return text end
+    return text:gsub("|H.-|h(.-)|h", "%1")
+end
+
 -- Session history replay: push one restored line into a window's display.
 -- The extraLines allowance keeps the divergence check from reading replayed
 -- lines (which exist only on our side) as a cleared Blizzard buffer.
@@ -1181,7 +1189,8 @@ function ECHAT.EngineBackfillLine(cf, text, r, g, b, id)
     -- DisplayText keeps replayed history consistent with the current
     -- abbreviation setting; the scanner is idempotent on stored lines that
     -- were captured already shortened.
-    win.smf:BackFillMessage(DisplayText(text), r, g, b, id)
+    local display = StripHyperlinks(DisplayText(text))
+    win.smf:BackFillMessage(display, r, g, b, id)
     win.extraLines = (win.extraLines or 0) + 1
     return true
 end

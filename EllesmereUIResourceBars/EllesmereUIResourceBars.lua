@@ -6501,13 +6501,15 @@ BuildCastBar = function()
     -- Clip frame + bar: beside the icon (or full width), full height
     local clipFrame = castBarFrame._barClip
     local bar = castBarFrame._bar
-    local bdrInset = (PP and PP.mult) or 1
+    -- No border, no inset: the bg spans the frame, so an inset with no border
+    -- over it reads as a 1px background ring around the fill.
+    local bdrInset = ((cb.borderSize or 0) > 0 and PP and PP.mult) or 0
     clipFrame:ClearAllPoints()
     -- The icon-adjacent side sits FLUSH against the icon (no inset): that seam is
     -- interior with no border, and insetting it exposes a 1px background column
     -- next to the icon. Outer edges keep the inset so the fill never bleeds out.
     local clipLeft  = (hasIcon and not iconOnRight) and h or bdrInset
-    local clipRight = iconOnRight and h or bdrInset
+    local clipRight = (hasIcon and iconOnRight) and h or bdrInset
     clipFrame:SetPoint("TOPLEFT", castBarFrame, "TOPLEFT", clipLeft, -bdrInset)
     clipFrame:SetPoint("BOTTOMRIGHT", castBarFrame, "BOTTOMRIGHT", -clipRight, bdrInset)
     clipFrame:SetFrameLevel(castBarFrame:GetFrameLevel() + 1)
