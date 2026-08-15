@@ -169,7 +169,6 @@ end
 local function ShowIcon(iconIdx, entry)
     local btn = GetOrCreateIcon(iconIdx)
     SetupIcon(btn, entry)
-    if _G._EABR_ApplyIconShape then _G._EABR_ApplyIconShape(btn) end
     SetTRFont(btn._text, GetFontPath(), 11)
     btn._text:SetTextColor(1, 1, 1, 1)
     btn._text:Show()

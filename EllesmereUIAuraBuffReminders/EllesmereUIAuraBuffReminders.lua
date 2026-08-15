@@ -1945,11 +1945,19 @@ local function ApplyIconShape(f, selectedShape)
     local shapeData = ICON_SHAPES[shape]
     local maskPath = shapeData and shapeData.mask
     local PP = EllesmereUI and EllesmereUI.PP
+    -- New icons already have the module's default texcoords and solid border.
+    -- With the setting untouched there is nothing to apply or restore.
+    if not selectedShape and shape == "none" and not f._icon._shapeMask
+        and not f._croppedBorder and not f._shapeBorder then
+        return
+    end
     if not maskPath then
         if f._icon._shapeMask then
-            pcall(f._icon.RemoveMaskTexture, f._icon, f._icon._shapeMask)
+            if f._icon._shapeMaskApplied then
+                pcall(f._icon.RemoveMaskTexture, f._icon, f._icon._shapeMask)
+                f._icon._shapeMaskApplied = false
+            end
             f._icon._shapeMask:Hide()
-            f._icon._shapeMask = nil
         end
         if f._shapeBorder then f._shapeBorder:Hide() end
         f._icon:ClearAllPoints(); f._icon:SetAllPoints(f)
@@ -1983,7 +1991,10 @@ local function ApplyIconShape(f, selectedShape)
     end
     if not f._icon._shapeMask then
         f._icon._shapeMask = f:CreateMaskTexture()
+    end
+    if not f._icon._shapeMaskApplied then
         f._icon:AddMaskTexture(f._icon._shapeMask)
+        f._icon._shapeMaskApplied = true
     end
     local mask = f._icon._shapeMask
     mask:SetTexture(maskPath, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
@@ -2100,7 +2111,6 @@ local function ShowCombatIcon(iconIdx, m)
     local f = GetOrCreateCombatIcon(iconIdx)
     local spellID = m.spellID or (m.data and m.data.castSpell)
     f._icon:SetTexture(m.texture or (spellID and Tex(spellID)) or 134400)
-    ApplyIconShape(f)
     local p = db and db.profile.display
     if p and p.showText and not m.isEating then
         local tc = p.textColor or DEFAULT_TEXT_COLOR
@@ -2205,7 +2215,6 @@ local function ShowCursorIcon(iconIdx, m)
     local f = GetOrCreateCursorIcon(iconIdx)
     local spellID = m.spellID or (m.data and m.data.castSpell)
     f._icon:SetTexture(m.texture or (spellID and Tex(spellID)) or 134400)
-    ApplyIconShape(f)
     local p = db and db.profile.display
     if p and p.showText and not m.isEating then
         local tc = p.textColor or DEFAULT_TEXT_COLOR
@@ -2368,7 +2377,6 @@ function EABR.SyncProviderCastSpell()
         btn:SetAttribute("macrotext", nil)
         btn:SetAttribute("unit", nil) -- raid buffs are self-cast, no unit needed
         btn._icon:SetTexture(Tex(spellID) or 134400)
-        ApplyIconShape(btn)
         btn._tooltipSpell = spellID
         btn._tooltipItem = nil
     end
@@ -2394,7 +2402,6 @@ function EABR.SetProviderCastCombatVisible(visible, m)
     btn._dismissKey = m.dismissKey or nil
     local spellID = m.spellID or EABR._providerCastSpell
     btn._icon:SetTexture(m.texture or Tex(spellID) or 134400)
-    ApplyIconShape(btn)
     EABR.ApplyIconTooltipData(btn, m)
     local p = db and db.profile and db.profile.display
     if p and p.showText then
@@ -2998,7 +3005,6 @@ local function ShowIcon(iconIdx, m)
     local btn = GetOrCreateIcon(iconIdx)
     btn._dismissKey = m.dismissKey or nil
     ApplySetup(btn, m)
-    ApplyIconShape(btn)
     local p = db.profile.display
     local glowType = p.glowType or 0
     local gr, gg, gb = ResolveGlowTint(p)
