@@ -84,6 +84,7 @@ local DM_DEFAULTS = {
             numberFormat    = 2,
             forceEnglishUnits = false, -- force K/M/B units, ignoring CJK locale's 萬/億 (opt-in; default keeps localized units)
             iconStyle       = "spec",
+            customSpecTexture = "",
             classIconZoom = 0.06,
             iconColorUseAccent = false,
             iconColor       = { r = 1, g = 1, b = 1 },
@@ -1076,6 +1077,7 @@ local CLASS_SPRITE_COORDS = EllesmereUI.CLASS_ICON_SPRITE_COORDS
 local ICON_STYLE_VALUES = {
     none     = "None",
     spec     = "Default Spec Icons",
+    customSpec = "Custom Spec Icons",
     blizzard = "Blizzard",
     modern   = "Modern",
     pixel    = "Pixel",
@@ -1086,7 +1088,7 @@ local ICON_STYLE_VALUES = {
     runic    = "Runic",
 }
 local ICON_STYLE_ORDER = {
-    "none", "spec", "---", "blizzard", "modern", "pixel", "glyph",
+    "none", "spec", "customSpec", "---", "blizzard", "modern", "pixel", "glyph",
     "arcade", "legend", "midnight", "runic",
 }
 _G._EDM_IconStyleValues = ICON_STYLE_VALUES
@@ -1098,6 +1100,85 @@ local function ZoomCoords(u1, u2, v1, v2, z)
     return u1 + du, u2 - du, v1 + dv, v2 - dv
 end
 
+local _customCoordsByIcon
+local _customSpecTexturePath
+local _customSpecTextureAsset
+local _customSpecProbeTexture
+
+local function NormalizeCustomTexturePath(path)
+    if type(path) ~= "string" then return "" end
+    path = path:match("^%s*(.-)%s*$") or ""
+    path = path:gsub("^[\"']+", ""):gsub("[\"']+$", "")
+    path = path:match("^%s*(.-)%s*$") or ""
+    path = path:gsub("/", "\\")
+    local lower = path:lower()
+    if lower:sub(-4) == ".tga" or lower:sub(-4) == ".blp" then
+        path = path:sub(1, -5)
+    end
+    return path
+end
+
+local function GetCustomSpecTexture(path)
+    path = NormalizeCustomTexturePath(path)
+    if path ~= _customSpecTexturePath then
+        _customSpecTexturePath = path
+        _customSpecTextureAsset = nil
+        if path ~= "" then
+            local function TryPath(candidate)
+                if not GetFileIDFromPath then return nil end
+                local ok, fileID = pcall(GetFileIDFromPath, candidate)
+                if ok and type(fileID) == "number" and fileID > 0 then return fileID end
+            end
+            _customSpecTextureAsset = TryPath(path) or TryPath(path .. ".tga") or TryPath(path .. ".blp")
+            if not _customSpecTextureAsset then
+                if not _customSpecProbeTexture then
+                    local probeFrame = CreateFrame("Frame")
+                    _customSpecProbeTexture = probeFrame:CreateTexture(nil, "ARTWORK")
+                end
+                local function ProbePath(candidate)
+                    local ok, loaded = pcall(_customSpecProbeTexture.SetTexture, _customSpecProbeTexture, candidate)
+                    _customSpecProbeTexture:SetTexture(nil)
+                    if ok and loaded then return candidate end
+                end
+                _customSpecTextureAsset = ProbePath(path) or ProbePath(path .. ".tga") or ProbePath(path .. ".blp")
+            end
+        end
+    end
+    return _customSpecTextureAsset
+end
+
+local function GetCustomSpecCoords(specIcon)
+    if not _customCoordsByIcon then
+        _customCoordsByIcon = {}
+        if GetSpecializationInfoByID then
+            -- Built only on first use so the style has no table-allocation cost while disabled.
+            local cellBySpecID = {
+                [250] = 0,  [251] = 1,  [252] = 2,
+                [102] = 3,  [103] = 4,  [104] = 5,  [105] = 6,
+                [253] = 7,  [254] = 8,  [255] = 9,
+                [62] = 10,  [63] = 11,  [64] = 12,
+                [268] = 13, [270] = 14, [269] = 15,
+                [65] = 16,  [66] = 17,  [70] = 18,
+                [256] = 19, [257] = 20, [258] = 21,
+                [259] = 22, [260] = 23, [261] = 24,
+                [262] = 25, [263] = 26, [264] = 27,
+                [265] = 28, [266] = 29, [267] = 30,
+                [71] = 31,  [72] = 32,  [73] = 33,
+                [577] = 34, [581] = 35,
+                [1467] = 36, [1468] = 37, [1473] = 38, [1480] = 39,
+            }
+            for specID, cell in pairs(cellBySpecID) do
+                local icon = select(4, GetSpecializationInfoByID(specID))
+                if icon then
+                    local col, row = cell % 8, math.floor(cell / 8)
+                    _customCoordsByIcon[icon] = { col / 8, (col + 1) / 8, row / 8, (row + 1) / 8 }
+                end
+            end
+        end
+    end
+    return _customCoordsByIcon[specIcon]
+end
+
 local function ResolveIcon(src, iconTex, barH)
     local cfg = DB()
     local style = cfg.iconStyle or "spec"
@@ -1107,7 +1188,30 @@ local function ResolveIcon(src, iconTex, barH)
     local classFile = src.classFilename
     if not classFile or (issecretvalue and issecretvalue(classFile)) or classFile == "" then iconTex:Hide(); return 0 end
 
-    if style == "spec" then
+    if style == "customSpec" or style == "detailsSpec" then
+        local specIcon = src.specIconID
+        local coords = type(specIcon) == "number" and GetCustomSpecCoords(specIcon)
+        local customTexture = coords and GetCustomSpecTexture(cfg.customSpecTexture)
+        if customTexture then
+            iconTex:SetTexture(customTexture)
+            iconTex:SetTexCoord(ZoomCoords(coords[1], coords[2], coords[3], coords[4], zoom))
+            iconTex:SetSize(barH, barH)
+            iconTex:SetDesaturated(false)
+            iconTex:SetVertexColor(1, 1, 1, 1)
+            iconTex:Show()
+            return barH
+        end
+        -- Unknown or newly added specs retain the normal Blizzard spec icon.
+        if specIcon and type(specIcon) == "number" and specIcon ~= 0 then
+            iconTex:SetTexture(specIcon)
+            iconTex:SetTexCoord(zoom, 1 - zoom, zoom, 1 - zoom)
+            iconTex:SetSize(barH, barH)
+            iconTex:SetDesaturated(false)
+            iconTex:SetVertexColor(1, 1, 1, 1)
+            iconTex:Show()
+            return barH
+        end
+    elseif style == "spec" then
         local specIcon = src.specIconID
         if specIcon and type(specIcon) == "number" and specIcon ~= 0 then
             iconTex:SetTexture(specIcon)
@@ -2169,6 +2273,23 @@ local function CreateDMWindow(winIdx)
         -- Keep text ABOVE the per-bar border (bar.row +3, lazy-created in ApplyBorder); keyed off
         -- bar.row like the border so the two can't tie and let a later-enabled border cover the text
         tf:SetAllPoints(bar.fill); tf:SetFrameLevel(bar.row:GetFrameLevel() + 4)
+        -- Custom spec sheets may have transparent backgrounds. Let the status-bar
+        -- foreground run beneath them while keeping text to the icon's right.
+        function bar.ApplyResolvedIconLayout(iconOffset, barH)
+            local style = DB().iconStyle
+            local underIcon = (style == "customSpec" or style == "detailsSpec") and iconOffset > 0
+            bar.fill:ClearAllPoints()
+            bar.fill:SetPoint("TOPLEFT", bar.row, "TOPLEFT", underIcon and 0 or iconOffset, 0)
+            bar.fill:SetPoint("TOPRIGHT", bar.row, "TOPRIGHT", 0, 0)
+            bar.fill:SetHeight(barH)
+            tf:ClearAllPoints()
+            if underIcon then
+                tf:SetPoint("TOPLEFT", bar.row, "TOPLEFT", iconOffset, 0)
+                tf:SetPoint("BOTTOMRIGHT", bar.row, "BOTTOMRIGHT", 0, 0)
+            else
+                tf:SetAllPoints(bar.fill)
+            end
+        end
         bar.pos = tf:CreateFontString(nil, "OVERLAY"); bar.pos:SetPoint("LEFT", tf, "LEFT", 3, 0); SetDMFont(bar.pos, 11)
         bar.label = tf:CreateFontString(nil, "OVERLAY"); bar.label:SetPoint("LEFT", bar.pos, "RIGHT", 2, 0); bar.label:SetPoint("RIGHT", tf, "RIGHT", -70, 0); bar.label:SetJustifyH("LEFT"); SetDMFont(bar.label, 11)
         bar.label:SetWordWrap(false)
@@ -3306,8 +3427,7 @@ local function CreateDMWindow(winIdx)
             local iconOffset = showIcon and ResolveIcon(src, bar.classIcon, barH) or 0
             if not showIcon then bar.classIcon:Hide() end
             if bar._iconBorderFrame then bar._iconBorderFrame:SetShown(bar.classIcon:IsShown()) end
-            bar.fill:SetPoint("TOPLEFT", bar.row, "TOPLEFT", iconOffset, 0)
-            bar.fill:SetPoint("TOPRIGHT", bar.row, "TOPRIGHT", 0, 0)
+            bar.ApplyResolvedIconLayout(iconOffset, barH)
             if showClassColor then
                 local cc = classFile and RAID_CLASS_COLORS[classFile] and EUI.GetClassColor(classFile)
                 if cc then bar.fill:SetStatusBarColor(cc.r, cc.g, cc.b)
@@ -3457,8 +3577,7 @@ local function CreateDMWindow(winIdx)
                             local iconOffset = showIcon and ResolveIcon(src, bar.classIcon, barH) or 0
                             if not showIcon then bar.classIcon:Hide() end
                             if bar._iconBorderFrame then bar._iconBorderFrame:SetShown(bar.classIcon:IsShown()) end
-                            bar.fill:SetPoint("TOPLEFT", bar.row, "TOPLEFT", iconOffset, 0)
-                            bar.fill:SetPoint("TOPRIGHT", bar.row, "TOPRIGHT", 0, 0)
+                            bar.ApplyResolvedIconLayout(iconOffset, barH)
                             bar._cachedColorClass = nil
                             -- Repaint class-colored background for the new class (no-op when off); bar._class set here so ApplyBg reads the current class
                             bar._class = classFile
@@ -3799,8 +3918,7 @@ local function CreateDMWindow(winIdx)
                     -- Class/spec icon via ResolveIcon (consistent with main bars)
                     local fakeSrc = { classFilename = p.class, specIconID = p.specIcon }
                     local iconOffset = ResolveIcon(fakeSrc, bar.classIcon, barH)
-                    bar.fill:ClearAllPoints(); bar.fill:SetPoint("TOPLEFT", bar.row, "TOPLEFT", iconOffset, 0)
-                    bar.fill:SetPoint("TOPRIGHT", bar.row, "TOPRIGHT", 0, 0); bar.fill:SetHeight(barH)
+                    bar.ApplyResolvedIconLayout(iconOffset, barH)
                     ApplyBarTexture(bar.fill, texPath, texKey); bar.fill:SetMinMaxValues(0, maxAmt); bar.fill:SetValue(p.total)
                     local cc = p.class and RAID_CLASS_COLORS[p.class] and EUI.GetClassColor(p.class)
                     if cc then bar.fill:SetStatusBarColor(cc.r, cc.g, cc.b)
@@ -4309,6 +4427,17 @@ end
 -- ns exports (loop over all windows)
 ns.RefreshMeter = function()
     for _, w in ipairs(_windows) do w.Refresh() end
+end
+
+ns.RefreshCustomSpecTexture = function()
+    _customSpecTexturePath = nil
+    _customSpecTextureAsset = nil
+    for _, w in ipairs(_windows) do
+        w._stickyClassCache = nil
+        w._stickySpecCache = nil
+        w._barCacheKey = nil
+        w.Refresh()
+    end
 end
 
 -- Bust per-class color caches and repaint when global custom class colors change, so bars/text

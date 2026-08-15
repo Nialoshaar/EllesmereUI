@@ -4450,6 +4450,22 @@ local function BuildCogPopup(opts)
                 lbl:SetText(EllesmereUI.L(row.label))
                 lbl:SetPoint("LEFT", pf, "TOPLEFT", SIDE_PAD, curY - ROW_H / 2 - 1)
 
+                if row.tooltip then
+                    local hitFrame = CreateFrame("Frame", nil, pf)
+                    hitFrame:SetPoint("TOPLEFT", lbl, "TOPLEFT", -2, 2)
+                    hitFrame:SetPoint("BOTTOMRIGHT", lbl, "BOTTOMRIGHT", 2, -2)
+                    hitFrame:SetFrameLevel(pf:GetFrameLevel() + 5)
+                    hitFrame:EnableMouse(true)
+                    hitFrame:SetScript("OnEnter", function()
+                        if EllesmereUI.ShowWidgetTooltip then
+                            EllesmereUI.ShowWidgetTooltip(lbl, row.tooltip)
+                        end
+                    end)
+                    hitFrame:SetScript("OnLeave", function()
+                        if EllesmereUI.HideWidgetTooltip then EllesmereUI.HideWidgetTooltip() end
+                    end)
+                end
+
                 local inputW = row.inputWidth or 80
                 local SAVE_W = 34
                 local SAVE_GAP = 4
