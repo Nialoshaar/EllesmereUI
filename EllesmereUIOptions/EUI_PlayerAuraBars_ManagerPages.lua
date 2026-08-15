@@ -68,6 +68,12 @@ local FONT_OUTLINE_VALUES = {
     outline = "Outline", thick = "Thick Outline",
 }
 local FONT_OUTLINE_ORDER = { "default", "none", "outline", "thick" }
+ns.PAB_ICON_SHAPE_VALUES = ns.PAB_ICON_SHAPE_VALUES or {
+    none = "None", cropped = "Cropped", square = "Square", circle = "Circle",
+    csquare = "Curved Square", diamond = "Diamond", hexagon = "Hexagon",
+    portrait = "Portrait", shield = "Shield",
+}
+ns.PAB_ICON_SHAPE_ORDER = ns.PAB_ICON_SHAPE_ORDER or { "none", "cropped", "square", "circle", "csquare", "diamond", "hexagon", "portrait", "shield" }
 local GROW_DIR_VALUES = { LEFT = "Left", RIGHT = "Right", CENTER_HORIZONTAL = "Centered Horizontal", CENTER_VERTICAL = "Centered Vertical", UP = "Up", DOWN = "Down" }
 local GROW_DIR_ORDER = { "LEFT", "RIGHT", "CENTER_HORIZONTAL", "CENTER_VERTICAL", "UP", "DOWN" }
 local ICON_WRAP_VALUES = { LEFT = "Left", RIGHT = "Right", UP = "Up", DOWN = "Down" }
@@ -924,10 +930,10 @@ local function BuildDisplayFields(frame, fontPath, sy, cfg, apply, isBuff)
             setValue = function(v) cfg.iconsPerRow = v; apply() end
         },
         {
-            type = "dropdown", text = "Font Outline",
-            values = FONT_OUTLINE_VALUES, order = FONT_OUTLINE_ORDER,
-            getValue = function() return cfg.fontOutline or "default" end,
-            setValue = function(v) cfg.fontOutline = v; apply() end
+            type = "dropdown", text = "Custom Icon Shape",
+            values = ns.PAB_ICON_SHAPE_VALUES, order = ns.PAB_ICON_SHAPE_ORDER,
+            getValue = function() return cfg.iconShape or "none" end,
+            setValue = function(v) cfg.iconShape = v; apply() end
         }
     ); sy = sy - hh
     do
@@ -958,10 +964,10 @@ local function BuildDisplayFields(frame, fontPath, sy, cfg, apply, isBuff)
             setValue = function(v) cfg.showSwipe = v; apply() end
         },
         {
-            type = "toggle", text = "Show Tooltips",
-            tooltip = "Show aura tooltips when hovering this bar's icons.",
-            getValue = function() return cfg.showTooltips ~= false end,
-            setValue = function(v) cfg.showTooltips = v; apply() end
+            type = "dropdown", text = "Font Outline",
+            values = FONT_OUTLINE_VALUES, order = FONT_OUTLINE_ORDER,
+            getValue = function() return cfg.fontOutline or "default" end,
+            setValue = function(v) cfg.fontOutline = v; apply() end
         }
     ); sy = sy - hh
     do
@@ -980,22 +986,20 @@ local function BuildDisplayFields(frame, fontPath, sy, cfg, apply, isBuff)
         ns._PAMakeCogBtn(rgn, cogShow)
     end
 
-    -- Buff bars only: debuffs are never player-cancelable, so the row would
-    -- be a dead switch there. (Weapon enchants used to share this row as a
-    -- second toggle; they are a content source rather than a display tweak,
-    -- so they now live as the "Weapon Enchants" pinned row in the Filters
-    -- dropdown -- see BuildAssignedBuffsFields.)
-    if isBuff then
-        _, hh = W:DualRow(frame, sy,
-            {
-                type = "toggle", text = "Right-Click to Cancel",
-                tooltip = "Right-clicking a buff icon cancels the buff. Turning this off makes the bar's icons click-through; tooltips still follow the Show Tooltips setting.",
-                getValue = function() return cfg.rightClickCancel ~= false end,
-                setValue = function(v) cfg.rightClickCancel = v; apply() end
-            },
-            { type = "label", text = "" }
-        ); sy = sy - hh
-    end
+    _, hh = W:DualRow(frame, sy,
+        {
+            type = "toggle", text = "Show Tooltips",
+            tooltip = "Show aura tooltips when hovering this bar's icons.",
+            getValue = function() return cfg.showTooltips ~= false end,
+            setValue = function(v) cfg.showTooltips = v; apply() end
+        },
+        isBuff and {
+            type = "toggle", text = "Right-Click to Cancel",
+            tooltip = "Right-clicking a buff icon cancels the buff. Turning this off makes the bar's icons click-through; tooltips still follow the Show Tooltips setting.",
+            getValue = function() return cfg.rightClickCancel ~= false end,
+            setValue = function(v) cfg.rightClickCancel = v; apply() end
+        } or { type = "label", text = "" }
+    ); sy = sy - hh
 
     return sy
 end
