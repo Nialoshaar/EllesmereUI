@@ -79,6 +79,88 @@ initFrame:SetScript("OnEvent", function(self)
     local _previewContainer
     local _previewHintFS
 
+    local SHAPE_VALUES = {
+        none="None", cropped="Cropped", square="Square", circle="Circle",
+        csquare="Rounded Square", diamond="Diamond", hexagon="Hexagon",
+        portrait="Portrait", shield="Shield",
+    }
+    local SHAPE_ORDER = { "none", "cropped", "---", "square", "circle", "csquare", "diamond", "hexagon", "portrait", "shield" }
+    local SHAPE_INSETS = { circle=17, csquare=17, diamond=14, hexagon=17, portrait=17, shield=13, square=17 }
+    local SHAPE_MASKS = {
+        circle="Interface\\AddOns\\EllesmereUI\\media\\portraits\\circle_mask.tga",
+        csquare="Interface\\AddOns\\EllesmereUI\\media\\portraits\\csquare_mask.tga",
+        diamond="Interface\\AddOns\\EllesmereUI\\media\\portraits\\diamond_mask.tga",
+        hexagon="Interface\\AddOns\\EllesmereUI\\media\\portraits\\hexagon_mask.tga",
+        portrait="Interface\\AddOns\\EllesmereUI\\media\\portraits\\portrait_mask.tga",
+        shield="Interface\\AddOns\\EllesmereUI\\media\\portraits\\shield_mask.tga",
+        square="Interface\\AddOns\\EllesmereUI\\media\\portraits\\square_mask.tga",
+    }
+    local SHAPE_BORDERS = {
+        circle="Interface\\AddOns\\EllesmereUI\\media\\portraits\\circle_border.tga",
+        csquare="Interface\\AddOns\\EllesmereUI\\media\\portraits\\csquare_border.tga",
+        diamond="Interface\\AddOns\\EllesmereUI\\media\\portraits\\diamond_border.tga",
+        hexagon="Interface\\AddOns\\EllesmereUI\\media\\portraits\\hexagon_border.tga",
+        portrait="Interface\\AddOns\\EllesmereUI\\media\\portraits\\portrait_border.tga",
+        shield="Interface\\AddOns\\EllesmereUI\\media\\portraits\\shield_border.tga",
+        square="Interface\\AddOns\\EllesmereUI\\media\\portraits\\square_border.tga",
+    }
+
+    local function ApplyPreviewIconShape(btn, shape)
+        if not (btn and btn._icon) then return end
+        local maskPath = SHAPE_MASKS[shape]
+        if not maskPath then
+            if btn._shapeMask then btn._icon:RemoveMaskTexture(btn._shapeMask); btn._shapeMask:Hide() end
+            if btn._shapeBorder then btn._shapeBorder:Hide() end
+            if shape == "cropped" then
+                local zoom = 0.04
+                btn._icon:SetTexCoord(zoom, 1 - zoom, zoom + 0.15, 1 - zoom - 0.15)
+                if btn._squareBorder and btn._squareBorder._frame then btn._squareBorder._frame:Hide() end
+                if not btn._croppedBorder then
+                    btn._croppedBorder = {}
+                    for i = 1, 4 do
+                        local edge = btn:CreateTexture(nil, "OVERLAY", nil, -8)
+                        edge:SetColorTexture(0, 0, 0, 1)
+                        btn._croppedBorder[i] = edge
+                    end
+                    local top, bottom, left, right = btn._croppedBorder[1], btn._croppedBorder[2], btn._croppedBorder[3], btn._croppedBorder[4]
+                    top:SetPoint("TOPLEFT"); top:SetPoint("TOPRIGHT"); top:SetHeight(1)
+                    bottom:SetPoint("BOTTOMLEFT"); bottom:SetPoint("BOTTOMRIGHT"); bottom:SetHeight(1)
+                    left:SetPoint("TOPLEFT"); left:SetPoint("BOTTOMLEFT"); left:SetWidth(1)
+                    right:SetPoint("TOPRIGHT"); right:SetPoint("BOTTOMRIGHT"); right:SetWidth(1)
+                end
+                for i = 1, 4 do btn._croppedBorder[i]:Show() end
+            else
+                btn._icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+                if btn._croppedBorder then
+                    for i = 1, 4 do btn._croppedBorder[i]:Hide() end
+                end
+                if btn._squareBorder and btn._squareBorder._frame then btn._squareBorder._frame:Show() end
+            end
+            if EllesmereUI.PP then EllesmereUI.PP.ShowBorder(btn) end
+            return
+        end
+        if not btn._shapeMask then btn._shapeMask = btn:CreateMaskTexture() end
+        btn._shapeMask:SetTexture(maskPath, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+        btn._shapeMask:SetAllPoints(btn); btn._shapeMask:Show()
+        btn._icon:RemoveMaskTexture(btn._shapeMask); btn._icon:AddMaskTexture(btn._shapeMask)
+        local inset = SHAPE_INSETS[shape] or 17
+        local visible = (128 - 2 * inset) / 128
+        local expand = ((1 / visible) - 1) * 0.5
+        btn._icon:SetTexCoord(-expand, 1 + expand, -expand, 1 + expand)
+        if EllesmereUI.PP then EllesmereUI.PP.HideBorder(btn) end
+        if btn._squareBorder and btn._squareBorder._frame then btn._squareBorder._frame:Hide() end
+        if btn._croppedBorder then
+            for i = 1, 4 do btn._croppedBorder[i]:Hide() end
+        end
+        if not btn._shapeBorder then
+            btn._shapeBorder = btn:CreateTexture(nil, "OVERLAY", nil, 6)
+            btn._shapeBorder:SetAllPoints(btn)
+        end
+        btn._shapeBorder:SetTexture(SHAPE_BORDERS[shape])
+        btn._shapeBorder:SetVertexColor(0, 0, 0, 1)
+        btn._shapeBorder:Show()
+    end
+
     local function IsPreviewHintDismissed()
         return EllesmereUIDB and EllesmereUIDB.previewHintDismissed
     end
@@ -233,6 +315,7 @@ initFrame:SetScript("OnEvent", function(self)
         local baseScale = d.scale or 1.0
         local ICON_SIZE = _G._EABR_ICON_SIZE or 40
         local sz = math.floor(ICON_SIZE * baseScale + 0.5)
+        local iconH = (d.iconShape == "cropped") and math.floor(sz * 0.70 + 0.5) or sz
         local spacing = d.iconSpacing or 8
         local glowType = d.glowType or 0
         local gr, gg, gb
@@ -254,8 +337,9 @@ initFrame:SetScript("OnEvent", function(self)
         for i, pIcon in ipairs(_previewIcons) do
             local btn = pIcon.frame
             if not btn then break end
-            btn:SetSize(sz, sz)
+            btn:SetSize(sz, iconH)
             btn:SetAlpha(opacity)
+            ApplyPreviewIconShape(btn, d.iconShape or "none")
             btn:ClearAllPoints()
             local startX = -(totalW / 2) + (sz / 2)
             btn:SetPoint("TOP", btn:GetParent(), "TOP", startX + (i - 1) * (sz + spacing), 0)
@@ -313,7 +397,7 @@ initFrame:SetScript("OnEvent", function(self)
             local textYOff2 = d.textYOffset or -2
             local textSz2 = d.textSize or 11
             local textOverhang2 = showText and (math.abs(textYOff2) + textSz2) or 0
-            local CONTAINER_H = sz + textOverhang2
+            local CONTAINER_H = iconH + textOverhang2
             if _previewContainer then
                 _previewContainer:SetHeight(CONTAINER_H)
                 _previewContainer:ClearAllPoints()
@@ -488,6 +572,7 @@ initFrame:SetScript("OnEvent", function(self)
         local baseScale = d and d.scale or 1.0
         local ICON_SIZE = _G._EABR_ICON_SIZE or 40
         local sz = math.floor(ICON_SIZE * baseScale + 0.5)
+        local iconH = (d and d.iconShape == "cropped") and math.floor(sz * 0.70 + 0.5) or sz
         local spacing = d and d.iconSpacing or 8
         local showText = d and d.showText
         local tc = d and d.textColor or {r=1, g=1, b=1}
@@ -531,7 +616,7 @@ initFrame:SetScript("OnEvent", function(self)
         else
             _previewContainer = CreateFrame("Frame", nil, hdr)
         end
-        _previewContainer:SetSize(hdrW, sz + textOverhang)
+        _previewContainer:SetSize(hdrW, iconH + textOverhang)
         _previewContainer:SetPoint("CENTER", hdr, "CENTER", 0, 0)
         _previewContainer:Show()
         local container = _previewContainer
@@ -546,7 +631,7 @@ initFrame:SetScript("OnEvent", function(self)
 
         for i, iconData in ipairs(icons) do
             local btn = CreateFrame("Button", nil, container)
-            btn:SetSize(sz, sz)
+            btn:SetSize(sz, iconH)
             btn:EnableMouse(true)
             local startX = -(totalW / 2) + (sz / 2)
             btn:SetPoint("TOP", container, "TOP", startX + (i - 1) * (sz + spacing), 0)
@@ -559,7 +644,7 @@ initFrame:SetScript("OnEvent", function(self)
             btn._icon = icon
 
             -- Pixel-perfect 1px black border
-            EllesmereUI.MakeBorder(btn, 0, 0, 0, 1, EllesmereUI.PanelPP)
+            btn._squareBorder = EllesmereUI.MakeBorder(btn, 0, 0, 0, 1, EllesmereUI.PanelPP)
 
             -- Text label below icon
             local fontPath = (EllesmereUI and EllesmereUI.GetFontPath and EllesmereUI.GetFontPath("auraBuff")) or "Fonts\\ARIALN.TTF"
@@ -1274,7 +1359,24 @@ initFrame:SetScript("OnEvent", function(self)
             MakeCogBtn(rgn, cogShow, nil, EllesmereUI.DIRECTIONS_ICON)
         end
 
-        -- Row 4: Show Below | Show Below Pre-Key (global timing, minutes)
+        -- Row 4: Custom Icon Shape | Opacity
+        _, h = W:DualRow(parent, y,
+            { type="dropdown", text="Custom Icon Shape", values=SHAPE_VALUES, order=SHAPE_ORDER,
+              getValue=function() local d = DDB(); return d and d.iconShape or "none" end,
+              setValue=function(v)
+                  local d = DDB(); if not d then return end; d.iconShape = v
+                  if _G._EABR_ApplyIconShapes then _G._EABR_ApplyIconShapes(v) end
+                  RefreshAll(); UpdatePreviewHeader()
+              end },
+            { type="slider", text="Opacity", min=0, max=1, step=0.05,
+              getValue=function() local d = DDB(); return d and d.opacity or 1 end,
+              setValue=function(v)
+                  local d = DDB(); if not d then return end; d.opacity = v
+                  RefreshAll(); UpdatePreviewHeader()
+              end }
+        );  y = y - h
+
+        -- Row 5: Show Below | Show Below Pre-Key (global timing, minutes)
         local timingRow
         timingRow, h = W:DualRow(parent, y,
             { type="slider", text="Show Below", min=0, max=60, step=1,
@@ -1294,7 +1396,7 @@ initFrame:SetScript("OnEvent", function(self)
         );  y = y - h
         AddMinSuffix(timingRow, "Show Below", "Show Below Pre-Key")
 
-        -- Row 5: Show Tooltips | Opacity
+        -- Row 6: Show Tooltips | empty (last row in section)
         _, h = W:DualRow(parent, y,
             { type="toggle", text="Show Tooltips",
               tooltip="Show item or spell tooltips when hovering reminder icons.",
@@ -1302,12 +1404,7 @@ initFrame:SetScript("OnEvent", function(self)
               setValue=function(v)
                   local d = DDB(); if not d then return end; d.showTooltips = v
               end },
-            { type="slider", text="Opacity", min=0, max=1, step=0.05,
-              getValue=function() local d = DDB(); return d and d.opacity or 1 end,
-              setValue=function(v)
-                  local d = DDB(); if not d then return end; d.opacity = v
-                  RefreshAll(); UpdatePreviewHeader()
-              end }
+            { type="label", text="" }
         );  y = y - h
 
         _, h = W:Spacer(parent, y, 20);  y = y - h
