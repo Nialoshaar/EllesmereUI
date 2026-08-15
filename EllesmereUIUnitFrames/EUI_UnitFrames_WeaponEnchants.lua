@@ -131,22 +131,59 @@ local function ApplyStyle(b, style)
         b.icon:SetTexCoord(tc[1], tc[2], tc[3], tc[4])
     elseif style.iconCrop then
         local z = style.iconZoom or 0.07
-        b.icon:SetTexCoord(z, 1 - z, z, 1 - z)
+        if style.iconShape == "cropped" then
+            b.icon:SetTexCoord(z, 1 - z, z + 0.15, 1 - z - 0.15)
+        else
+            b.icon:SetTexCoord(z, 1 - z, z, 1 - z)
+        end
     else
         b.icon:SetTexCoord(0, 1, 0, 1)
+    end
+    local shape = style.iconShape or "none"
+    local shaped = shape ~= "none" and shape ~= "cropped"
+    if shaped and not b._shapeMask then
+        b._shapeMask = b:CreateMaskTexture()
+        b._shapeMask:SetAllPoints(b)
+        b._shapeBorder = b:CreateTexture(nil, "OVERLAY", nil, 7)
+        b._shapeBorder:SetAllPoints(b)
+    end
+    if b._shapeMask then
+        if shaped then
+            local media = "Interface\\AddOns\\EllesmereUI\\media\\portraits\\"
+            local maskPath = media .. shape .. "_mask.tga"
+            b._shapeMask:SetTexture(maskPath)
+            b._shapeMask:Show()
+            b.icon:AddMaskTexture(b._shapeMask)
+            if b.cd.SetSwipeTexture then b.cd:SetSwipeTexture(maskPath) end
+        else
+            b.icon:RemoveMaskTexture(b._shapeMask)
+            if b.cd.SetSwipeTexture then b.cd:SetSwipeTexture("") end
+            b._shapeMask:Hide()
+            b._shapeBorder:Hide()
+        end
     end
     local PP = EllesmereUI.PP
     local bd = style.border
     if bd and PP then
-        if not b._bdr then
-            b._bdr = CreateFrame("Frame", nil, b)
-            b._bdr:SetAllPoints()
-            PP.CreateBorder(b._bdr, bd[1] or 0, bd[2] or 0, bd[3] or 0, bd[4] or 1, bd.size or 1)
+        if shaped then
+            if b._bdr and PP.HideBorder then PP.HideBorder(b._bdr) end
+            b._shapeBorder:SetTexture("Interface\\AddOns\\EllesmereUI\\media\\portraits\\" .. shape .. "_border.tga")
+            b._shapeBorder:SetVertexColor(bd[1] or 0, bd[2] or 0, bd[3] or 0, bd[4] or 1)
+            b._shapeBorder:Show()
+        else
+            if not b._bdr then
+                b._bdr = CreateFrame("Frame", nil, b)
+                b._bdr:SetAllPoints()
+                PP.CreateBorder(b._bdr, bd[1] or 0, bd[2] or 0, bd[3] or 0, bd[4] or 1, bd.size or 1)
+            end
+            PP.UpdateBorder(b._bdr, bd.size or 1, bd[1] or 0, bd[2] or 0, bd[3] or 0, bd[4] or 1)
+            if PP.ShowBorder then PP.ShowBorder(b._bdr) else b._bdr:Show() end
         end
-        PP.UpdateBorder(b._bdr, bd.size or 1, bd[1] or 0, bd[2] or 0, bd[3] or 0, bd[4] or 1)
-        b._bdr:Show()
     elseif b._bdr then
         b._bdr:Hide()
+        if b._shapeBorder then b._shapeBorder:Hide() end
+    elseif b._shapeBorder then
+        b._shapeBorder:Hide()
     end
     b.cd:SetReverse(style.cooldownReverse ~= false)
     b.cd:SetDrawEdge(style.cooldownDrawEdge == true)
