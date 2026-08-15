@@ -176,6 +176,48 @@ end
 -- re-queue when the restriction lifts; see the lift watcher below the restyle worker.
 local deferredRestyles = {}
 
+local AK_SHAPE_MEDIA = "Interface\\AddOns\\EllesmereUI\\media\\portraits\\"
+local function ApplyIconShape(d, style)
+    local shape = style.iconShape or "none"
+    local shaped = shape ~= "none" and shape ~= "cropped"
+
+    if shaped and not d.shapeMask then
+        d.shapeMask = d.borderHost:CreateMaskTexture()
+        d.shapeMask:SetAllPoints(d.borderHost)
+        d.shapeBorder = d.borderHost:CreateTexture(nil, "OVERLAY", nil, 7)
+        d.shapeBorder:SetAllPoints(d.borderHost)
+        d.shapeDispel = d.dispelHolder:CreateTexture(nil, "OVERLAY")
+        d.shapeDispel:SetAllPoints(d.dispelHolder)
+        d.shapeDispel:Hide()
+    end
+
+    if d.shapeMask then
+        if shaped then
+            local maskPath = AK_SHAPE_MEDIA .. shape .. "_mask.tga"
+            local borderPath = AK_SHAPE_MEDIA .. shape .. "_border.tga"
+            d.shapeMask:SetTexture(maskPath)
+            d.shapeMask:Show()
+            d.icon:AddMaskTexture(d.shapeMask)
+            if d.cooldown.SetSwipeTexture then d.cooldown:SetSwipeTexture(maskPath) end
+            d.shapeBorder:SetTexture(borderPath)
+            d.shapeBorder:SetVertexColor(style.border and (style.border[1] or 0) or 0,
+                style.border and (style.border[2] or 0) or 0,
+                style.border and (style.border[3] or 0) or 0,
+                style.border and (style.border[4] or 1) or 1)
+            d.shapeBorder:SetShown(style.border ~= nil)
+            d.shapeDispel:SetTexture(borderPath)
+        else
+            d.icon:RemoveMaskTexture(d.shapeMask)
+            if d.cooldown.SetSwipeTexture then d.cooldown:SetSwipeTexture("") end
+            d.shapeMask:Hide()
+            d.shapeBorder:Hide()
+            d.shapeDispel:Hide()
+        end
+    end
+
+    return shaped
+end
+
 local function ApplyStyleToRegions(button, style)
     local d = bd[button]
     if not d then return end
@@ -199,10 +241,19 @@ local function ApplyStyleToRegions(button, style)
             d.icon:SetTexCoord(style.texCoord[1], style.texCoord[2], style.texCoord[3], style.texCoord[4])
         elseif style.iconCrop then
             local z = style.iconZoom or 0.07
-            d.icon:SetTexCoord(z, 1 - z, z, 1 - z)
+            if style.iconShape == "cropped" then
+                d.icon:SetTexCoord(z, 1 - z, z + 0.15, 1 - z - 0.15)
+            else
+                d.icon:SetTexCoord(z, 1 - z, z, 1 - z)
+            end
         else
             d.icon:SetTexCoord(0, 1, 0, 1)
         end
+    end
+
+    local iconShaped = false
+    if style.iconShape or d.shapeMask then
+        iconShaped = ApplyIconShape(d, style)
     end
 
     if d.cooldown then
@@ -304,6 +355,12 @@ local function ApplyStyleToRegions(button, style)
                 d.borderMade = true
             end
             d.borderHost:Show()
+            if iconShaped then
+                if PP.HideBorder then PP.HideBorder(d.borderHost) end
+                d.shapeBorder:Show()
+            elseif PP.ShowBorder then
+                PP.ShowBorder(d.borderHost)
+            end
         else
             d.borderHost:Hide()
         end
@@ -374,6 +431,11 @@ local function ApplyStyleToRegions(button, style)
         d.dispelStrips = strips
     end
     if d.dispelStrips then
+        if iconShaped then
+            for i = 1, 4 do d.dispelStrips[i]:Hide() end
+        elseif d.shapeDispel then
+            d.shapeDispel:Hide()
+        end
         -- Level re-assert (change-guarded): a style can move the border host's level;
         -- the ring stays FOUR levels above it (PP strip container at +1, DM fx
         -- border-override container at +2, DM per-filter glow at +3 -- the dispel
@@ -422,7 +484,7 @@ local function ApplyStyleToRegions(button, style)
         -- (0 = the user disabled the dispel recolor outright).
         local want = (style.dispelBorder and style.border
             and (style.dispelBorderPx or 2) > 0) and true or false
-        local mapFP = style.dispelColorFP or ""
+        local mapFP = (style.dispelColorFP or "") .. "|" .. (style.iconShape or "none")
         if d.dispelBorderOn ~= want or (want and d.akDispelMapFP ~= mapFP) then
             -- Stamp only on SUCCESS: these are button calls, denied while auras are
             -- secret; a pre-stamped failure would strand the registration in the wrong
@@ -450,10 +512,14 @@ local function ApplyStyleToRegions(button, style)
                     local opts = { style = dispelTint, showWhenHarmful = true,
                         showWhenHelpful = false, customDispelColorMap = style.dispelColorMap }
                     local added = true
-                    for i = 1, 4 do
-                        if not pcall(addFn, button, d.dispelStrips[i], opts) then
-                            added = false
-                            break
+                    if iconShaped then
+                        added = pcall(addFn, button, d.shapeDispel, opts)
+                    else
+                        for i = 1, 4 do
+                            if not pcall(addFn, button, d.dispelStrips[i], opts) then
+                                added = false
+                                break
+                            end
                         end
                     end
                     if added then
@@ -475,6 +541,7 @@ local function ApplyStyleToRegions(button, style)
             else
                 if clearFn and pcall(clearFn, button) then
                     for i = 1, 4 do d.dispelStrips[i]:Hide() end
+                    if d.shapeDispel then d.shapeDispel:Hide() end
                     d.dispelBorderOn = want
                 elseif d.styleKey and AK.AurasRestricted() then
                     deferredRestyles[d.styleKey] = true

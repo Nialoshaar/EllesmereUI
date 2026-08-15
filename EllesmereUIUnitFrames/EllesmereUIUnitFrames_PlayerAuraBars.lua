@@ -744,13 +744,16 @@ local function BuildStyle(isBuff, cfg)
     -- math at any UIParent scale.
     local PP = EllesmereUI.PP
     local iconSize = PP.Scale(cfg.iconSize or 32)
+    local iconHeight = cfg.iconShape == "cropped"
+        and PP.Scale((cfg.iconSize or 32) * 0.70) or iconSize
 
     local style = {
         width = iconSize,
-        height = iconSize,
+        height = iconHeight,
         centeredGrowth = cfg.growDirection == "CENTER_HORIZONTAL" or cfg.growDirection == "CENTER_VERTICAL",
         iconCrop = true,
         iconZoom = iconZoom or 0.055,
+        iconShape = cfg.iconShape and cfg.iconShape ~= "none" and cfg.iconShape or nil,
 
         -- Reverse Swipe cog (Show Duration Swipe toggle), default on. AK's
         -- ApplyStyleToRegions passes this straight to SetReverse.
@@ -987,7 +990,7 @@ local function EnsurePabSizedStyle(baseKey, size)
     -- keyed by the raw size.
     local PP = EllesmereUI.PP
     v.width = PP.Scale(size)
-    v.height = PP.Scale(size)
+    v.height = base.iconShape == "cropped" and PP.Scale(size * 0.70) or PP.Scale(size)
     AK.styles[variantKey] = v
     AK.RestyleSoon(variantKey)
     return variantKey
@@ -996,12 +999,13 @@ end
 local function BuildGroupLayout(cfg, gap, rowGap, size)
     local PP = EllesmereUI.PP
     rowGap = rowGap or gap
-    size = PP.Scale(size or cfg.iconSize or 32)
+    local rawSize = size or cfg.iconSize or 32
+    size = PP.Scale(rawSize)
     gap = PP.Scale(gap)
     rowGap = PP.Scale(rowGap)
     return {
         elementWidth = size,
-        elementHeight = size,
+        elementHeight = cfg.iconShape == "cropped" and PP.Scale(rawSize * 0.70) or size,
         elementSpacing = gap,
         lineSpacing = rowGap,
         groupSpacing = gap,
@@ -1170,6 +1174,8 @@ end
 
 local function ComputeGrid(isBuff, cfg)
     local iconSize = MaxIconSizeFor(isBuff, cfg)
+    local iconHeight = cfg.iconShape == "cropped"
+        and EllesmereUI.PP.Scale(iconSize * 0.70) or iconSize
     local pad = cfg.padding or 5
     local rowGap = cfg.rowSpacing or 12
     local layoutPad = EllesmereUI.PP.Scale(pad)
@@ -1185,7 +1191,10 @@ local function ComputeGrid(isBuff, cfg)
     -- Horizontal growth: a "line" is a row, so lineExtent -> width. Vertical growth
     -- modes: a "line" is a column, so lineExtent -> height -- see
     -- CornerFor/BuildContainerSpec for the matching growthH/growthV swap.
-    local lineExtent = cols * iconSize + (cols - 1) * layoutPad
+    local vertical = (cfg.growDirection == "UP" or cfg.growDirection == "DOWN" or cfg.growDirection == "CENTER_VERTICAL")
+    local primarySize = vertical and iconHeight or iconSize
+    local crossSize = vertical and iconSize or iconHeight
+    local lineExtent = cols * primarySize + (cols - 1) * layoutPad
     -- Wrap budget handed to the engine. At POSITIVE spacing the engine reserves a
     -- TRAILING elementSpacing after every element (not only between), so a full
     -- line needs cols * (icon + spacing) or the last icon of every row wraps --
@@ -1194,9 +1203,8 @@ local function ComputeGrid(isBuff, cfg)
     -- makes the final icon wrap EARLY, so the budget adds nothing there.
     -- lineExtent still sizes the bar's own frame either way, so the drag box
     -- measures the icons, not the phantom trailing gap.
-    local rowWidth = math.max(iconSize, lineExtent) + math.max(0, layoutPad)
-    local crossExtent = usedRows * iconSize + (usedRows - 1) * layoutRowGap
-    local vertical = (cfg.growDirection == "UP" or cfg.growDirection == "DOWN" or cfg.growDirection == "CENTER_VERTICAL")
+    local rowWidth = math.max(primarySize, lineExtent) + math.max(0, layoutPad)
+    local crossExtent = usedRows * crossSize + (usedRows - 1) * layoutRowGap
     local width = vertical and crossExtent or lineExtent
     local height = vertical and lineExtent or crossExtent
     return {
@@ -1645,8 +1653,10 @@ local function ApplyContainerAnchorAndGrowth(container, parent, cfg, grid)
     if directionChanged then container:Hide() end
 
     local size = EllesmereUI.PP.Scale(cfg.iconSize or 32)
+    local height = cfg.iconShape == "cropped"
+        and EllesmereUI.PP.Scale((cfg.iconSize or 32) * 0.70) or size
     container:ClearAllPoints()
-    container:SetSize(size, size)
+    container:SetSize(size, height)
     container:SetPoint(containerAnchor, parent, containerAnchor, 0, 0)
     AK.SetContainerAnchor(container, spec.layout.anchorPoint)
     AK.SetContainerAxis(container, vertical)
@@ -4036,11 +4046,13 @@ local function RenderPreviewIcons(box, icons, isBuff, cfg, fontPath, pool)
     -- spacing between normal icons stays tight and only an oversized icon's immediate
     -- neighbors get pushed out -- true flow-layout behavior rather than a uniform
     -- worst-case cell grid (which left too much gap around every normal icon).
-    local slotSize = {}
+    local slotSize, slotHeight = {}, {}
     for i = 1, total do
         local e = fxBySlot and fxBySlot[i]
         local sz = e and tonumber(e.size)
         slotSize[i] = (sz and sz > 0) and sz or iconSize
+        slotHeight[i] = cfg.iconShape == "cropped"
+            and math.floor(slotSize[i] * 0.70 + 0.5) or slotSize[i]
     end
 
     local rowWidth, rowHeight, colOffset, rowYOffset = {}, {}, {}, {}
@@ -4055,8 +4067,8 @@ local function RenderPreviewIcons(box, icons, isBuff, cfg, fontPath, pool)
         local enchShift = 0
         for k = 1, numEnch do
             colOffset[k] = enchShift
-            enchShift = enchShift + slotSize[k] + pad
-            rowHeight[0] = math.max(rowHeight[0] or 0, slotSize[k])
+            enchShift = enchShift + (vertical and slotHeight[k] or slotSize[k]) + pad
+            rowHeight[0] = math.max(rowHeight[0] or 0, vertical and slotSize[k] or slotHeight[k])
         end
 
         local runningX, runningY = {}, 0
@@ -4064,8 +4076,8 @@ local function RenderPreviewIcons(box, icons, isBuff, cfg, fontPath, pool)
         for i = numEnch + 1, total do
             local r = math.floor((i - numEnch - 1) / cols)
             colOffset[i] = runningX[r]
-            runningX[r] = runningX[r] + slotSize[i] + pad
-            rowHeight[r] = math.max(rowHeight[r] or 0, slotSize[i])
+            runningX[r] = runningX[r] + (vertical and slotHeight[i] or slotSize[i]) + pad
+            rowHeight[r] = math.max(rowHeight[r] or 0, vertical and slotSize[i] or slotHeight[i])
         end
         for r = 0, rows - 1 do
             rowWidth[r] = math.max(0, runningX[r] - pad) -- drop the trailing gap
@@ -4112,7 +4124,7 @@ local function RenderPreviewIcons(box, icons, isBuff, cfg, fontPath, pool)
             -- in CornerFor/BuildContainerSpec used by the real (non-preview) bars.
             local btnX, btnY
             if centeredVertical then
-                btnY = halfPrimary - withinLineStep - slotSize[i] / 2
+                btnY = halfPrimary - withinLineStep - slotHeight[i] / 2
                 btnX = -halfCross + acrossLinesStep + slotSize[i] / 2
             elseif vertical then
                 btnY = growUp and (-halfPrimary + withinLineStep) or (halfPrimary - withinLineStep)
@@ -4123,7 +4135,7 @@ local function RenderPreviewIcons(box, icons, isBuff, cfg, fontPath, pool)
             end
             btn:ClearAllPoints()
             btn:SetPoint(centeredVertical and "CENTER" or corner, box, "CENTER", btnX, btnY)
-            btn:SetSize(slotSize[i], slotSize[i])
+            btn:SetSize(slotSize[i], slotHeight[i])
 
             local slot = slots[i]
             local dispel
@@ -4163,7 +4175,34 @@ local function RenderPreviewIcons(box, icons, isBuff, cfg, fontPath, pool)
                     btn.icon:SetTexture(PreviewSpellIcon(spellID))
                 end
                 local z = style.iconZoom or 0.055
-                btn.icon:SetTexCoord(z, 1 - z, z, 1 - z)
+                if style.iconShape == "cropped" then
+                    btn.icon:SetTexCoord(z, 1 - z, z + 0.15, 1 - z - 0.15)
+                else
+                    btn.icon:SetTexCoord(z, 1 - z, z, 1 - z)
+                end
+            end
+
+            local previewShape = style.iconShape or "none"
+            local previewShaped = previewShape ~= "none" and previewShape ~= "cropped"
+            if previewShaped then
+                if not btn.shapeMask then
+                    btn.shapeMask = btn.border:CreateMaskTexture()
+                    btn.shapeMask:SetAllPoints(btn.border)
+                    btn.shapeBorder = btn.border:CreateTexture(nil, "OVERLAY", nil, 7)
+                    btn.shapeBorder:SetAllPoints(btn.border)
+                    btn.shapeBorder:Hide()
+                end
+                local media = "Interface\\AddOns\\EllesmereUI\\media\\portraits\\"
+                local maskPath = media .. previewShape .. "_mask.tga"
+                btn.shapeMask:SetTexture(maskPath)
+                btn.shapeMask:Show()
+                btn.icon:AddMaskTexture(btn.shapeMask)
+                if btn.cooldown.SetSwipeTexture then btn.cooldown:SetSwipeTexture(maskPath) end
+            elseif btn.shapeMask then
+                btn.icon:RemoveMaskTexture(btn.shapeMask)
+                if btn.cooldown.SetSwipeTexture then btn.cooldown:SetSwipeTexture("") end
+                btn.shapeMask:Hide()
+                btn.shapeBorder:Hide()
             end
 
             btn.border:SetAllPoints(btn.icon)
@@ -4183,13 +4222,20 @@ local function RenderPreviewIcons(box, icons, isBuff, cfg, fontPath, pool)
                 -- changes on an already-created host must go through PP.UpdateBorder
                 -- instead -- the same borderMade branch EllesmereUI_AuraKit.lua's own
                 -- ApplyStyleToRegions uses for the real bar's borders.
-                if btn.borderMade then
-                    PP.UpdateBorder(btn.border, size, br, bg, bb, ba)
-                elseif PP.CreateBorder then
-                    PP.CreateBorder(btn.border, br, bg, bb, ba, size, "OVERLAY", 7)
-                    btn.borderMade = true
+                if previewShaped then
+                    if PP.HideBorder then PP.HideBorder(btn.border) end
+                    btn.shapeBorder:SetTexture("Interface\\AddOns\\EllesmereUI\\media\\portraits\\" .. previewShape .. "_border.tga")
+                    btn.shapeBorder:SetVertexColor(br, bg, bb, ba)
+                    btn.shapeBorder:Show()
+                else
+                    if btn.borderMade then
+                        PP.UpdateBorder(btn.border, size, br, bg, bb, ba)
+                    elseif PP.CreateBorder then
+                        PP.CreateBorder(btn.border, br, bg, bb, ba, size, "OVERLAY", 7)
+                        btn.borderMade = true
+                    end
+                    if PP.ShowBorder then PP.ShowBorder(btn.border) else btn.border:Show() end
                 end
-                if PP.ShowBorder then PP.ShowBorder(btn.border) else btn.border:Show() end
             else
                 if PP and PP.HideBorder then PP.HideBorder(btn.border) else btn.border:Hide() end
             end
