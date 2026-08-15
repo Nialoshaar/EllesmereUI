@@ -714,34 +714,66 @@ initFrame:SetScript("OnEvent", function(self)
         y = y - h
 
         -- Bar Spacing | Icon Style
-        local iconRow, h = W:DualRow(parent, y,
+        local iconRow, iconPopupShow, iconPopupAnchor
+        iconRow, h = W:DualRow(parent, y,
             { type="slider", pixel=true, text="Spacing", min = -1, max = 10, step = 1,
             getValue = function() return Cfg("barSpacing") or 2 end,
             setValue = function(v) Set("barSpacing", v); Refresh() end },
             { type="dropdown", text="Icon Style",
               values = _G._EDM_IconStyleValues or {},
               order  = _G._EDM_IconStyleOrder or {},
-              getValue = function() return Cfg("iconStyle") or "spec" end,
-              setValue = function(v) Set("iconStyle", v); ApplyIconBrd(); Refresh(); EllesmereUI:RefreshPage() end })
+              getValue = function()
+                  local style = Cfg("iconStyle") or "spec"
+                  return style == "detailsSpec" and "customSpec" or style
+              end,
+              setValue = function(v)
+                  Set("iconStyle", v); ApplyIconBrd(); Refresh(); EllesmereUI:RefreshPage()
+                  if v == "customSpec" and iconPopupShow and iconPopupAnchor then
+                      iconPopupShow(iconPopupAnchor)
+                  end
+              end })
         y = y - h
 
-        -- Inline cog: Icon Zoom (right region, next to "Icon Style")
+        -- Inline cog: custom texture path + icon zoom (right region, next to "Icon Style")
         if not EllesmereUI._prebuilding then
             local rgn = iconRow._rightRegion
             local _, cogShow = EllesmereUI.BuildCogPopup({
-                title = "Icon Zoom",
+                title = "Icon Settings",
+                minWidth = 520,
                 rows = {
+                    { type = "input", label = "Texture Path (512x512, 8x8)", inputWidth = 300,
+                    disabled = function()
+                        local style = Cfg("iconStyle") or "spec"
+                        return style ~= "customSpec" and style ~= "detailsSpec"
+                    end,
+                    disabledTooltip = "Select Custom Spec Icons to set a texture path.", rawTooltip = true,
+                    tooltip = "Enter an Interface\\AddOns texture path. The sheet must be 512x512 with an 8x8 grid of 64x64 spec icons.",
+                    get = function() return Cfg("customSpecTexture") or "" end,
+                    set = function(v)
+                        v = type(v) == "string" and (v:match("^%s*(.-)%s*$") or "") or ""
+                        v = v:gsub("^[\"']+", ""):gsub("[\"']+$", "")
+                        v = v:match("^%s*(.-)%s*$") or ""
+                        v = v:gsub("/", "\\")
+                        local lower = v:lower()
+                        if lower:sub(-4) == ".tga" or lower:sub(-4) == ".blp" then
+                            v = v:sub(1, -5)
+                        end
+                        Set("customSpecTexture", v)
+                        if ns.RefreshCustomSpecTexture then ns.RefreshCustomSpecTexture() else Refresh() end
+                    end },
                     { type = "slider", label = "Zoom", min = 0, max = 0.20, step = 0.01,
                     get = function() return Cfg("classIconZoom") or 0.06 end,
                     set = function(v) Set("classIconZoom", v); Refresh() end },
                 },
             })
+            iconPopupShow = cogShow
+            iconPopupAnchor = rgn._control
             -- Icon Zoom only affects the Spec + Blizzard icon styles; the sprite
             -- presets are pre-framed art, so grey + block the cog for those (and
             -- for "None", where there is no icon).
             local function zoomOff()
                 local s = Cfg("iconStyle") or "spec"
-                return s ~= "spec" and s ~= "blizzard"
+                return s ~= "spec" and s ~= "customSpec" and s ~= "detailsSpec" and s ~= "blizzard"
             end
             local cogBtn = CreateFrame("Button", nil, rgn)
             cogBtn:SetSize(26, 26)
