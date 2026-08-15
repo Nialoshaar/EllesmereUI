@@ -1784,6 +1784,7 @@ local defaults = {
             countXOffset = 0,
             countYOffset = 0,
             iconSpacing = 14,
+            iconShape = "none",
             opacity = 1.0,
             frameStrata = "MEDIUM",
             cursorAttach = false,
@@ -1927,6 +1928,102 @@ local iconAnchor
 local iconPool = {}     -- all created icon buttons
 local activeIcons = {}  -- currently visible icons
 
+local ICON_SHAPES = {
+    circle={ mask="Interface\\AddOns\\EllesmereUI\\media\\portraits\\circle_mask.tga", border="Interface\\AddOns\\EllesmereUI\\media\\portraits\\circle_border.tga", inset=17 },
+    csquare={ mask="Interface\\AddOns\\EllesmereUI\\media\\portraits\\csquare_mask.tga", border="Interface\\AddOns\\EllesmereUI\\media\\portraits\\csquare_border.tga", inset=17 },
+    diamond={ mask="Interface\\AddOns\\EllesmereUI\\media\\portraits\\diamond_mask.tga", border="Interface\\AddOns\\EllesmereUI\\media\\portraits\\diamond_border.tga", inset=14 },
+    hexagon={ mask="Interface\\AddOns\\EllesmereUI\\media\\portraits\\hexagon_mask.tga", border="Interface\\AddOns\\EllesmereUI\\media\\portraits\\hexagon_border.tga", inset=17 },
+    portrait={ mask="Interface\\AddOns\\EllesmereUI\\media\\portraits\\portrait_mask.tga", border="Interface\\AddOns\\EllesmereUI\\media\\portraits\\portrait_border.tga", inset=17 },
+    shield={ mask="Interface\\AddOns\\EllesmereUI\\media\\portraits\\shield_mask.tga", border="Interface\\AddOns\\EllesmereUI\\media\\portraits\\shield_border.tga", inset=13 },
+    square={ mask="Interface\\AddOns\\EllesmereUI\\media\\portraits\\square_mask.tga", border="Interface\\AddOns\\EllesmereUI\\media\\portraits\\square_border.tga", inset=17 },
+}
+
+local function ApplyIconShape(f, selectedShape)
+    if not (f and f._icon) then return end
+    local p = db and db.profile.display
+    local shape = selectedShape or (p and p.iconShape) or "none"
+    local shapeData = ICON_SHAPES[shape]
+    local maskPath = shapeData and shapeData.mask
+    local PP = EllesmereUI and EllesmereUI.PP
+    if not maskPath then
+        if f._icon._shapeMask then
+            pcall(f._icon.RemoveMaskTexture, f._icon, f._icon._shapeMask)
+            f._icon._shapeMask:Hide()
+            f._icon._shapeMask = nil
+        end
+        if f._shapeBorder then f._shapeBorder:Hide() end
+        f._icon:ClearAllPoints(); f._icon:SetAllPoints(f)
+        if shape == "cropped" then
+            local zoom = 0.04
+            f._icon:SetTexCoord(zoom, 1 - zoom, zoom + 0.15, 1 - zoom - 0.15)
+            if PP then PP.HideBorder(f) end
+            if not f._croppedBorder then
+                f._croppedBorder = {}
+                for i = 1, 4 do
+                    local edge = f:CreateTexture(nil, "OVERLAY", nil, -8)
+                    edge:SetColorTexture(0, 0, 0, 1)
+                    if PP and PP.DisablePixelSnap then PP.DisablePixelSnap(edge) end
+                    f._croppedBorder[i] = edge
+                end
+                local top, bottom, left, right = f._croppedBorder[1], f._croppedBorder[2], f._croppedBorder[3], f._croppedBorder[4]
+                top:SetPoint("TOPLEFT"); top:SetPoint("TOPRIGHT"); top:SetHeight(1)
+                bottom:SetPoint("BOTTOMLEFT"); bottom:SetPoint("BOTTOMRIGHT"); bottom:SetHeight(1)
+                left:SetPoint("TOPLEFT"); left:SetPoint("BOTTOMLEFT"); left:SetWidth(1)
+                right:SetPoint("TOPRIGHT"); right:SetPoint("BOTTOMRIGHT"); right:SetWidth(1)
+            end
+            for i = 1, 4 do f._croppedBorder[i]:Show() end
+        else
+            f._icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+            if f._croppedBorder then
+                for i = 1, 4 do f._croppedBorder[i]:Hide() end
+            end
+            if PP then PP.ShowBorder(f) end
+        end
+        return
+    end
+    if not f._icon._shapeMask then
+        f._icon._shapeMask = f:CreateMaskTexture()
+        f._icon:AddMaskTexture(f._icon._shapeMask)
+    end
+    local mask = f._icon._shapeMask
+    mask:SetTexture(maskPath, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+    mask:ClearAllPoints()
+    if PP then
+        PP.Point(mask, "TOPLEFT", f, "TOPLEFT", 1, -1)
+        PP.Point(mask, "BOTTOMRIGHT", f, "BOTTOMRIGHT", -1, 1)
+    else
+        mask:SetPoint("TOPLEFT", f, "TOPLEFT", 1, -1)
+        mask:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -1, 1)
+    end
+    mask:Show()
+    local inset = shapeData.inset or 17
+    local visible = (128 - 2 * inset) / 128
+    local expand = ((1 / visible) - 1) * 0.5
+    local iconExpand = 7 + ((shape == "csquare" or shape == "hexagon" or shape == "square") and 4 or 2)
+    local halfExpand = iconExpand / 2
+    f._icon:ClearAllPoints()
+    f._icon:SetPoint("TOPLEFT", f, "TOPLEFT", -halfExpand, halfExpand)
+    f._icon:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", halfExpand, -halfExpand)
+    f._icon:SetTexCoord(-expand, 1 + expand, -expand, 1 + expand)
+    if PP then PP.HideBorder(f) end
+    if f._croppedBorder then
+        for i = 1, 4 do f._croppedBorder[i]:Hide() end
+    end
+    if not f._shapeBorder then
+        -- Keep the ring above the icon artwork but below count text and
+        -- quality badges, which also use the OVERLAY layer.
+        f._shapeBorder = f:CreateTexture(nil, "OVERLAY", nil, -8)
+        f._shapeBorder:SetAllPoints(f)
+        if f._shapeBorder.SetSnapToPixelGrid then
+            f._shapeBorder:SetSnapToPixelGrid(false); f._shapeBorder:SetTexelSnappingBias(0)
+        end
+    end
+    f._shapeBorder:SetTexture(shapeData.border)
+    f._shapeBorder:SetVertexColor(0, 0, 0, 1)
+    f._shapeBorder:Show()
+end
+_G._EABR_ApplyIconShape = ApplyIconShape
+
 -- Talent icon state moved to EllesmereUIABR_TalentReminders.lua
 
 -------------------------------------------------------------------------------
@@ -1978,6 +2075,7 @@ local function GetOrCreateCombatIcon(index)
     EABR.AttachIconHover(f)
     EABR.AttachIconTooltip(f)
     EABR.AttachCombatClickHint(f)
+    ApplyIconShape(f)
     combatIconPool[index] = f
     return f
 end
@@ -2002,6 +2100,7 @@ local function ShowCombatIcon(iconIdx, m)
     local f = GetOrCreateCombatIcon(iconIdx)
     local spellID = m.spellID or (m.data and m.data.castSpell)
     f._icon:SetTexture(m.texture or (spellID and Tex(spellID)) or 134400)
+    ApplyIconShape(f)
     local p = db and db.profile.display
     if p and p.showText and not m.isEating then
         local tc = p.textColor or DEFAULT_TEXT_COLOR
@@ -2046,9 +2145,10 @@ local function LayoutCombatIcons()
     local spacing = p.iconSpacing or 8
     local baseScale = p.scale or 1.0
     local sz = floor(ICON_SIZE * baseScale + 0.5)
+    local iconH = (p.iconShape == "cropped") and floor(sz * 0.70 + 0.5) or sz
     local xOff = reserveSlot and (sz + spacing) or 0
     for i, f in ipairs(combatActiveIcons) do
-        f:SetSize(sz, sz)
+        f:SetSize(sz, iconH)
         f:SetAlpha(p.opacity or 1.0)
         EABR.SizeIconQuality(f, sz)
         EABR.SizeIconBagCount(f, sz)
@@ -2083,6 +2183,7 @@ local function GetOrCreateCursorIcon(index)
     EABR.AttachIconHover(f)
     EABR.AttachIconTooltip(f)
     EABR.AttachCombatClickHint(f)
+    ApplyIconShape(f)
     cursorIconPool[index] = f
     return f
 end
@@ -2104,6 +2205,7 @@ local function ShowCursorIcon(iconIdx, m)
     local f = GetOrCreateCursorIcon(iconIdx)
     local spellID = m.spellID or (m.data and m.data.castSpell)
     f._icon:SetTexture(m.texture or (spellID and Tex(spellID)) or 134400)
+    ApplyIconShape(f)
     local p = db and db.profile.display
     if p and p.showText and not m.isEating then
         local tc = p.textColor or DEFAULT_TEXT_COLOR
@@ -2142,10 +2244,11 @@ local function LayoutCursorIcons()
     local spacing = p.iconSpacing or 8
     local baseScale = p.scale or 1.0
     local sz = floor(ICON_SIZE * baseScale + 0.5)
+    local iconH = (p.iconShape == "cropped") and floor(sz * 0.70 + 0.5) or sz
     local totalW = (count * sz) + ((count-1) * spacing)
     local startX = -(totalW/2) + (sz/2)
     for i, f in ipairs(cursorActiveIcons) do
-        f:SetSize(sz, sz)
+        f:SetSize(sz, iconH)
         f:SetAlpha(p.opacity or 1.0)
         EABR.SizeIconQuality(f, sz)
         EABR.SizeIconBagCount(f, sz)
@@ -2168,7 +2271,8 @@ function EABR.LayoutProviderCastHome()
     local p = db and db.profile and db.profile.display
     local baseScale = (p and p.scale) or 1.0
     local sz = floor(ICON_SIZE * baseScale + 0.5)
-    btn:SetSize(sz, sz)
+    local iconH = (p and p.iconShape == "cropped") and floor(sz * 0.70 + 0.5) or sz
+    btn:SetSize(sz, iconH)
     btn:ClearAllPoints()
     btn:SetPoint("TOPLEFT", iconAnchor, "TOPLEFT", 0, 0)
     EABR.SizeIconQuality(btn, sz)
@@ -2227,6 +2331,7 @@ function EABR.EnsureProviderCastButton()
     EABR.CreateIconBagCountOverlay(btn)
     EABR.AttachIconHover(btn)
     EABR.AttachIconTooltip(btn)
+    ApplyIconShape(btn)
     btn:Show()
     EABR._providerCastBtn = btn
     EABR._providerCastVisible = false
@@ -2263,6 +2368,7 @@ function EABR.SyncProviderCastSpell()
         btn:SetAttribute("macrotext", nil)
         btn:SetAttribute("unit", nil) -- raid buffs are self-cast, no unit needed
         btn._icon:SetTexture(Tex(spellID) or 134400)
+        ApplyIconShape(btn)
         btn._tooltipSpell = spellID
         btn._tooltipItem = nil
     end
@@ -2288,6 +2394,7 @@ function EABR.SetProviderCastCombatVisible(visible, m)
     btn._dismissKey = m.dismissKey or nil
     local spellID = m.spellID or EABR._providerCastSpell
     btn._icon:SetTexture(m.texture or Tex(spellID) or 134400)
+    ApplyIconShape(btn)
     EABR.ApplyIconTooltipData(btn, m)
     local p = db and db.profile and db.profile.display
     if p and p.showText then
@@ -2708,6 +2815,7 @@ local function GetOrCreateIcon(index)
     EABR.CreateIconBagCountOverlay(btn)
     EABR.AttachIconHover(btn)
     EABR.AttachIconTooltip(btn)
+    ApplyIconShape(btn)
 
     iconPool[index] = btn
     return btn
@@ -2867,6 +2975,7 @@ local function LayoutIcons()
     local spacing = p.iconSpacing or 8
     local baseScale = p.scale or 1.0
     local sz = floor(ICON_SIZE * baseScale + 0.5)
+    local iconH = (p.iconShape == "cropped") and floor(sz * 0.70 + 0.5) or sz
     local totalW = (count * sz) + ((count-1) * spacing)
     local textH = 0
     if p.showText then textH = (p.textSize or 11) + abs(p.textYOffset or -2) end
@@ -2874,7 +2983,7 @@ local function LayoutIcons()
     -- icons are added/removed, and resizing the anchor (unlock overlay) never shifts them; +textH/2 keeps the row at the icon+text box's top, matching the combat pool.
     local startX = -(totalW / 2) + (sz / 2)
     for i, btn in ipairs(allIcons) do
-        btn:SetSize(sz, sz)
+        btn:SetSize(sz, iconH)
         btn:SetAlpha(p.opacity or 1.0)
         EABR.SizeIconQuality(btn, sz)
         EABR.SizeIconBagCount(btn, sz)
@@ -2882,13 +2991,14 @@ local function LayoutIcons()
         btn:SetPoint("CENTER", iconAnchor, "CENTER", startX + (i-1)*(sz+spacing), textH/2)
     end
     -- Size the anchor to the row so the unlock mode overlay covers it.
-    ResizeAnchorCentered(totalW, sz + textH)
+    ResizeAnchorCentered(totalW, iconH + textH)
 end
 
 local function ShowIcon(iconIdx, m)
     local btn = GetOrCreateIcon(iconIdx)
     btn._dismissKey = m.dismissKey or nil
     ApplySetup(btn, m)
+    ApplyIconShape(btn)
     local p = db.profile.display
     local glowType = p.glowType or 0
     local gr, gg, gb = ResolveGlowTint(p)
@@ -3960,6 +4070,7 @@ local function RegisterUnlockElements()
                 local p = db.profile.display
                 local baseScale = p.scale or 1.0
                 local sz = floor(ICON_SIZE * baseScale + 0.5)
+                local iconH = (p.iconShape == "cropped") and floor(sz * 0.70 + 0.5) or sz
                 local spacing = p.iconSpacing or 8
                 -- Fits all active icons (same set LayoutIcons places: reminders + merged beacon icons unless cursor-routed); falls back to a 2-wide grabbable box when empty so the mover overlay stays draggable.
                 local count = #activeIcons
@@ -3975,7 +4086,7 @@ local function RegisterUnlockElements()
                 if p.showText then
                     textH = (p.textSize or 11) + abs(p.textYOffset or -2)
                 end
-                local h = sz + textH
+                local h = iconH + textH
                 -- Resizes the anchor for the overlay; iconAnchor is CENTER-anchored and icons hang off its CENTER, so this never moves them.
                 if iconAnchor then ResizeAnchorCentered(w, h) end
                 return w, h
@@ -4086,6 +4197,7 @@ local function BeaconMakeIcon(spellID)
     SetABRFont(text, ResolveFontPath(), 11)
     text:SetTextColor(1, 1, 1, 1)
     f._text = text
+    ApplyIconShape(f)
     return f
 end
 
@@ -4107,15 +4219,16 @@ local function BeaconLayoutIcons()
             local spacing = p.iconSpacing or 8
             local baseScale = p.scale or 1.0
             local sz = floor(ICON_SIZE * baseScale + 0.5)
+            local iconH = (p.iconShape == "cropped") and floor(sz * 0.70 + 0.5) or sz
             local totalW = (#visIcons * sz) + ((#visIcons - 1) * spacing)
             local startX = -(totalW / 2) + (sz / 2)
             for i, f in ipairs(visIcons) do
-                f:SetSize(sz, sz)
+                f:SetSize(sz, iconH)
                 f:SetAlpha(p.opacity or 1.0)
                 f:SetFrameStrata("TOOLTIP")
                 f:SetFrameLevel(9980)
                 f:ClearAllPoints()
-                f:SetPoint("CENTER", cursorAnchor, "CENTER", startX + (i - 1) * (sz + spacing), -(sz + 8))
+                f:SetPoint("CENTER", cursorAnchor, "CENTER", startX + (i - 1) * (sz + spacing), -(iconH + 8))
             end
             cursorAnchor:Show()
             EllesmereUI.SetElementVisibility(cursorAnchor, true)
@@ -4435,6 +4548,14 @@ function EABR:OnEnable()
     _G._EABR_WEAPON_ENCHANT_ITEMS = WEAPON_ENCHANT_ITEMS
     _G._EABR_Tex = Tex
     _G._EABR_ICON_SIZE = ICON_SIZE
+    _G._EABR_ApplyIconShapes = function(shape)
+        for _, f in pairs(iconPool) do ApplyIconShape(f, shape) end
+        for _, f in pairs(combatIconPool) do ApplyIconShape(f, shape) end
+        for _, f in pairs(cursorIconPool) do ApplyIconShape(f, shape) end
+        if EABR._providerCastBtn then ApplyIconShape(EABR._providerCastBtn, shape) end
+        for _, f in pairs(_B.icons) do ApplyIconShape(f, shape) end
+        if _G._EABR_TR_ApplyIconShapes then _G._EABR_TR_ApplyIconShapes(shape) end
+    end
     _G._EABR_FLASK_ITEMS = FLASK_ITEMS
     _G._EABR_FOOD_ITEMS = FOOD_ITEMS
     _G._EABR_WEAPON_ENCHANT_CHOICES = WEAPON_ENCHANT_CHOICES
