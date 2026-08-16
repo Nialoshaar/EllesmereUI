@@ -251,7 +251,8 @@ local _cleanSidByCDID = ns._cdmCleanSidByCDID
 -- wins): 1. frame:GetSpellID() -- most authoritative, the active variant
 -- under transforms (e.g. Glacial Spike from Frostbolt), what the user can
 -- actually cast, not the static info; 2. info.overrideSpellID; 3. info.spellID;
--- 4. info.linkedSpellIDs[*]; 5. base of (1) as fallback.
+-- 4. base of (1) as fallback. (linkedSpellIDs is deliberately NOT a rung --
+-- see the comment at the info branch.)
 local function GetCanonicalSpellIDForFrame(frame)
     if not frame then return nil end
 
@@ -294,9 +295,40 @@ local function GetCanonicalSpellIDForFrame(frame)
     if info then
         if _IsUsableSID(info.overrideSpellID) then return info.overrideSpellID end
         if _IsUsableSID(info.spellID) then return info.spellID end
-        if info.linkedSpellIDs then
-            for _, lid in ipairs(info.linkedSpellIDs) do
-                if _IsUsableSID(lid) then return lid end
+        -- Deliberately NOT falling back to linkedSpellIDs[1] here: the frame's
+        -- own info is the MERGED provider table (Blizzard caches
+        -- GetCooldownInfoForID at SetCooldownID), where linked lists are
+        -- group-shared and categories are folded to DISPLAY values -- it can
+        -- tell neither frames nor native equip rows apart. The one legitimate
+        -- linked-identity source is the RAW API block below.
+    end
+
+    -- Native tracked trinket buff rows (RAW equipSlot + category
+    -- EquipSlotTracked): these carry no spellID at all at rest, and their RAW
+    -- linked list is Blizzard's own designed identity channel for the row's
+    -- tracked buff -- field-probed 2026-08-16 as per-row UNIQUE (buffSlot 1
+    -- and 2 of one trinket carry different single-entry lists). The RAW
+    -- GetCooldownViewerCooldownInfo table is the proven source: the frame's
+    -- merged copy folds category to the display value (TrackedBuff) and
+    -- cannot pass this gate. Resolved sid is cached by cooldownID like the
+    -- clean GetSpellID path, so secret windows (proc active in combat) keep
+    -- resolving from the memo. Reached only after every other rung failed
+    -- (identity-less shells), so the extra C call is shell-only.
+    if type(cdid) == "number" and C_CooldownViewer
+       and C_CooldownViewer.GetCooldownViewerCooldownInfo then
+        local raw = C_CooldownViewer.GetCooldownViewerCooldownInfo(cdid)
+        local eqTracked = Enum and Enum.CooldownViewerCategory
+            and Enum.CooldownViewerCategory.EquipSlotTracked or 8
+        if raw and raw.equipSlot and not (issecretvalue and issecretvalue(raw.equipSlot))
+           and raw.category and not (issecretvalue and issecretvalue(raw.category))
+           and raw.category == eqTracked then
+            local linked = raw.linkedSpellIDs
+            if type(linked) == "table" then
+                local lid = linked[1]
+                if _IsUsableSID(lid) then
+                    _cleanSidByCDID[cdid] = lid
+                    return lid
+                end
             end
         end
     end
@@ -1078,6 +1110,7 @@ function ns.CollectDefaultBuffTrackEntries()
         end
     end
 
+    if ns.PruneEquipmentBuffRows then ns.PruneEquipmentBuffRows() end
     local out = {}
     local seen = {}
     local entries = ns.EnumerateCDMViewerSpells and ns.EnumerateCDMViewerSpells(true) or {}
@@ -1086,7 +1119,21 @@ function ns.CollectDefaultBuffTrackEntries()
         -- slots can share a spellID but are distinct cooldownIDs; keying on
         -- sid would re-merge what EnumerateCDMViewerSpells keeps separate.
         local key = BuffDisplayStableKey(e.sid, e.cdID)
-        if e.sid and not ResolveVariantValue(diverted, e.sid)
+        -- Native equipment ON-USE rows (equipSlot + category EquipSlotEssential)
+        -- are preset-lane-only: never surface them as default-bar buff entries.
+        -- Tracked trinket PROC BUFF rows (equipSlot + category EquipSlotTracked)
+        -- are first-class buff citizens (user directive 2026-08-16): Blizzard's
+        -- CDM lets users track a trinket's buff like any spell, and our buff
+        -- bars must mirror that. Field-probed 2026-08-16: buffSlot=1 rides
+        -- BOTH categories (and plain cat-2 rows), so CATEGORY is the only
+        -- reliable discriminator.
+        local eqInfo = e.cdID and C_CooldownViewer
+            and C_CooldownViewer.GetCooldownViewerCooldownInfo
+            and C_CooldownViewer.GetCooldownViewerCooldownInfo(e.cdID)
+        local eqTracked = Enum and Enum.CooldownViewerCategory
+            and Enum.CooldownViewerCategory.EquipSlotTracked or 8
+        if e.sid and not (eqInfo and eqInfo.equipSlot and eqInfo.category ~= eqTracked)
+           and not ResolveVariantValue(diverted, e.sid)
            and not (e.cdID and divertedCd[e.cdID])
            and key and not seen[key] then
             seen[key] = true
@@ -1982,3 +2029,96 @@ function ns.RemoveCDMBar(key)
     return false
 end
 
+
+-- Native equipment rows that the dual-lane era auto-added into buff bar
+-- stores (12.1 EquipSlot* tracked-buff mirroring): pruned automatically.
+-- POSITIVE identification only -- a stored sid drops solely when a live
+-- viewer entry with that sid carries equipSlot; absence keeps the row
+-- (zero-values law: an unequipped item resolves nothing and must not be
+-- convicted). Runs OOC-cheap from the buff entry collector, so every
+-- options open and reconcile pass self-heals the store.
+function ns.PruneEquipmentBuffRows()
+    local equip, any = {}, false
+    -- Tracked trinket PROC BUFF rows (equipSlot + category EquipSlotTracked)
+    -- are LEGITIMATE buff-bar content (user directive 2026-08-16) -- they must
+    -- never be convicted, by EITHER source below. Positive identification
+    -- only, same zero-values posture as the conviction sets: a live
+    -- EquipSlotTracked viewer entry vouches for its sid (covers on-use
+    -- trinkets whose use-spell IS the tracked proc aura -- source 2 would
+    -- otherwise convict the legitimate row whenever the trinket is worn).
+    -- CATEGORY is the discriminator, not buffSlot (field-probed 2026-08-16:
+    -- buffSlot=1 rides the on-use cat-7 rows too).
+    local exempt = {}
+    local eqTracked = Enum and Enum.CooldownViewerCategory
+        and Enum.CooldownViewerCategory.EquipSlotTracked or 8
+    -- Viewer source: trusted only with CDM data loaded and a populated
+    -- enumeration. These guards gate THIS source alone -- the equipped-item
+    -- source below needs neither and must run regardless.
+    local entries = ns._cdmDataLoaded and ns.EnumerateCDMViewerSpells
+        and ns.EnumerateCDMViewerSpells(true) or nil
+    local gci = C_CooldownViewer and C_CooldownViewer.GetCooldownViewerCooldownInfo
+    if entries and entries[1] and gci then
+        for _, e in ipairs(entries) do
+            if e.sid and e.cdID then
+                local info = gci(e.cdID)
+                if info and info.equipSlot then
+                    if info.category == eqTracked then
+                        StoreVariantValue(exempt, e.sid, true, false)
+                    else
+                        StoreVariantValue(equip, e.sid, true, false)
+                        any = true
+                    end
+                end
+            end
+        end
+    end
+    -- Second proof source, viewer-independent: an EQUIPPED item vouches for
+    -- its own use-spell (GetItemSpell). Covers rows whose native viewer entry
+    -- is gone (untracked in Blizzard's CDM) while the item is still worn.
+    local gis = (C_Item and C_Item.GetItemSpell) or GetItemSpell
+    if gis and GetInventoryItemID then
+        for slot = 1, 19 do
+            local itemID = GetInventoryItemID("player", slot)
+            if itemID then
+                local _, useSid = gis(itemID)
+                if type(useSid) == "number" and useSid > 0 then
+                    StoreVariantValue(equip, useSid, true, false)
+                    any = true
+                end
+            end
+        end
+    end
+    if not any then return end
+    local p = ECME and ECME.db and ECME.db.profile
+    local bars = p and p.cdmBars and p.cdmBars.bars
+    if not bars then return end
+    for _, bd in ipairs(bars) do
+        -- Every bar type: dual-lane-era auto-adds landed item use-spells on
+        -- cooldowns/utility bars too, not just buff bars. Only positive ids
+        -- matching the proven equipment set drop -- markers and real spells
+        -- cannot match.
+        if bd.key ~= (ns.GHOST_CD_BAR_KEY or "__ghost_cd") then
+            local sd = ns.GetBarSpellData(bd.key)
+            local list = sd and sd.assignedSpells
+            if list then
+                local w = 1
+                for i = 1, #list do
+                    local sid = list[i]
+                    -- User-typed custom spell ids are exempt: a deliberate
+                    -- entry that happens to equal a worn item's use-spell
+                    -- (tinkers, embellishments) must never be convicted.
+                    -- Tracked proc-buff sids (buffSlot-vouched above) are
+                    -- exempt from both conviction sources.
+                    if not (type(sid) == "number" and sid > 0
+                        and ResolveVariantValue(equip, sid)
+                        and not ResolveVariantValue(exempt, sid)
+                        and not (sd.customSpellIDs and sd.customSpellIDs[sid])) then
+                        list[w] = sid
+                        w = w + 1
+                    end
+                end
+                for i = #list, w, -1 do list[i] = nil end
+            end
+        end
+    end
+end

@@ -176,48 +176,6 @@ end
 -- re-queue when the restriction lifts; see the lift watcher below the restyle worker.
 local deferredRestyles = {}
 
-local AK_SHAPE_MEDIA = "Interface\\AddOns\\EllesmereUI\\media\\portraits\\"
-local function ApplyIconShape(d, style)
-    local shape = style.iconShape or "none"
-    local shaped = shape ~= "none" and shape ~= "cropped"
-
-    if shaped and not d.shapeMask then
-        d.shapeMask = d.borderHost:CreateMaskTexture()
-        d.shapeMask:SetAllPoints(d.borderHost)
-        d.shapeBorder = d.borderHost:CreateTexture(nil, "OVERLAY", nil, 7)
-        d.shapeBorder:SetAllPoints(d.borderHost)
-        d.shapeDispel = d.dispelHolder:CreateTexture(nil, "OVERLAY")
-        d.shapeDispel:SetAllPoints(d.dispelHolder)
-        d.shapeDispel:Hide()
-    end
-
-    if d.shapeMask then
-        if shaped then
-            local maskPath = AK_SHAPE_MEDIA .. shape .. "_mask.tga"
-            local borderPath = AK_SHAPE_MEDIA .. shape .. "_border.tga"
-            d.shapeMask:SetTexture(maskPath)
-            d.shapeMask:Show()
-            d.icon:AddMaskTexture(d.shapeMask)
-            if d.cooldown.SetSwipeTexture then d.cooldown:SetSwipeTexture(maskPath) end
-            d.shapeBorder:SetTexture(borderPath)
-            d.shapeBorder:SetVertexColor(style.border and (style.border[1] or 0) or 0,
-                style.border and (style.border[2] or 0) or 0,
-                style.border and (style.border[3] or 0) or 0,
-                style.border and (style.border[4] or 1) or 1)
-            d.shapeBorder:SetShown(style.border ~= nil)
-            d.shapeDispel:SetTexture(borderPath)
-        else
-            d.icon:RemoveMaskTexture(d.shapeMask)
-            if d.cooldown.SetSwipeTexture then d.cooldown:SetSwipeTexture("") end
-            d.shapeMask:Hide()
-            d.shapeBorder:Hide()
-            d.shapeDispel:Hide()
-        end
-    end
-
-    return shaped
-end
-
 local function ApplyStyleToRegions(button, style)
     local d = bd[button]
     if not d then return end
@@ -236,6 +194,19 @@ local function ApplyStyleToRegions(button, style)
         d.appliedW, d.appliedH = w, h
     end
 
+    -- One mask shared by the icon, cooldown swipe, and base/dispel border art.
+    local shapeActive = style.iconShape and style.iconShape ~= "none" and style.shapeMaskPath
+    if shapeActive then
+        if not d.shapeMask then
+            d.shapeMask = button:CreateMaskTexture()
+        end
+        d.shapeMask:SetTexture(style.shapeMaskPath, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+        d.shapeMask:SetAllPoints(button)
+        d.shapeMask:Show()
+    elseif d.shapeMask then
+        d.shapeMask:Hide()
+    end
+
     if d.icon then
         if style.texCoord then
             d.icon:SetTexCoord(style.texCoord[1], style.texCoord[2], style.texCoord[3], style.texCoord[4])
@@ -249,11 +220,49 @@ local function ApplyStyleToRegions(button, style)
         else
             d.icon:SetTexCoord(0, 1, 0, 1)
         end
-    end
 
-    local iconShaped = false
-    if style.iconShape or d.shapeMask then
-        iconShaped = ApplyIconShape(d, style)
+        if shapeActive then
+            -- Grows the icon past button's rect to fill the mask's inset opening
+            -- edge-to-edge. SetPoint against button is change-guarded/deferred like
+            -- d.borderHost's anchor below; AddMaskTexture rides the same guard so a
+            -- denial rolls back mask + geometry together.
+            local insetPx = style.shapeInsetPx or 17
+            local visRatio = (128 - 2 * insetPx) / 128
+            local fullExpand = ((1 / visRatio) - 1) * 0.5
+            -- Coupled to Icon Zoom, mirroring Action Bars' shape-fill expansion: below
+            -- the zoom default the forced mask-fill magnification shrinks too (floor 0
+            -- -- button's own rect, no oversizing, at zoom 0), above it it grows past
+            -- fullExpand. 0.055 is PAB's own iconZoom default (BuildStyle), so a bar
+            -- that never touches the zoom slider renders identically to before.
+            local zoom = style.iconZoom or 0.055
+            local expand = math.max(fullExpand * (zoom / 0.055), 0)
+            local iconShapeKey = style.iconShape .. "|" .. w .. "|" .. h .. "|" .. zoom
+            if d.akIconShapeKey ~= iconShapeKey then
+                local ok = pcall(function()
+                    pcall(d.icon.RemoveMaskTexture, d.icon, d.shapeMask)
+                    d.icon:AddMaskTexture(d.shapeMask)
+                    d.icon:ClearAllPoints()
+                    d.icon:SetPoint("TOPLEFT", button, "TOPLEFT", -expand * w, expand * h)
+                    d.icon:SetPoint("BOTTOMRIGHT", button, "BOTTOMRIGHT", expand * w, -expand * h)
+                end)
+                if ok then
+                    d.akIconShapeKey = iconShapeKey
+                elseif d.styleKey and AK.AurasRestricted() then
+                    deferredRestyles[d.styleKey] = true
+                end
+            end
+        elseif d.akIconShapeKey then
+            if d.shapeMask then pcall(d.icon.RemoveMaskTexture, d.icon, d.shapeMask) end
+            local ok = pcall(function()
+                d.icon:ClearAllPoints()
+                d.icon:SetAllPoints(button)
+            end)
+            if ok then
+                d.akIconShapeKey = nil
+            elseif d.styleKey and AK.AurasRestricted() then
+                deferredRestyles[d.styleKey] = true
+            end
+        end
     end
 
     if d.cooldown then
@@ -277,6 +286,23 @@ local function ApplyStyleToRegions(button, style)
         if d.akHideSwipe ~= hideSwipe then
             d.akHideSwipe = hideSwipe
             if d.cooldown.SetDrawSwipe then d.cooldown:SetDrawSwipe(not hideSwipe) end
+        end
+
+        -- Clip the swipe to the shape and recolor its silhouette to match, instead
+        -- of a plain square/circle radial. Both calls are on our own d.cooldown
+        -- region, not the button -- no guard needed.
+        local cdMaskKey = shapeActive and style.iconShape or nil
+        if d.akCdMaskKey ~= cdMaskKey then
+            if cdMaskKey then
+                pcall(d.cooldown.AddMaskTexture, d.cooldown, d.shapeMask)
+                if d.cooldown.SetSwipeTexture then
+                    pcall(d.cooldown.SetSwipeTexture, d.cooldown, style.shapeMaskPath)
+                end
+            else
+                if d.shapeMask then pcall(d.cooldown.RemoveMaskTexture, d.cooldown, d.shapeMask) end
+                if d.cooldown.SetSwipeTexture then pcall(d.cooldown.SetSwipeTexture, d.cooldown, "") end
+            end
+            d.akCdMaskKey = cdMaskKey
         end
     end
 
@@ -321,48 +347,50 @@ local function ApplyStyleToRegions(button, style)
         local PP = EllesmereUI.PP
         local b = style.border
         if PP and b then
-            if b.texture and EllesmereUI.ApplyBorderStyle then
-                -- Aura buttons can expose restricted geometry. Give the owned
-                -- border host an explicit public size (change-guarded because
-                -- anchoring to the aura button is denied while restricted).
-                local borderRect = (style.width or 18) .. "|" .. (style.height or style.width or 18)
-                if d.akBorderRect ~= borderRect then
-                    d.borderHost:ClearAllPoints()
-                    d.borderHost:SetPoint("CENTER", button, "CENTER")
-                    d.borderHost:SetSize(style.width or 18, style.height or style.width or 18)
-                    d.akBorderRect = borderRect
-                end
-                if b.behindUnitFrame then
-                    d.borderHost:SetFrameLevel(math.max(0, (b.unitFrameLevel or 1) - 1))
-                else
-                    d.borderHost:SetFrameLevel(b.behind
-                        and math.max(0, button:GetFrameLevel() - 1)
-                        or (d.cooldown:GetFrameLevel() + 1))
-                end
-                -- addonKey/sizeKey pick the per-module texture offset defaults a
-                -- style leaves nil; CDM passes its own so a textured border sits
-                -- where the module's other icons put theirs.
-                EllesmereUI.ApplySecretSafeBorderStyle(d.borderHost, d, b.size or 1,
-                    b[1] or 0, b[2] or 0, b[3] or 0, b[4] or 1,
-                    b.texture or "solid", b.offsetX, b.offsetY, b.shiftX, b.shiftY,
-                    b.addonKey or "unitframes", b.sizeKey or b.size or 1)
-                d.borderMade = true
-            elseif d.borderMade then
-                PP.UpdateBorder(d.borderHost, b.size or 1, b[1] or 0, b[2] or 0, b[3] or 0, b[4] or 1)
+            if shapeActive and style.shapeBorderPath then
+                if d.borderMade then PP.HideBorder(d.borderHost) end
+                PP:ApplyMaskedShapeBorder(d.borderHost, d.shapeMask, style.shapeBorderPath,
+                    style.shapeBorderSize or b.size or 1, b[1] or 0, b[2] or 0, b[3] or 0, b[4] or 1)
             else
-                PP.CreateBorder(d.borderHost, b[1] or 0, b[2] or 0, b[3] or 0, b[4] or 1,
-                    b.size or 1, "OVERLAY", 7)
-                d.borderMade = true
+                PP:HideMaskedShapeBorder(d.borderHost)
+                if b.texture and EllesmereUI.ApplyBorderStyle then
+                    -- Aura buttons can expose restricted geometry. Give the owned
+                    -- border host an explicit public size (change-guarded because
+                    -- anchoring to the aura button is denied while restricted).
+                    local borderRect = (style.width or 18) .. "|" .. (style.height or style.width or 18)
+                    if d.akBorderRect ~= borderRect then
+                        d.borderHost:ClearAllPoints()
+                        d.borderHost:SetPoint("CENTER", button, "CENTER")
+                        d.borderHost:SetSize(style.width or 18, style.height or style.width or 18)
+                        d.akBorderRect = borderRect
+                    end
+                    if b.behindUnitFrame then
+                        d.borderHost:SetFrameLevel(math.max(0, (b.unitFrameLevel or 1) - 1))
+                    else
+                        d.borderHost:SetFrameLevel(b.behind
+                            and math.max(0, button:GetFrameLevel() - 1)
+                            or (d.cooldown:GetFrameLevel() + 1))
+                    end
+                    -- addonKey/sizeKey pick the per-module texture offset defaults a
+                    -- style leaves nil; CDM passes its own so a textured border sits
+                    -- where the module's other icons put theirs.
+                    EllesmereUI.ApplySecretSafeBorderStyle(d.borderHost, d, b.size or 1,
+                        b[1] or 0, b[2] or 0, b[3] or 0, b[4] or 1,
+                        b.texture or "solid", b.offsetX, b.offsetY, b.shiftX, b.shiftY,
+                        b.addonKey or "unitframes", b.sizeKey or b.size or 1)
+                    d.borderMade = true
+                elseif d.borderMade then
+                    PP.UpdateBorder(d.borderHost, b.size or 1, b[1] or 0, b[2] or 0, b[3] or 0, b[4] or 1)
+                else
+                    PP.CreateBorder(d.borderHost, b[1] or 0, b[2] or 0, b[3] or 0, b[4] or 1,
+                        b.size or 1, "OVERLAY", 7)
+                    d.borderMade = true
+                end
             end
             d.borderHost:Show()
-            if iconShaped then
-                if PP.HideBorder then PP.HideBorder(d.borderHost) end
-                d.shapeBorder:Show()
-            elseif PP.ShowBorder then
-                PP.ShowBorder(d.borderHost)
-            end
         else
             d.borderHost:Hide()
+            if PP then PP:HideMaskedShapeBorder(d.borderHost) end
         end
     end
 
@@ -372,20 +400,16 @@ local function ApplyStyleToRegions(button, style)
     -- registered purely as a tint target, and the user's dispel palette rides in via
     -- customDispelColorMap (68824).
     --
-    -- FOUR SOLID STRIPS, not one ring-shaped texture. Blizzard iterates every registered
-    -- texture ("for _index, dispelTypeTexture in ipairs(self.dispelTypeTextures)" in
-    -- Blizzard_CustomAuraButton.lua), each with its own options, its own visibility test
-    -- and its own SetVertexColor, so a four-texture ring is as legal as a one-texture
-    -- one. It buys three things. Thickness becomes GEOMETRY: the ring used to be one
-    -- band texture cropped per icon size, which went sub-texel above a certain drawn
-    -- size, and the bilinear filter then rendered it at alpha < 1 so the static border
-    -- underneath bled through and mixed with the dispel tint (field-reported 2026-08-14
-    -- on Player Aura Bars debuffs above Icon Size 34). Solid strips do no texel sampling
-    -- at all and hold at any size. It also keeps us off SetTexCoord, which
-    -- AddDispelTypeTexture stamps as a secret aspect on every texture it takes (along
-    -- with Alpha, VertexColor and Shown). And it drops the dependency on style.width
-    -- being accurate: the strips hang off the holder, which SetAllPoints the button, so
-    -- the button rect drives the ring without ever being read (button rects are
+    -- FOUR SOLID STRIPS, not one ring-shaped texture: the engine applies options,
+    -- visibility and SetVertexColor per registered texture (Blizzard_CustomAuraButton
+    -- iterates the whole list), so a four-texture ring is as legal as a one-texture
+    -- one. Thickness is GEOMETRY -- a cropped band texture goes sub-texel at large
+    -- icon sizes and bilinear-fades to alpha < 1, letting the static border bleed
+    -- into the dispel tint; solid strips never sample. Strips also stay off
+    -- SetTexCoord, which AddDispelTypeTexture stamps as a secret aspect on every
+    -- texture it takes (along with Alpha, VertexColor and Shown), and off
+    -- style.width: they hang from the holder, which SetAllPoints the button, so the
+    -- button rect drives the ring without ever being read (button rects are
     -- restricted).
     --
     -- The strips live on a dedicated holder one frame level over the static border host
@@ -399,43 +423,83 @@ local function ApplyStyleToRegions(button, style)
     -- default, which stamps Blizzard atlas art over ours. PreserveAsset is also the only
     -- style that leaves our geometry alone -- it calls SetAuraBorderColor and nothing
     -- else, no SetTexture and no SetTexCoord.
+    --
+    -- Shaped bars (style.iconShape) use a SEPARATE single-texture path (d.dispelShapeTex)
+    -- instead of the 4 strips: a hexagon/circle/etc outline cannot be built from 4
+    -- rectangles. It reuses the pre-shaped <shape>_border.tga art, WHOLE-texture (never
+    -- SetTexCoord-cropped -- that cropping is exactly what caused the bug the strips
+    -- above replaced) and clipped by the hardware mask (d.shapeMask), sized via the same
+    -- mask-expand math as the base border (bExp = 7 - borderPx). The two sets are
+    -- mutually exclusive per button; whichever is inactive is kept hidden every pass so a
+    -- shape toggle never leaves the other set's textures stuck visible after their
+    -- registration is cleared.
     local dispelTint = Enum and Enum.CustomAuraButtonDispelTypeTextureStyle
         and Enum.CustomAuraButtonDispelTypeTextureStyle.PreserveAsset
     if dispelTint == nil then
         local legacy = (Enum and Enum.CustomAuraButtonBorderStyle) or AuraButtonBorderStyle
         dispelTint = legacy and legacy.Color
     end
-    if style.dispelBorder and not d.dispelStrips and d.dispelHolder
+    if style.dispelBorder and d.dispelHolder
         and (button.AddDispelTypeTexture or button.SetAuraBorder) and dispelTint ~= nil then
-        -- Flat white: the engine multiplies its dispel color in through SetVertexColor,
-        -- so white is the neutral tint base. Written once here, while VertexColor is
-        -- still ours -- registration turns it into a secret aspect. Textures on our own
-        -- holder, never parented to the button, so creating them outside the button's
-        -- one legal creation window is fine.
-        --
-        -- Hidden on creation. A texture is shown by default, and the engine is what
-        -- shows these (per aura, on a typed one) -- if the registration below is denied
-        -- while auras are secret, an unhidden strip set would sit on the icon as a plain
-        -- WHITE ring until the restriction lifts and the deferred restyle re-runs.
-        local strips = {}
-        for i = 1, 4 do
-            local tex = d.dispelHolder:CreateTexture(nil, "OVERLAY")
-            tex:SetColorTexture(1, 1, 1, 1)
-            if tex.SetSnapToPixelGrid then
-                tex:SetSnapToPixelGrid(false)
-                tex:SetTexelSnappingBias(0)
+        if shapeActive and style.shapeBorderPath then
+            if not d.dispelShapeTex then
+                -- Neutral white tint base, written ONCE here (same rule as the strips
+                -- below): registration turns VertexColor into an engine-driven secret
+                -- aspect, so this must never be re-written on later restyle passes.
+                local tex = d.dispelHolder:CreateTexture(nil, "OVERLAY")
+                tex:SetVertexColor(1, 1, 1, 1)
+                if tex.SetSnapToPixelGrid then
+                    tex:SetSnapToPixelGrid(false)
+                    tex:SetTexelSnappingBias(0)
+                end
+                tex:Hide()
+                d.dispelShapeTex = tex
             end
-            tex:Hide()
-            strips[i] = tex
+            -- Unlike VertexColor, SetTexture isn't secret-tainted by registration --
+            -- must track shape changes here too, or the ring keeps whatever shape's
+            -- art was loaded when the texture was first created.
+            if d.akDispelShapeTexPath ~= style.shapeBorderPath then
+                d.dispelShapeTex:SetTexture(style.shapeBorderPath)
+                d.akDispelShapeTexPath = style.shapeBorderPath
+            end
+        elseif not d.dispelStrips then
+            -- Flat white: the engine multiplies its dispel color in through SetVertexColor,
+            -- so white is the neutral tint base. Written once here, while VertexColor is
+            -- still ours -- registration turns it into a secret aspect. Textures on our own
+            -- holder, never parented to the button, so creating them outside the button's
+            -- one legal creation window is fine.
+            --
+            -- Hidden on creation. A texture is shown by default, and the engine is what
+            -- shows these (per aura, on a typed one) -- if the registration below is denied
+            -- while auras are secret, an unhidden strip set would sit on the icon as a plain
+            -- WHITE ring until the restriction lifts and the deferred restyle re-runs.
+            local strips = {}
+            for i = 1, 4 do
+                local tex = d.dispelHolder:CreateTexture(nil, "OVERLAY")
+                tex:SetColorTexture(1, 1, 1, 1)
+                if tex.SetSnapToPixelGrid then
+                    tex:SetSnapToPixelGrid(false)
+                    tex:SetTexelSnappingBias(0)
+                end
+                tex:Hide()
+                strips[i] = tex
+            end
+            d.dispelStrips = strips
         end
-        d.dispelStrips = strips
     end
-    if d.dispelStrips then
-        if iconShaped then
+
+    local dispelTexSet
+    if shapeActive and d.dispelShapeTex then
+        dispelTexSet = { d.dispelShapeTex }
+        if d.dispelStrips then
             for i = 1, 4 do d.dispelStrips[i]:Hide() end
-        elseif d.shapeDispel then
-            d.shapeDispel:Hide()
         end
+    elseif d.dispelStrips then
+        dispelTexSet = d.dispelStrips
+        if d.dispelShapeTex then d.dispelShapeTex:Hide() end
+    end
+
+    if dispelTexSet then
         -- Level re-assert (change-guarded): a style can move the border host's level;
         -- the ring stays FOUR levels above it (PP strip container at +1, DM fx
         -- border-override container at +2, DM per-filter glow at +3 -- the dispel
@@ -447,45 +511,87 @@ local function ApplyStyleToRegions(button, style)
             if d.stackCarrier then d.stackCarrier:SetFrameLevel(bl + 5) end
             d.akDispelLvl = bl
         end
-        -- Physical-pixel thickness by GEOMETRY. t converts the user's setting into this
-        -- frame's units via the holder's effective scale (our frame -- readable). The
-        -- side strips are inset by t top and bottom so no two strips ever overlap at a
-        -- corner: a dispel color carrying alpha < 1 would double-blend there and read as
-        -- four darker corner pixels. Change-guarded on t alone -- the anchors are fixed
-        -- to the holder, which tracks the button, so nothing else can move them.
-        local px = style.dispelBorderPx or 2
-        local t = px
-        local eff = d.dispelHolder:GetEffectiveScale()
-        if eff and eff > 0 then
-            local PPx = EllesmereUI.PP
-            t = px * ((PPx and PPx.perfect) or 0.75) / eff
+
+        if shapeActive and d.dispelShapeTex then
+            -- Same bExp mask-expand math as PP.ApplyMaskedShapeBorder, inlined since that
+            -- helper also writes SetVertexColor, which would fight the engine's per-aura
+            -- tint once registered. shapeBorderSize (not raw dispelBorderPx) so this ring
+            -- uses the same remapped units as the base shaped border.
+            local px = style.shapeBorderSize or style.dispelBorderPx or 2
+            local geomKey = style.iconShape .. "|" .. px
+            if d.akDispelGeom ~= geomKey then
+                local PPx = EllesmereUI.PP
+                local bExp = 7 - math.min(px, 7)
+                -- Pcall'd like the icon's own reposition above: an uncaught error would
+                -- abort the rest of this function, and the geomKey guard would never
+                -- retry with the same inputs.
+                local ok = pcall(function()
+                    d.dispelShapeTex:ClearAllPoints()
+                    PPx.Point(d.dispelShapeTex, "TOPLEFT", d.dispelHolder, "TOPLEFT", -bExp, bExp)
+                    PPx.Point(d.dispelShapeTex, "BOTTOMRIGHT", d.dispelHolder, "BOTTOMRIGHT", bExp, -bExp)
+                    if d.shapeMask then
+                        pcall(d.dispelShapeTex.RemoveMaskTexture, d.dispelShapeTex, d.shapeMask)
+                        pcall(d.dispelShapeTex.AddMaskTexture, d.dispelShapeTex, d.shapeMask)
+                    end
+                end)
+                if ok then
+                    d.akDispelGeom = geomKey
+                elseif d.styleKey and AK.AurasRestricted() then
+                    deferredRestyles[d.styleKey] = true
+                end
+            end
+        else
+            -- Physical-pixel thickness by GEOMETRY. t converts the user's setting into this
+            -- frame's units via the holder's effective scale (our frame -- readable). The
+            -- side strips are inset by t top and bottom so no two strips ever overlap at a
+            -- corner: a dispel color carrying alpha < 1 would double-blend there and read as
+            -- four darker corner pixels. Change-guarded on t alone -- the anchors are fixed
+            -- to the holder, which tracks the button, so nothing else can move them.
+            local px = style.dispelBorderPx or 2
+            local t = px
+            local eff = d.dispelHolder:GetEffectiveScale()
+            if eff and eff > 0 then
+                local PPx = EllesmereUI.PP
+                t = px * ((PPx and PPx.perfect) or 0.75) / eff
+            end
+            if d.akDispelT ~= t then
+                local st = d.dispelStrips
+                st[1]:ClearAllPoints()
+                st[1]:SetPoint("TOPLEFT", d.dispelHolder, "TOPLEFT", 0, 0)
+                st[1]:SetPoint("TOPRIGHT", d.dispelHolder, "TOPRIGHT", 0, 0)
+                st[1]:SetHeight(t)
+                st[2]:ClearAllPoints()
+                st[2]:SetPoint("BOTTOMLEFT", d.dispelHolder, "BOTTOMLEFT", 0, 0)
+                st[2]:SetPoint("BOTTOMRIGHT", d.dispelHolder, "BOTTOMRIGHT", 0, 0)
+                st[2]:SetHeight(t)
+                st[3]:ClearAllPoints()
+                st[3]:SetPoint("TOPLEFT", d.dispelHolder, "TOPLEFT", 0, -t)
+                st[3]:SetPoint("BOTTOMLEFT", d.dispelHolder, "BOTTOMLEFT", 0, t)
+                st[3]:SetWidth(t)
+                st[4]:ClearAllPoints()
+                st[4]:SetPoint("TOPRIGHT", d.dispelHolder, "TOPRIGHT", 0, -t)
+                st[4]:SetPoint("BOTTOMRIGHT", d.dispelHolder, "BOTTOMRIGHT", 0, t)
+                st[4]:SetWidth(t)
+                d.akDispelT = t
+            end
         end
-        if d.akDispelT ~= t then
-            local st = d.dispelStrips
-            st[1]:ClearAllPoints()
-            st[1]:SetPoint("TOPLEFT", d.dispelHolder, "TOPLEFT", 0, 0)
-            st[1]:SetPoint("TOPRIGHT", d.dispelHolder, "TOPRIGHT", 0, 0)
-            st[1]:SetHeight(t)
-            st[2]:ClearAllPoints()
-            st[2]:SetPoint("BOTTOMLEFT", d.dispelHolder, "BOTTOMLEFT", 0, 0)
-            st[2]:SetPoint("BOTTOMRIGHT", d.dispelHolder, "BOTTOMRIGHT", 0, 0)
-            st[2]:SetHeight(t)
-            st[3]:ClearAllPoints()
-            st[3]:SetPoint("TOPLEFT", d.dispelHolder, "TOPLEFT", 0, -t)
-            st[3]:SetPoint("BOTTOMLEFT", d.dispelHolder, "BOTTOMLEFT", 0, t)
-            st[3]:SetWidth(t)
-            st[4]:ClearAllPoints()
-            st[4]:SetPoint("TOPRIGHT", d.dispelHolder, "TOPRIGHT", 0, -t)
-            st[4]:SetPoint("BOTTOMRIGHT", d.dispelHolder, "BOTTOMRIGHT", 0, t)
-            st[4]:SetWidth(t)
-            d.akDispelT = t
-        end
+
         -- Registration follows the static border AND a nonzero thickness
-        -- (0 = the user disabled the dispel recolor outright).
+        -- (0 = the user disabled the dispel recolor outright). setKey additionally
+        -- tracks WHICH texture set (strip vs shape) is meant to be registered, so a
+        -- shape toggle forces the same clear+re-add cycle a palette edit does --
+        -- AddDispelTypeTexture has no "swap one entry" semantics, the whole
+        -- registration is all-or-nothing either way.
         local want = (style.dispelBorder and style.border
             and (style.dispelBorderPx or 2) > 0) and true or false
-        local mapFP = (style.dispelColorFP or "") .. "|" .. (style.iconShape or "none")
-        if d.dispelBorderOn ~= want or (want and d.akDispelMapFP ~= mapFP) then
+        local mapFP = style.dispelColorFP or ""
+        -- Includes the size-derived px: the engine snapshots this texture's geometry
+        -- at registration time, so a border-size-only change (same shape, same want)
+        -- needs the same clear+re-add cycle or the OLD ring geometry keeps rendering.
+        local setKey = (shapeActive and d.dispelShapeTex)
+            and ("shape:" .. style.iconShape .. "|" .. (style.shapeBorderSize or style.dispelBorderPx or 2))
+            or "strip"
+        if d.dispelBorderOn ~= want or (want and (d.akDispelMapFP ~= mapFP or d.akDispelSet ~= setKey)) then
             -- Stamp only on SUCCESS: these are button calls, denied while auras are
             -- secret; a pre-stamped failure would strand the registration in the wrong
             -- state after the restriction lifts. A restricted failure defers this
@@ -500,31 +606,29 @@ local function ApplyStyleToRegions(button, style)
                     proceed = (clearFn and pcall(clearFn, button)) and true or false
                 end
                 if proceed then
-                    -- Four adds, ALL OR NOTHING. A denial can land on any one of them,
-                    -- and a partial set is worse than none: the engine would tint two or
-                    -- three sides and leave the rest sitting in the user's static border
-                    -- color. On any failure the whole set is cleared again (the clear is
-                    -- a full reset -- "self.dispelTypeTextures = {}") and the style key
-                    -- is deferred to the restriction lift, which re-runs this from a
-                    -- known-empty state. One options table for all four: the engine
-                    -- securecopies it per call, so sharing it cannot leak between them.
+                    -- ALL OR NOTHING (1 add for a shape, 4 for strips). A denial can land
+                    -- on any one of them, and a partial set is worse than none: the engine
+                    -- would tint some sides/none and leave the rest sitting in the user's
+                    -- static border color. On any failure the whole set is cleared again
+                    -- (the clear is a full reset -- "self.dispelTypeTextures = {}") and
+                    -- the style key is deferred to the restriction lift, which re-runs
+                    -- this from a known-empty state. One options table shared across every
+                    -- add: the engine securecopies it per call, so sharing it cannot leak
+                    -- between them.
                     local addFn = button.AddDispelTypeTexture or button.SetAuraBorder
                     local opts = { style = dispelTint, showWhenHarmful = true,
                         showWhenHelpful = false, customDispelColorMap = style.dispelColorMap }
                     local added = true
-                    if iconShaped then
-                        added = pcall(addFn, button, d.shapeDispel, opts)
-                    else
-                        for i = 1, 4 do
-                            if not pcall(addFn, button, d.dispelStrips[i], opts) then
-                                added = false
-                                break
-                            end
+                    for i = 1, #dispelTexSet do
+                        if not pcall(addFn, button, dispelTexSet[i], opts) then
+                            added = false
+                            break
                         end
                     end
                     if added then
                         d.dispelBorderOn = want
                         d.akDispelMapFP = mapFP
+                        d.akDispelSet = setKey
                     else
                         -- Rollback. dispelBorderOn goes FALSE rather than keeping its old
                         -- value: the clear above already succeeded, so nothing is
@@ -540,8 +644,7 @@ local function ApplyStyleToRegions(button, style)
                 end
             else
                 if clearFn and pcall(clearFn, button) then
-                    for i = 1, 4 do d.dispelStrips[i]:Hide() end
-                    if d.shapeDispel then d.shapeDispel:Hide() end
+                    for i = 1, #dispelTexSet do dispelTexSet[i]:Hide() end
                     d.dispelBorderOn = want
                 elseif d.styleKey and AK.AurasRestricted() then
                     deferredRestyles[d.styleKey] = true

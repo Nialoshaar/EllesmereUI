@@ -54,6 +54,11 @@ end
 local dmSel = "base"
 -- Add New popup's picked indicator type (session-sticky like the BM's).
 local dmSelType = "icons"
+-- Editing-spec bucket: "allspecs" (the legacy tile list), a group bucket
+-- key, or a concrete "spec<ID>". Session-sticky like dmSel.
+local dmSpecSel = "allspecs"
+-- Inherited-tile selection ({ group, id }); wins over dmSel while set.
+local dmInhSel = nil
 
 local function L(s) return EllesmereUI.L and EllesmereUI.L(s) or s end
 
@@ -91,11 +96,16 @@ end
 -------------------------------------------------------------------------------
 -- opts: { width, fontPath, title, subtitle, selected, enabled,
 --         showToggle, onSelect(), onToggle(newState), onDelete(),
---         icon (texture), posText ("(Top Left)" gray inline suffix) }
+--         icon (texture), posText ("(Top Left)" gray inline suffix),
+--         inheritedTooltip (string; marks the INHERITED variant: blue
+--         identity tint on title/subtitle, always-on blue edge strip, hover
+--         tooltip -- callers pass no onDelete/onEdit and wire onToggle to
+--         the per-spec disable) }
 -- Mirrors the Buff Manager sidebar tile exactly (66px rows, 36px icon face, 13px title
 -- + gray position suffix, 11px gray subtitle, pill toggle with the active accent, atlas
 -- delete icon, accent selected bar, hairline separator) so both manager pages stay
 -- visually and structurally identical.
+local INH_R, INH_G, INH_B = 0.55, 0.72, 1
 local function BuildTile(parentFrame, y, opts)
     local fontPath = opts.fontPath
     local PP = EllesmereUI.PanelPP or EllesmereUI.PP
@@ -112,9 +122,18 @@ local function BuildTile(parentFrame, y, opts)
         local accent = tile:CreateTexture(nil, "ARTWORK", nil, 2)
         accent:SetSize(2, TILE_H)
         accent:SetPoint("TOPLEFT", tile, "TOPLEFT", 0, 0)
-        local ac = EllesmereUI.ELLESMERE_GREEN
-        if ac then accent:SetColorTexture(ac.r, ac.g, ac.b, 1)
-        else accent:SetColorTexture(0.05, 0.82, 0.62, 1) end
+        if opts.inheritedTooltip then
+            accent:SetColorTexture(INH_R, INH_G, INH_B, 1)
+        else
+            local ac = EllesmereUI.ELLESMERE_GREEN
+            if ac then accent:SetColorTexture(ac.r, ac.g, ac.b, 1)
+            else accent:SetColorTexture(0.05, 0.82, 0.62, 1) end
+        end
+    elseif opts.inheritedTooltip then
+        local edge = tile:CreateTexture(nil, "ARTWORK", nil, 2)
+        edge:SetSize(2, TILE_H)
+        edge:SetPoint("TOPLEFT", tile, "TOPLEFT", 0, 0)
+        edge:SetColorTexture(INH_R, INH_G, INH_B, 0.45)
     end
 
     local textX = 12
@@ -151,7 +170,11 @@ local function BuildTile(parentFrame, y, opts)
     title:SetJustifyH("LEFT")
     title:SetWordWrap(false)
     title:SetText(opts.title or "")
-    title:SetTextColor(1, 1, 1)
+    if opts.inheritedTooltip then
+        title:SetTextColor(INH_R, INH_G, INH_B)
+    else
+        title:SetTextColor(1, 1, 1)
+    end
 
     -- Position suffix (smaller, grayer, inline after the title -- BM parity)
     if opts.posText then
@@ -173,16 +196,33 @@ local function BuildTile(parentFrame, y, opts)
         sub:SetJustifyH("LEFT")
         sub:SetWordWrap(false)
         sub:SetText(opts.subtitle)
-        sub:SetTextColor(0.4, 0.4, 0.4)
+        if opts.inheritedTooltip then
+            sub:SetTextColor(INH_R, INH_G, INH_B, 0.55)
+        else
+            sub:SetTextColor(0.4, 0.4, 0.4)
+        end
     end
 
     tile:SetScript("OnEnter", function()
         if not opts.selected then bg:SetColorTexture(1, 1, 1, 0.04) end
+        if opts.inheritedTooltip then
+            EllesmereUI.ShowWidgetTooltip(tile, opts.inheritedTooltip)
+        end
     end)
     tile:SetScript("OnLeave", function()
         bg:SetColorTexture(1, 1, 1, opts.selected and 0.06 or 0)
+        if opts.inheritedTooltip then
+            EllesmereUI.HideWidgetTooltip()
+        end
     end)
-    tile:SetScript("OnClick", function()
+    -- Right-click routes to opts.onContext (the "Add To" menu) when the
+    -- caller provides it; tiles without it ignore right-clicks.
+    tile:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    tile:SetScript("OnClick", function(self, btn)
+        if btn == "RightButton" then
+            if opts.onContext then opts.onContext(tile) end
+            return
+        end
         if opts.onSelect then opts.onSelect() end
     end)
 
@@ -192,6 +232,12 @@ local function BuildTile(parentFrame, y, opts)
         toggleBtn:SetSize(toggleW, toggleH)
         toggleBtn:SetPoint("TOPRIGHT", tile, "TOPRIGHT", -8, -8)
         toggleBtn:SetFrameLevel(tile:GetFrameLevel() + 2)
+        -- Inherited rows: the pill is the per-spec CONTROL and stays
+        -- full-brightness even when the row dims (opts.dimmed) or wears the
+        -- inherited tint -- SetAlpha on the tile inherits to children.
+        if opts.inheritedTooltip and toggleBtn.SetIgnoreParentAlpha then
+            toggleBtn:SetIgnoreParentAlpha(true)
+        end
         local toggleBg = toggleBtn:CreateTexture(nil, "BACKGROUND")
         toggleBg:SetAllPoints()
         local toggleKnob = toggleBtn:CreateTexture(nil, "ARTWORK")
@@ -268,6 +314,10 @@ local function BuildTile(parentFrame, y, opts)
     sep:SetPoint("BOTTOMLEFT", tile, "BOTTOMLEFT", 0, 0)
     sep:SetPoint("BOTTOMRIGHT", tile, "BOTTOMRIGHT", 0, 0)
     sep:SetColorTexture(1, 1, 1, 0.04)
+
+    -- Dimmed rows (inherited tiles whose GROUP disabled the entry): the
+    -- whole tile fades; the pill stays the per-spec layer's own state.
+    if opts.dimmed then tile:SetAlpha(0.55) end
 
     return TILE_H
 end
@@ -870,11 +920,11 @@ local function BuildBaseDetailDM(frame, fontPath)
     _, hh = W:SectionHeader(frame, "ASSIGNED DEBUFFS", sy); sy = sy - hh
 
     -- Unified Filters dropdown (Player Aura Bars parity): pinned "All Debuffs" row
-    -- above a divider, then the category filters -- ONE control, live in both modes.
-    -- While All Debuffs is on, checked categories are SUBTRACTED from the grid
-    -- (hidden); with it off they add, exactly as the old Base Filters dropdown did.
-    -- Toggling All Debuffs clears the category selection -- a subtract set and an add
-    -- set never mean the same thing, so neither carries across modes.
+    -- above a Show/Hide caption row, then TWO-LANE category rows -- ONE control,
+    -- live in both modes. The left checkbox SHOWS a category (dm[cat], add mode;
+    -- dimmed while All Debuffs is on), the right red box HIDES it (dm.neg[cat],
+    -- subtracting in both modes -- see BuildRecords). Lanes are mutually exclusive
+    -- per category and persist across mode flips.
     local safRow
     safRow, hh = W:DualRow(frame, sy,
         { type = "dropdown", text = "Filters",
@@ -887,72 +937,146 @@ local function BuildBaseDetailDM(frame, fontPath)
         local rgn = safRow._leftRegion
         if rgn._control then rgn._control:Hide() end
         local DM_ALL_KEY = "__all"
+        local function AllOn() return dm.all ~= false end
         local FILTER_ITEMS = {
             { key = DM_ALL_KEY, label = "All Debuffs",
-              tooltip = "Show every debuff. While this is on, checked filters below are hidden from the grid instead of added." },
-            { isHeader = true, label = "" },
-            { key = "nonplayer", label = "Non-Player Auras",
-              tooltip = "Debuffs not caused by any player or player pet (this is what shows most pve debuffs, do not check this while All Debuffs is selected!)." },
-            { key = "priority", label = "Important",
+              tooltip = "Show every debuff. Use the Hide lane below to remove specific filters." },
+            { isHeader = true, label = "Show", rightLabel = "Hide" },
+            { key = "nonplayer", label = "Non-Player Auras", dual = true, showLockedFn = AllOn,
+              tooltip = "Debuffs not caused by any player or player pet (this is what shows most pve debuffs)." },
+            { key = "priority", label = "Important", dual = true, showLockedFn = AllOn,
               tooltip = "Debuffs Blizzard flags as priority for raid frames." },
-            { key = "cc", label = "Crowd Control",
+            { key = "cc", label = "Crowd Control", dual = true, showLockedFn = AllOn,
               tooltip = "Loss-of-control debuffs. When shown, these lead the row and carry the CC glow." },
-            { key = "boss", label = "Boss Debuffs",
+            { key = "boss", label = "Boss Debuffs", dual = true, showLockedFn = AllOn,
               tooltip = "Debuffs applied by boss encounters." },
-            { key = "role", label = "Role Debuffs",
+            { key = "role", label = "Role Debuffs", dual = true, showLockedFn = AllOn,
               tooltip = "Debuffs flagged as relevant to your role." },
-            { key = "raid", label = "Raid",
+            { key = "raid", label = "Raid", dual = true, showLockedFn = AllOn,
               tooltip = "Blizzard's curated raid-frame debuff set." },
-            { key = "raidcombat", label = "Raid In Combat",
+            { key = "raidcombat", label = "Raid In Combat", dual = true, showLockedFn = AllOn,
               tooltip = "The stricter in-combat subset of the raid set." },
-            -- Two flavors of ONE dispel category (mutually exclusive --
-            -- checking one flips the mode, the widget refreshes both rows):
-            { key = "dispel_you", label = "Dispellable By You",
+            -- Two flavors of ONE dispel category (mutually exclusive across rows
+            -- AND lanes -- either lane's check flips the mode, the widget
+            -- refreshes both rows):
+            { key = "dispel_you", label = "Dispellable By You", dual = true, showLockedFn = AllOn,
               tooltip = "Debuffs you can dispel." },
-            { key = "dispel_typed", label = "Dispels",
+            { key = "dispel_typed", label = "Dispels", dual = true, showLockedFn = AllOn,
               tooltip = "Any debuff with a dispel type (Magic, Curse, Disease, Poison, Bleed), even if you cannot remove it." },
         }
+        local function NegHas(cat)
+            return dm.neg ~= nil and dm.neg[cat] == true
+        end
+        local function SetNeg(cat, v)
+            if v then
+                dm.neg = dm.neg or {}
+                dm.neg[cat] = true
+            elseif dm.neg then
+                dm.neg[cat] = nil
+                if not next(dm.neg) then dm.neg = nil end
+            end
+        end
+        -- One of the grid's content sources (with All Debuffs and enabled
+        -- claiming tiles -- see DmHasContent).
+        local function AnyShowCat()
+            return dm.boss == true or dm.role == true or dm.priority == true
+                or dm.cc == true or dm.raid == true or dm.raidcombat == true
+                or dm.dispel == true or dm.nonplayer == true
+        end
+        -- Empty selections are LEGAL here (user directive 2026-08-16, the
+        -- same reversal PAB got): any content source can be unchecked,
+        -- including the last one, and EllesmereUI.AttachEmptyFilterWarn owns
+        -- the loud feedback (red dropdown border + persistent bubble +
+        -- close-pulse) while the grid displays nothing. Enabled tiles with
+        -- claimed categories still render those categories under an empty
+        -- base selection (EffectiveState forces eff[cat] on for claims and
+        -- fx routing), so a claims-only grid displays debuffs and must not
+        -- warn -- the same rule that keeps fx-forced PAB bars silent.
+        local warnClosed
+        local function DmHasContent()
+            if AllOn() or AnyShowCat() then return true end
+            local tiles = ns.DM_ActiveTiles and ns.DM_ActiveTiles()
+            if tiles then
+                for i = 1, #tiles do
+                    local t = tiles[i]
+                    if t.enabled and t.claim then
+                        for _, on in pairs(t.claim) do
+                            if on then return true end
+                        end
+                    end
+                end
+            end
+            return false
+        end
         local cbDD, cbRefresh = EllesmereUI.BuildVisOptsCBDropdown(
             rgn, 190, rgn:GetFrameLevel() + 2,
             FILTER_ITEMS,
-            function(k)
-                if k == DM_ALL_KEY then return dm.all ~= false end
+            function(k, neg)
+                if k == DM_ALL_KEY then return AllOn() end
                 if k == "dispel_you" then
+                    if neg then return NegHas("dispel") and dm.dispelMode ~= "typed" end
                     return dm.dispel == true and dm.dispelMode ~= "typed"
                 elseif k == "dispel_typed" then
+                    if neg then return NegHas("dispel") and dm.dispelMode == "typed" end
                     return dm.dispel == true and dm.dispelMode == "typed"
                 end
+                if neg then return NegHas(k) end
                 return dm[k] == true
             end,
-            function(k, v)
+            function(k, v, neg)
                 if k == DM_ALL_KEY then
+                    -- Lanes persist across mode flips (the hide lane subtracts in
+                    -- both modes; the show lane goes dormant while All is on).
                     dm.all = v and true or false
-                    -- Mode flip: clear the category selection (see the doc
-                    -- comment above).
-                    dm.boss, dm.role, dm.priority, dm.raid = nil, nil, nil, nil
-                    dm.raidcombat, dm.nonplayer, dm.dispel, dm.cc = nil, nil, nil, nil
                     DmApply()
                     EllesmereUI:RefreshPage()
                     return
                 end
                 if k == "dispel_you" or k == "dispel_typed" then
-                    if v then
-                        dm.dispel = true
-                        dm.dispelMode = (k == "dispel_typed") and "typed" or "you"
+                    -- ONE dispel category, one global flavor: any checked lane owns
+                    -- both the lane and dm.dispelMode; checking one lane/flavor
+                    -- clears the other lane.
+                    if neg then
+                        SetNeg("dispel", v and true or false)
+                        if v then
+                            dm.dispel = nil
+                            dm.dispelMode = (k == "dispel_typed") and "typed" or "you"
+                        end
                     else
-                        dm.dispel = nil
+                        dm.dispel = v and true or nil
+                        if v then
+                            SetNeg("dispel", false)
+                            dm.dispelMode = (k == "dispel_typed") and "typed" or "you"
+                        end
                     end
                     DmApply()
+                    -- Non-force: re-evaluates the empty-selection warning (and
+                    -- any other widget refreshers) without closing the menu.
+                    EllesmereUI:RefreshPage()
                     return
                 end
-                dm[k] = v and true or nil
+                -- Two-lane category write: checking one lane clears the other.
+                if neg then
+                    SetNeg(k, v and true or false)
+                    if v then dm[k] = nil end
+                else
+                    dm[k] = v and true or nil
+                    if v then SetNeg(k, false) end
+                end
                 DmApply()
+                -- Non-force: re-evaluates the empty-selection warning (and
+                -- any other widget refreshers) without closing the menu.
+                EllesmereUI:RefreshPage()
             end,
-            nil, 12)
+            nil, 12, nil, nil, function()
+                if warnClosed then warnClosed() end
+            end)
         PPl.Point(cbDD, "RIGHT", rgn, "RIGHT", -20, 0)
         rgn._control = cbDD
         rgn._lastInline = nil
         if cbRefresh then EllesmereUI.RegisterWidgetRefresh(cbRefresh) end
+        warnClosed = EllesmereUI.AttachEmptyFilterWarn(rgn, cbDD,
+            L("You are displaying NO debuffs at all."), DmHasContent)
     end
 
     _, hh = W:SectionHeader(frame, "CORE", sy); sy = sy - hh
@@ -1693,7 +1817,34 @@ end
 
 local function DmPvClick(self)
     if not self._dmSel then return end
-    dmSel = self._dmSel
+    local id = self._dmSel
+    -- An id outside the edited bucket belongs to an INHERITED group tile
+    -- (concrete spec views union them into the preview): select its
+    -- read-only sidebar row instead of the (absent) own tile.
+    if id ~= "base" then
+        local own = (ns.DM_BucketTiles and ns.DM_BucketTiles(dmSpecSel)) or {}
+        local inOwn = false
+        for i = 1, #own do
+            if own[i].id == id then inOwn = true break end
+        end
+        if not inOwn then
+            local inhG = ns.BM_InheritedGroupsFor and ns.BM_InheritedGroupsFor(dmSpecSel)
+            if inhG then
+                for gi = 1, #inhG do
+                    local gl = ns.DM_BucketTiles and ns.DM_BucketTiles(inhG[gi])
+                    for i = 1, #(gl or {}) do
+                        if gl[i].id == id then
+                            dmInhSel = { group = inhG[gi], id = id }
+                            EllesmereUI:RefreshPage(true)
+                            return
+                        end
+                    end
+                end
+            end
+        end
+    end
+    dmSel = id
+    dmInhSel = nil
     EllesmereUI:RefreshPage(true)
 end
 
@@ -1709,7 +1860,28 @@ function ns.DMP_RefreshPreview()
     local health = pv._health
     local host = (ns.RF_AnchorHost and ns.RF_AnchorHost(health, p)) or health
     local allVis = ns._dmAllVisible
-    local tiles = (ns.DM_Tiles and ns.DM_Tiles()) or {}
+    -- The EDITED view's tiles: inherited group tiles first (concrete spec
+    -- views only, that spec's per-spec disables applied), then the bucket's
+    -- own list -- the preview mirrors what that spec renders.
+    local tiles = {}
+    do
+        local inhG = ns.BM_InheritedGroupsFor and ns.BM_InheritedGroupsFor(dmSpecSel)
+        if inhG then
+            for gi = 1, #inhG do
+                local gl = ns.DM_BucketTiles and ns.DM_BucketTiles(inhG[gi])
+                if gl then
+                    for i = 1, #gl do
+                        local t = gl[i]
+                        if not (ns.DM_InhDisabled and ns.DM_InhDisabled(dmSpecSel, t.id)) then
+                            tiles[#tiles + 1] = t
+                        end
+                    end
+                end
+            end
+        end
+        local own = (ns.DM_BucketTiles and ns.DM_BucketTiles(dmSpecSel)) or {}
+        for i = 1, #own do tiles[#tiles + 1] = own[i] end
+    end
     local Glows = EllesmereUI.Glows
 
     -- Reset pools
@@ -1971,7 +2143,10 @@ function ns.DMP_RefreshPreview()
     for ti = 1, #tiles do
         local t = tiles[ti]
         if t.enabled then
-            local sel = (dmSel == t.id)
+            -- Selected = the edited bucket's selection OR the inherited
+            -- selection (ids are globally unique across buckets).
+            local sel = (dmSel == t.id and not dmInhSel)
+                or (dmInhSel and dmInhSel.id == t.id) or false
             local alpha = (sel or allVis) and 1 or 0.5
             if t.type == "icons" or t.type == "square" then
                 RenderRun({
@@ -2127,6 +2302,7 @@ function ns.DMP_BuildPage(pageName, parent, yOffset)
     outerRoot:SetFrameLevel(scrollFrame:GetFrameLevel() + 5)
     if ns._dmRoot then ns._dmRoot:Hide(); ns._dmRoot:SetParent(nil) end
     if ns._dmAddPopup then ns._dmAddPopup:Hide() end
+    if EllesmereUI._pickMenu then EllesmereUI._pickMenu:Hide() end
     ns._dmRoot = outerRoot
 
     -- Override-session gate: heals a stale Debuff Manager layer FIRST (so
@@ -2136,7 +2312,34 @@ function ns.DMP_BuildPage(pageName, parent, yOffset)
         and EllesmereUI.SpecOverrides_DmPagePrelude() or nil
 
     local dm = DmTable()
-    local tiles = (ns.DM_Tiles and ns.DM_Tiles()) or {}
+
+    -- Editing-spec bucket sanity: stale/unknown keys reset to All Specs.
+    if dmSpecSel ~= "allspecs"
+        and not (ns.BM_GROUP_BUCKET_INFO and ns.BM_GROUP_BUCKET_INFO[dmSpecSel])
+        and not (type(dmSpecSel) == "string" and dmSpecSel:match("^spec%d")) then
+        dmSpecSel = "allspecs"
+    end
+    local tiles = (ns.DM_BucketTiles and ns.DM_BucketTiles(dmSpecSel)) or {}
+
+    -- Group buckets this view inherits from (concrete "spec<ID>" views
+    -- only): their tiles lead the sidebar as read-only rows.
+    local inhGroups = ns.BM_InheritedGroupsFor and ns.BM_InheritedGroupsFor(dmSpecSel) or nil
+
+    -- Inherited selection: resolve against the owning group's bucket; drop
+    -- it when the view no longer inherits that group or the tile is gone.
+    local inhSelTile = nil
+    if dmInhSel and inhGroups then
+        for gi = 1, #inhGroups do
+            if inhGroups[gi] == dmInhSel.group then
+                local gl = ns.DM_BucketTiles and ns.DM_BucketTiles(dmInhSel.group)
+                for i = 1, #(gl or {}) do
+                    if gl[i].id == dmInhSel.id then inhSelTile = gl[i] break end
+                end
+                break
+            end
+        end
+    end
+    if not inhSelTile then dmInhSel = nil end
 
     -- Validate selection.
     if dmSel ~= "base" then
@@ -2145,6 +2348,53 @@ function ns.DMP_BuildPage(pageName, parent, yOffset)
             if tiles[i].id == dmSel then found = true break end
         end
         if not found then dmSel = "base" end
+    end
+
+    -- Editing-spec roster, shared by the Editing Spec dropdown and the
+    -- right-click "Add To" menu: the group buckets lead, then every spec in
+    -- the game as its own "spec<ID>" bucket (healer specs included -- the DM
+    -- has no healer-key legacy).
+    local function BuildDmSpecRoster()
+        local values, order, icons = {}, {}, {}
+        local groups = ns.BM_GROUP_BUCKETS or {}
+        for i = 1, #groups do
+            values[groups[i].key] = L(groups[i].name)
+            order[#order + 1] = groups[i].key
+            icons[groups[i].key] = groups[i].icon
+        end
+        order[#order + 1] = "---a"
+        for classID = 1, (GetNumClasses and GetNumClasses() or 0) do
+            local className = GetClassInfo(classID)
+            local numSpecs = GetNumSpecializationsForClassID
+                and GetNumSpecializationsForClassID(classID) or 0
+            for si = 1, numSpecs do
+                local specID, specName, _, sIcon = GetSpecializationInfoForClassID(classID, si)
+                if specID then
+                    local key = "spec" .. specID
+                    values[key] = (specName or "") .. " " .. (className or "")
+                    order[#order + 1] = key
+                    icons[key] = sIcon
+                end
+            end
+        end
+        return values, order, icons
+    end
+
+    -- Right-click "Add To" items: the roster minus dividers, the edited
+    -- bucket (= the source) disabled.
+    local function DmBucketMenuItems()
+        local values, order, icons = BuildDmSpecRoster()
+        local items = {}
+        for i = 1, #order do
+            local key = order[i]
+            if not key:match("^%-%-%-") then
+                items[#items + 1] = {
+                    key = key, label = values[key], icon = icons[key],
+                    disabled = key == dmSpecSel,
+                }
+            end
+        end
+        return items
     end
 
     local p = DmProfile()
@@ -2192,13 +2442,58 @@ function ns.DMP_BuildPage(pageName, parent, yOffset)
         title = L("Base Icons"),
         posText = "(" .. L(POS_VALUES[p.debuffPosition or "bottomright"] or "") .. ")",
         subtitle = L("The standard debuff grid"),
-        selected = (dmSel == "base"),
+        selected = (dmSel == "base" and not dmInhSel),
         enabled = true,
         onSelect = function()
             dmSel = "base"
+            dmInhSel = nil
             EllesmereUI:RefreshPage(true)
         end,
     })
+
+    -- INHERITED group tiles lead concrete spec views: read-only here (edit
+    -- them in their group); the pill toggles ONLY this spec's enable.
+    if inhGroups then
+        for gi = 1, #inhGroups do
+            local gkey = inhGroups[gi]
+            local ginfo = ns.BM_GROUP_BUCKET_INFO and ns.BM_GROUP_BUCKET_INFO[gkey]
+            local gname = ginfo and L(ginfo.name) or gkey
+            local gl = (ns.DM_BucketTiles and ns.DM_BucketTiles(gkey)) or {}
+            for i = 1, #gl do
+                local t = gl[i]
+                local posText
+                if t.type == "icons" or t.type == "square" or t.type == "bar" then
+                    posText = "(" .. L(POS_VALUES[t.position or "top"] or "") .. ")"
+                end
+                local disHere = ns.DM_InhDisabled and ns.DM_InhDisabled(dmSpecSel, t.id)
+                tileY = tileY - BuildTile(sidebarChild, tileY, {
+                    width = sidebarW, fontPath = fontPath,
+                    icon = TileFaceTexture(t),
+                    title = t.name or L(TYPE_NAMES[t.type] or t.type),
+                    posText = posText,
+                    subtitle = gname,
+                    inheritedTooltip = EllesmereUI.Lf("Inherited from %1$s. Editable only there.", gname),
+                    selected = (dmInhSel and dmInhSel.group == gkey
+                        and dmInhSel.id == t.id) and true or false,
+                    -- Pill = the PER-SPEC enable only; a group-level disable
+                    -- dims the tile instead (the pill must never look dead).
+                    dimmed = not t.enabled or nil,
+                    enabled = (not disHere) and true or false,
+                    showToggle = true,
+                    onSelect = function()
+                        dmInhSel = { group = gkey, id = t.id }
+                        EllesmereUI:RefreshPage(true)
+                    end,
+                    onToggle = function()
+                        ns.DM_SetInhDisabled(dmSpecSel, t.id,
+                            not ns.DM_InhDisabled(dmSpecSel, t.id))
+                        DmApply()
+                        EllesmereUI:RefreshPage(true)
+                    end,
+                })
+            end
+        end
+    end
 
     -- Tile list (BM tile parity: icon face, type title, gray position
     -- suffix, routed-filters subtitle, pill toggle, atlas delete)
@@ -2217,12 +2512,29 @@ function ns.DMP_BuildPage(pageName, parent, yOffset)
             title = t.name or L(TYPE_NAMES[t.type] or t.type),
             posText = posText,
             subtitle = TileSubtitle(t),
-            selected = (dmSel == t.id),
+            selected = (dmSel == t.id and not dmInhSel),
             enabled = t.enabled and true or false,
             showToggle = true,
             onSelect = function()
                 dmSel = t.id
+                dmInhSel = nil
                 EllesmereUI:RefreshPage(true)
+            end,
+            -- Right-click: copy this tile into another editing-spec bucket
+            -- (full clone, fresh id; the source stays).
+            onContext = function(tileFrame)
+                if not EllesmereUI.ShowPickMenu then return end
+                EllesmereUI.ShowPickMenu(tileFrame, {
+                    title = L("Add To"),
+                    fontPath = fontPath,
+                    items = DmBucketMenuItems(),
+                    onPick = function(key)
+                        if ns.DM_CopyTile and ns.DM_CopyTile(t, key) then
+                            DmApply()
+                            EllesmereUI:RefreshPage(true)
+                        end
+                    end,
+                })
             end,
             onToggle = function(v)
                 t.enabled = v and true or false
@@ -2440,7 +2752,7 @@ function ns.DMP_BuildPage(pageName, parent, yOffset)
                         elseif k == "dispel_typed" then picked.dispel = true; mode = "typed"
                         else picked[k] = true end
                     end
-                    local t = ns.DM_AddTile and ns.DM_AddTile(dmSelType)
+                    local t = ns.DM_AddTile and ns.DM_AddTile(dmSelType, dmSpecSel)
                     popup:Hide()
                     if t then
                         if mode then
@@ -2452,6 +2764,7 @@ function ns.DMP_BuildPage(pageName, parent, yOffset)
                         if not t.claim then t.claim = {} end
                         for cat in pairs(picked) do t.claim[cat] = true end
                         dmSel = t.id
+                        dmInhSel = nil
                         DmApply()
                         EllesmereUI:RefreshPage(true)
                     end
@@ -2473,10 +2786,9 @@ function ns.DMP_BuildPage(pageName, parent, yOffset)
     sidebarChild:SetHeight(max(10, math.abs(tileY)))
 
     -------------------------------------------------------------------
-    --  LEFT COLUMN (72%): fixed top (preview band + accent title) +
-    --  scrollable settings below -- a clone of the BM page's left column
-    --  with the Editing Spec section omitted (not relevant to debuffs),
-    --  so the preview centers in the band instead.
+    --  LEFT COLUMN (72%): fixed top (preview band + Editing Spec section
+    --  + accent title) + scrollable settings below -- a clone of the BM
+    --  page's left column, band split 65/35 like the BM's.
     -------------------------------------------------------------------
     local PAD = 20
     local leftFixed = CreateFrame("Frame", nil, root)
@@ -2484,9 +2796,13 @@ function ns.DMP_BuildPage(pageName, parent, yOffset)
     leftFixed:SetPoint("TOPLEFT", root, "TOPLEFT", 0, 0)
     local ly = 0
 
+    local pvSplitW = floor(leftW * 0.65)
+    local specSplitW = leftW - pvSplitW
+
     -- Preview: the shared health-bar replica in replica-only mode; the DM
-    -- renderer draws the base grid + tiles on it.
-    local pvFrame, sectionH = ns.BM_BuildSimplePreview(leftFixed, p, fontPath, PP, leftW / 2, -PAD, true)
+    -- renderer draws the base grid + tiles on it. Centered in the LEFT 65%
+    -- (the Editing Spec section owns the right 35%).
+    local pvFrame, sectionH = ns.BM_BuildSimplePreview(leftFixed, p, fontPath, PP, pvSplitW / 2, -PAD, true)
     ns._dmPreviewFrame = pvFrame
     pvFrame._dmFontPath = fontPath
 
@@ -2528,6 +2844,50 @@ function ns.DMP_BuildPage(pageName, parent, yOffset)
         end)
     end
 
+    -------------------------------------------------------------------
+    --  EDITING SPEC (right 35% of the band, BM parity): the group
+    --  buckets lead, then every spec in the game as its own "spec<ID>"
+    --  bucket -- healer specs included (the DM has no healer-key legacy).
+    -------------------------------------------------------------------
+    do
+        local splitDiv = leftFixed:CreateTexture(nil, "ARTWORK")
+        splitDiv:SetWidth(1)
+        splitDiv:SetPoint("TOP", leftFixed, "TOPLEFT", pvSplitW, ly - 10)
+        splitDiv:SetPoint("BOTTOM", leftFixed, "TOPLEFT", pvSplitW, ly - sectionH + 10)
+        splitDiv:SetColorTexture(1, 1, 1, 0.08)
+
+        local specCenterX = pvSplitW + specSplitW / 2
+        -- Roster shared with the right-click "Add To" menu (the menu
+        -- rebuilds it lazily per open).
+        local specDDValues, specDDOrder, specDDIcons = BuildDmSpecRoster()
+        specDDValues._menuOpts = {
+            maxHeight = 300,
+            icon = function(key) return specDDIcons[key] end,
+        }
+
+        local groupH = 14 + 7 + 30
+        local groupTopY = ly - (sectionH - groupH) / 2
+        local specLabel = leftFixed:CreateFontString(nil, "OVERLAY")
+        specLabel:SetFont(fontPath, 12, "")
+        specLabel:SetPoint("TOP", leftFixed, "TOPLEFT", specCenterX, groupTopY)
+        specLabel:SetJustifyH("CENTER")
+        specLabel:SetText(L("Editing Spec"))
+        specLabel:SetTextColor(1, 1, 1, 0.75)
+
+        local specDDW = specSplitW - PAD - 50
+        local specDD = EllesmereUI.BuildDropdownControl(
+            leftFixed, specDDW, leftFixed:GetFrameLevel() + 2,
+            specDDValues, specDDOrder,
+            function() return dmSpecSel or "allspecs" end,
+            function(v)
+                dmSpecSel = v
+                dmSel = "base"
+                dmInhSel = nil
+                EllesmereUI:RefreshPage(true)
+            end)
+        specDD:SetPoint("TOP", specLabel, "BOTTOM", 0, -7)
+    end
+
     -- No text under the DM preview (user call 2026-07-24): the "Edit
     -- Excluded Debuffs" link is retired (exclude list is internal now) and
     -- the BM-style click-hint was dropped the next day. The band-height
@@ -2564,12 +2924,18 @@ function ns.DMP_BuildPage(pageName, parent, yOffset)
     subTitle:SetTextColor(0.75, 0.75, 0.75, 0.65)
 
     local selTile
-    if dmSel ~= "base" then
+    if not dmInhSel and dmSel ~= "base" then
         for i = 1, #tiles do
             if tiles[i].id == dmSel then selTile = tiles[i] break end
         end
     end
-    if selTile then
+    if dmInhSel and inhSelTile then
+        local ginfo2 = ns.BM_GROUP_BUCKET_INFO and ns.BM_GROUP_BUCKET_INFO[dmInhSel.group]
+        local gname2 = ginfo2 and L(ginfo2.name) or dmInhSel.group
+        settingsTitle:SetTextColor(0.55, 0.72, 1)
+        settingsTitle:SetText(inhSelTile.name or L(TYPE_NAMES[inhSelTile.type] or inhSelTile.type))
+        subTitle:SetText("(" .. EllesmereUI.Lf("Inherited from %1$s", gname2) .. ")")
+    elseif selTile then
         settingsTitle:SetText(L(TYPE_NAMES[selTile.type] or selTile.type))
         subTitle:SetText("(" .. TileSubtitle(selTile) .. ")")
     else
@@ -2672,7 +3038,43 @@ function ns.DMP_BuildPage(pageName, parent, yOffset)
 
     -- Detail rows build inside the scroll child
     local sy
-    if selTile then
+    if dmInhSel and inhSelTile then
+        -- Read-only pane for an INHERITED group tile: where it lives, a
+        -- jump link to the owning group, and a pointer at the tile toggle
+        -- for the per-spec enable. No settings render -- edits belong to
+        -- the group. (Child x = padDiff + PAD aligns with the PAD margin.)
+        local ginfo2 = ns.BM_GROUP_BUCKET_INFO and ns.BM_GROUP_BUCKET_INFO[dmInhSel.group]
+        local gname2 = ginfo2 and L(ginfo2.name) or dmInhSel.group
+        local info = settingsChild:CreateFontString(nil, "OVERLAY")
+        info:SetFont(fontPath, 12, "")
+        info:SetPoint("TOPLEFT", settingsChild, "TOPLEFT", padDiff + PAD, -14)
+        info:SetPoint("RIGHT", settingsChild, "RIGHT", -(padDiff + PAD), 0)
+        info:SetJustifyH("LEFT")
+        info:SetWordWrap(true)
+        info:SetText(EllesmereUI.Lf("Inherited from %1$s. Edit it there, or use the tile toggle to enable or disable it for this spec.", gname2))
+        info:SetTextColor(0.65, 0.65, 0.65)
+        local link = CreateFrame("Button", nil, settingsChild)
+        link:SetPoint("TOPLEFT", settingsChild, "TOPLEFT", padDiff + PAD, -78)
+        link:SetFrameLevel(settingsChild:GetFrameLevel() + 2)
+        local linkFS = link:CreateFontString(nil, "OVERLAY")
+        linkFS:SetFont(fontPath, 12, "")
+        linkFS:SetPoint("TOPLEFT")
+        linkFS:SetText(EllesmereUI.Lf("Edit in %1$s", gname2))
+        local lac = EllesmereUI.ELLESMERE_GREEN
+        if lac then linkFS:SetTextColor(lac.r, lac.g, lac.b, 0.85)
+        else linkFS:SetTextColor(0.05, 0.82, 0.62, 0.85) end
+        link:SetSize(linkFS:GetStringWidth() + 4, 18)
+        link:SetScript("OnEnter", function() linkFS:SetAlpha(1) end)
+        link:SetScript("OnLeave", function() linkFS:SetAlpha(0.85) end)
+        local jumpGroup, jumpId = dmInhSel.group, dmInhSel.id
+        link:SetScript("OnClick", function()
+            dmSpecSel = jumpGroup
+            dmSel = jumpId
+            dmInhSel = nil
+            EllesmereUI:RefreshPage(true)
+        end)
+        sy = -110
+    elseif selTile then
         sy = BuildTileDetail(settingsChild, fontPath, selTile)
     else
         sy = BuildBaseDetailDM(settingsChild, fontPath)
@@ -3440,6 +3842,10 @@ function ns.BMP_BuildAssignedFilters(parent, sy, ind, fontPath)
 
     -- LEFT: Filters checkbox dropdown; "Edit Filters" rides the menu as a
     -- pinned top action with a divider (the CDM spell-picker pattern).
+    -- TWO-LANE rows: the left checkbox SHOWS a filter's spells (ind.filters,
+    -- the classic union), the right red box HIDES them (ind.negFilters --
+    -- dropped from the resolved union in BM2_ResolveSpellsOwn; direct Extra
+    -- Spells win over the hide lane). Lanes are mutually exclusive per filter.
     do
         local rgn = row._leftRegion
         if rgn._control then rgn._control:Hide() end
@@ -3451,19 +3857,38 @@ function ns.BMP_BuildAssignedFilters(parent, sy, ind, fontPath)
                 { isTopAction = true, label = "Edit Filters", onClick = function()
                     ns.BMP_ShowFilterEditor()
                 end },
+                { isHeader = true, label = "Show", rightLabel = "Hide" },
             }
             for i = 1, #filters do
-                items[#items + 1] = { key = filters[i].id, label = filters[i].name }
+                items[#items + 1] = { key = filters[i].id, label = filters[i].name, dual = true }
             end
             return items
         end
         local cbDD, cbDDRefresh = EllesmereUI.BuildVisOptsCBDropdown(
             rgn, 190, rgn:GetFrameLevel() + 2,
             FilterItems,
-            function(k) return ind.filters and ind.filters[k] and true or false end,
-            function(k, v)
-                if not ind.filters then ind.filters = {} end
-                ind.filters[k] = v and true or nil
+            function(k, neg)
+                if neg then
+                    return ind.negFilters and ind.negFilters[k] == true
+                end
+                return ind.filters and ind.filters[k] and true or false
+            end,
+            function(k, v, neg)
+                -- Two-lane write: checking one lane clears the other.
+                if neg then
+                    ind.negFilters = ind.negFilters or {}
+                    ind.negFilters[k] = v and true or nil
+                    if not next(ind.negFilters) then ind.negFilters = nil end
+                    if v and ind.filters then ind.filters[k] = nil end
+                else
+                    if not ind.filters then ind.filters = {} end
+                    ind.filters[k] = v and true or nil
+                    if v and ind.negFilters then
+                        ind.negFilters[k] = nil
+                        if not next(ind.negFilters) then ind.negFilters = nil end
+                    end
+                end
+                if ns.BM2_Invalidate then ns.BM2_Invalidate() end
                 if ns.ReloadFrames then ns.ReloadFrames() end
             end,
             nil, 12)

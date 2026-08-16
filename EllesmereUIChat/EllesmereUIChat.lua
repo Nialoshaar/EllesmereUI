@@ -2656,10 +2656,10 @@ local INPUT_TOP_DROP = 5
 -- DEFAULT_CHAT_FRAME.editBox outright in that mode, before it ever looks at
 -- the preferred frame -- so on any tab but the first, ChatFrame1EditBox is
 -- what appears over the text while that tab's OWN edit box stays hidden.
--- Keying the strip off cf's own box therefore left every other tab unmasked
--- (reported 2026-08-14) and reserved a strip on ChatFrame1's hidden window
--- instead. Docked windows share one rect, so a box shown on any docked frame
--- is drawn over whichever docked frame is currently visible.
+-- Keying the strip off cf's own box therefore leaves every other tab unmasked
+-- and reserves a strip on ChatFrame1's hidden window instead. Docked windows
+-- share one rect, so a box shown on any docked frame is drawn over whichever
+-- docked frame is currently visible.
 local function DockedEditBoxShown()
     for i = 1, 10 do
         local owner = _G["ChatFrame" .. i]

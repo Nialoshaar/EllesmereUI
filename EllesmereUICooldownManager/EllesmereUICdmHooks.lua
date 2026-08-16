@@ -6286,6 +6286,31 @@ local function CollectAndReanchor()
                         if barKey then
                             local bd = barDataByKey[barKey]
                             if bd and bd.barType ~= "buffs" and not bd.isGhostBar then
+                                -- STICKY equipment pin, BEFORE any spell resolution:
+                                -- a worn on-use item's frame resolves its use-spell
+                                -- after first use and would flip from the inert band
+                                -- into a managed claim (then intake mirrors it and
+                                -- the prune churns it back out). equipSlot identifies
+                                -- the row by cdID alone, so the pin wins permanently.
+                                local eqInfo = cdID and C_CooldownViewer
+                                    and C_CooldownViewer.GetCooldownViewerCooldownInfo
+                                    and C_CooldownViewer.GetCooldownViewerCooldownInfo(cdID)
+                                -- Consumable categories pin inert too (field-probed
+                                -- 2026-08-14: potions/healthstones = 4/30), EXCEPT
+                                -- 1711 = the racial category, the one category-row
+                                -- class that must stay managed (settings/Remove/
+                                -- routing). Unknown future categories fail safe:
+                                -- inert render, unmanaged.
+                                if eqInfo and (eqInfo.equipSlot
+                                    or (eqInfo.spellCategoryID and eqInfo.spellCategoryID ~= 1711)) then
+                                    if not cdFrames[barKey] then cdFrames[barKey] = {} end
+                                    local frames = cdFrames[barKey]
+                                    frames[#frames + 1] = frame
+                                    local fc = FC(frame)
+                                    fc.barKey = barKey
+                                    fc.spellID = -(1000000000 + cdID)
+                                    fc.isHostedBuff = nil
+                                else
                                 local displaySID, baseSID = ResolveFrameSpellID(frame)
                                 if displaySID and displaySID > 0 then
                                     if not cdFrames[barKey] then cdFrames[barKey] = {} end
@@ -6309,29 +6334,18 @@ local function CollectAndReanchor()
                                     -- a spell or lack spellCategoryID entirely.
                                     local catInfo = cdID and C_CooldownViewer
                                         and C_CooldownViewer.GetCooldownViewerCooldownInfo(cdID)
-                                    -- An equipment-backed entry (trinkets and the rest
-                                    -- of the EQUIP_ACTIVE group) lands here the moment
-                                    -- it is dragged into Essential/Utility: it carries
-                                    -- an inventory slot instead of a spell OR a
-                                    -- category, so it fell to the transient branch
-                                    -- below and was parked invisible once the retry
-                                    -- budget ran out -- while every pass kept the
-                                    -- retry ladder re-firing against an id that can
-                                    -- never resolve. Claimed under OUR OWN slot key
-                                    -- (-13/-14 et al) rather than the inert band: that
-                                    -- is the id the picker lists, the route map routes
-                                    -- and the sort ranks, so a Blizzard equipment
-                                    -- cooldown becomes orderable, movable to another
-                                    -- bar and hideable like any other icon, and the
-                                    -- trinket-slot injection below stands down instead
-                                    -- of drawing the same physical item twice. Only for
-                                    -- slots we have a key for; anything else keeps the
-                                    -- inert identity and merely renders.
-                                    local eqSlot = catInfo and catInfo.equipSlot
-                                    if eqSlot and not (ns.SlotIDFromKey and ns.SlotIDFromKey(-eqSlot)) then
-                                        eqSlot = nil
-                                    end
-                                    if catInfo and (catInfo.spellCategoryID or eqSlot) then
+                                    -- Equipment-backed entries (equipSlot present) ride
+                                    -- the INERT band alongside category shells: they
+                                    -- render exactly as Blizzard tracks them -- art,
+                                    -- cooldown and lifetime are all Blizzard's -- but
+                                    -- carry NO manageable identity, so they never enter
+                                    -- stores, settings, ordering or sync (the intake
+                                    -- prune erases any mirror). The preset item lane is
+                                    -- the MANAGED lane; a user tracking both sees both
+                                    -- icons and removes whichever they prefer. Never
+                                    -- re-key items onto slot ids: the managed-native
+                                    -- arbitration that required was the 8.8.7 dupe bug.
+                                    if catInfo and (catInfo.spellCategoryID or catInfo.equipSlot) then
                                         if not cdFrames[barKey] then cdFrames[barKey] = {} end
                                         local frames = cdFrames[barKey]
                                         frames[#frames + 1] = frame
@@ -6346,8 +6360,7 @@ local function CollectAndReanchor()
                                         -- and outside every other marker band
                                         -- (item presets are small negatives, hosted
                                         -- markers start at -2000000000).
-                                        fc.spellID = eqSlot and -eqSlot
-                                            or -(1000000000 + cdID)
+                                        fc.spellID = -(1000000000 + cdID)
                                         fc.isHostedBuff = nil
                                     else
                                         -- Routed to one of our bars, but the spell
@@ -6362,6 +6375,7 @@ local function CollectAndReanchor()
                                         -- nothing re-collects afterwards.
                                         unresolvedFrames[frame] = true
                                     end
+                                end
                                 end
                             end
                         end
@@ -7944,12 +7958,16 @@ local function CollectAndReanchor()
             if not ns._reseededSpecsSession[specKey] then
                 ns._reseededSpecsSession[specKey] = true
                 ns.ReseedAssignedSpellsFromLiveIcons(true)
-                -- Same once-per-spec edge as the reseed above: automatic
-                -- keep/drop reconciliation piggybacks here so a fresh spec's
-                -- stale-category entries clear without the user needing to
-                -- open the options panel (the interactive path calls
-                -- ns.ReconcileAssignedSpellDrops directly).
-                if ns.RequestCDMDropPass then ns.RequestCDMDropPass("reseed") end
+                -- NO drop pass here, EVER (field data loss, 8.8.7 -> fixed
+                -- 8.8.8): this tail runs synchronously inside the spec-swap
+                -- rebuild with the store key already flipped to the incoming
+                -- spec while the viewer pools and settings catalog still
+                -- serve the OUTGOING spec -- every stored spell unshown in
+                -- the old spec convicts as owned+unshown+uncatalogued and is
+                -- DELETED (custom buff bar rows unrecoverably: no reseed
+                -- lane re-adds them). Removal sync runs ONLY from settled
+                -- states: Blizzard's settings-close hook and our options
+                -- paths. Reseed itself stays -- it is add-only.
             end
         end
     end

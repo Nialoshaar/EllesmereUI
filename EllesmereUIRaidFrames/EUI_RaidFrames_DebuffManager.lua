@@ -100,13 +100,41 @@ local function EnsureFilterV2(dm)
     end
 end
 
+-- One-shot lane split (per profile, after EnsureFilterV2): the base Filters
+-- dropdown became two-lane (show/hide), so the single mode-dependent selection
+-- splits into dm[cat] (SHOW lane) and dm.neg[cat] (HIDE lane). Show All
+-- profiles' checked categories were subtracting -- move them to the hide lane
+-- so record synthesis is bit-identical (incl. cc: checked-under-All meant "park
+-- the cc group"); add-mode selections already mean SHOW and stay put.
+local function EnsureFilterLanes(dm)
+    if dm.lanesV1 then return end
+    dm.lanesV1 = true
+    if dm.all ~= false then
+        local neg
+        local function Move(cat)
+            if dm[cat] == true then
+                neg = neg or {}
+                neg[cat] = true
+                dm[cat] = nil
+            end
+        end
+        Move("boss"); Move("role"); Move("priority"); Move("cc")
+        Move("raid"); Move("raidcombat"); Move("dispel"); Move("nonplayer")
+        if neg then dm.neg = neg end
+    end
+end
+
 -- One-shot: maps the retired Auras-tab preset onto the manager, runs ONLY
 -- while the profile has no dmDebuff yet (a brand-new profile maps nil/"all" preset to the defaults, harmless). No
 -- display/style key mapping needed; the base grid reads legacy debuff keys directly (nondestructive view).
 local function EnsureMigrated()
     local p = ns.db and ns.db.profile
     if not p then return end
-    if p.dmDebuff then EnsureFilterV2(p.dmDebuff); return end
+    if p.dmDebuff then
+        EnsureFilterV2(p.dmDebuff)
+        EnsureFilterLanes(p.dmDebuff)
+        return
+    end
     local preset = p.debuffFilter
     local dm = { _fromPreset = preset or "default" }
     if preset == "raid" then
@@ -143,6 +171,7 @@ local function EnsureMigrated()
     end
     p.dmDebuff = dm
     EnsureFilterV2(dm)
+    EnsureFilterLanes(dm)
 end
 
 function ns.DM_Active()
@@ -309,18 +338,28 @@ function ns.DM_CfgFP()
     local dm = DM() or {}
     FxHeal(dm)
     local prof = ns.db and ns.db.profile
+    local neg = dm.neg
     local parts = {
         "on",
         dm.all ~= false and 1 or 0, dm.boss and 1 or 0, dm.role and 1 or 0,
         dm.priority and 1 or 0, dm.cc == true and 1 or 0, dm.raid and 1 or 0,
         dm.raidcombat and 1 or 0, dm.dispel and 1 or 0,
         dm.nonplayer and 1 or 0,
+        -- Hide lane (dm.neg): subtracts in both modes, so every entry is a
+        -- record-shape input.
+        neg and table.concat({
+            neg.boss and 1 or 0, neg.role and 1 or 0, neg.priority and 1 or 0,
+            neg.cc and 1 or 0, neg.raid and 1 or 0, neg.raidcombat and 1 or 0,
+            neg.dispel and 1 or 0, neg.nonplayer and 1 or 0 }, "") or "-",
         (dm.dispelMode == "typed") and "typed" or "you",
         FxListFP(dm.fxList), -- base effects force records
         -- Exclude set varies only with the lust-debuff opt-out (hardcoded lists are load-constant).
         (not prof or prof.hideLustDebuff ~= false) and "lx1" or "lx0",
     }
-    local tiles = dm.tiles
+    -- Fingerprint the ACTIVE union: spec swaps, bucket edits and per-spec
+    -- disables all land here, so the containers re-apply exactly when the
+    -- rendered tile set changes (edits to buckets other specs own don't).
+    local tiles = ns.DM_ActiveTiles()
     if tiles then
         for i = 1, #tiles do
             local t = tiles[i]
@@ -363,11 +402,23 @@ end
 -- claims[cat] = tile table (first enabled claimer wins).
 local function EffectiveState(dm)
     -- Every category key is an explicit checkbox (true/nil); cc's base-grid default-on lives in the apply pass's Show All branch, not here.
-    local eff = { boss = dm.boss, role = dm.role, priority = dm.priority,
-        cc = dm.cc == true, raid = dm.raid, raidcombat = dm.raidcombat, dispel = dm.dispel,
-        nonplayer = dm.nonplayer }
+    -- Show-lane checkboxes are DORMANT while Show All is on (the dropdown dims the
+    -- lane and lanes persist across mode flips): a dormant pick must not leak into
+    -- the eff-driven negation gates (dispelToken/!RAID/!RAID_IN_COMBAT would strip
+    -- content from other records with no record of its own re-adding it). Claims
+    -- and fx routing below still force categories on in both modes.
+    local eff
+    if dm.all ~= false then
+        eff = { cc = false }
+    else
+        eff = { boss = dm.boss, role = dm.role, priority = dm.priority,
+            cc = dm.cc == true, raid = dm.raid, raidcombat = dm.raidcombat, dispel = dm.dispel,
+            nonplayer = dm.nonplayer }
+    end
     local claims = {}
-    local tiles = dm.tiles
+    -- The ACTIVE union (all-specs + group buckets + own spec, per-spec
+    -- disables applied): claims follow whatever the current spec renders.
+    local tiles = ns.DM_ActiveTiles()
     if tiles then
         for i = 1, #tiles do
             local t = tiles[i]
@@ -416,29 +467,38 @@ local function BuildRecords(s, dm)
         end
     end
     local allOn = dm.all ~= false -- Show All defaults ON (legacy "all" preset parity)
-    -- With Show All on, CHECKED categories SUBTRACT from the base grid instead
-    -- of adding records (dropdown live in both modes): token categories negate
-    -- straight off the all-record, typed dispels ride excludeDispelTypes,
-    -- boolean categories use false-valued candidate booleans (nonplayer
-    -- record's complementary-boolean mechanism, inverted per flag).
+    -- HIDE lane (dm.neg): subtracts in BOTH modes. Token categories negate off
+    -- every lower-ranked record (ownership rank cc > dispel > raid > raidcombat
+    -- holds for subtraction too -- a higher-ranked shown category keeps its
+    -- overlap, same doctrine as cc owning dispellable CC), typed dispels ride
+    -- excludeDispelTypes, boolean categories use false-valued candidate booleans
+    -- (nonplayer via the complementary TRUE).
+    local neg = dm.neg
+    local function NegHas(cat) return neg ~= nil and neg[cat] == true end
     local sub = allOn and {
-        boss = dm.boss == true, role = dm.role == true,
-        priority = dm.priority == true, raid = dm.raid == true,
-        raidcombat = dm.raidcombat == true, dispel = dm.dispel == true,
-        nonplayer = dm.nonplayer == true,
+        boss = NegHas("boss"), role = NegHas("role"),
+        priority = NegHas("priority"), raid = NegHas("raid"),
+        raidcombat = NegHas("raidcombat"), dispel = NegHas("dispel"),
+        nonplayer = NegHas("nonplayer"),
     } or nil
-    -- Non-cc records always exclude CROWD_CONTROL under Show All: cc group
-    -- renders CC while on, and a subtracted cc (parked by the apply pass) must stay hidden everywhere.
-    local ccOn = allOn or (eff.cc and true or false)
+    -- Non-cc records always exclude CROWD_CONTROL under Show All (cc group
+    -- renders CC while on, and a subtracted cc -- parked by the apply pass --
+    -- must stay hidden everywhere), when cc is effectively on, and when the
+    -- hide lane subtracts cc in add mode.
+    local ccOn = allOn or (eff.cc and true or false) or NegHas("cc")
 
     -- Two dispel flavors: "you" = RAID_PLAYER_DISPELLABLE token; "typed" = any dispel
     -- type (candidate include map, not tokenizable, dedup rides excludeDispelTypes instead of a !token).
+    -- dispelActive covers the hide lane too: a hidden dispel category emits no
+    -- record but its !token / typed exclude must still reach the others.
     local dispelOn = eff.dispel and true or false
+    local dispelActive = dispelOn or NegHas("dispel")
     local dispelMode = (dm.dispelMode == "typed") and "typed" or "you"
-    local dispelToken = (dispelOn and dispelMode == "you") and "RAID_PLAYER_DISPELLABLE" or nil
-    -- Typed exclude applies only while the typed dispel record is really BUILT (claimed, or base without Show All), else Show All excludes debuffs nothing re-adds.
-    local typedMap = dispelOn and dispelMode == "typed"
-        and ((claims.dispel or fxCats.dispel or not allOn or (sub and sub.dispel)) and true or false)
+    local dispelToken = (dispelActive and dispelMode == "you") and "RAID_PLAYER_DISPELLABLE" or nil
+    -- Typed exclude applies only while the typed dispel record is really BUILT (claimed, or base without Show All)
+    -- or the category is hidden, else Show All excludes debuffs nothing re-adds.
+    local typedMap = dispelActive and dispelMode == "typed"
+        and ((claims.dispel or fxCats.dispel or not allOn or NegHas("dispel")) and true or false)
 
     -- Internal exclude set: hardcoded sated list (honoring Show Lust Debuff
     -- opt-out) plus the always-hide pair. 68824's never-secret identity-gate
@@ -459,6 +519,17 @@ local function BuildRecords(s, dm)
         if typedMap and not cf.includeDispelTypes then
             cf.excludeDispelTypes = TYPED_DEBUFFS
         end
+        -- Add-mode hide lane, boolean categories: false-valued candidate booleans
+        -- ride every positive record (never overriding a record's own positive
+        -- boolean; the merged bossrole record skips both constituents). Under
+        -- Show All the all-record's explicit sub block owns this instead, so
+        -- legacy record shapes stay byte-identical.
+        if neg and not allOn then
+            if neg.boss and cf.isBossAura == nil and cf.isBossOrRoleAura == nil then cf.isBossAura = false end
+            if neg.role and cf.isRoleAura == nil and cf.isBossOrRoleAura == nil then cf.isRoleAura = false end
+            if neg.priority and cf.isPriorityAura == nil then cf.isPriorityAura = false end
+            if neg.nonplayer and cf.isFromPlayerOrPlayerPet == nil then cf.isFromPlayerOrPlayerPet = true end
+        end
         return cf
     end
 
@@ -471,7 +542,7 @@ local function BuildRecords(s, dm)
     local function Neg(toks, negCC, negDispel, negRaid)
         if negCC and ccOn then toks[#toks + 1] = "!CROWD_CONTROL" end
         if negDispel and dispelToken then toks[#toks + 1] = "!" .. dispelToken end
-        if negRaid and eff.raid then toks[#toks + 1] = "!RAID" end
+        if negRaid and (eff.raid or NegHas("raid")) then toks[#toks + 1] = "!RAID" end
         return toks
     end
 
@@ -533,7 +604,7 @@ local function BuildRecords(s, dm)
 
     local function BoolTokens()
         local toks = Neg({ "HARMFUL" }, true, true, true)
-        if eff.raidcombat then toks[#toks + 1] = "!RAID_IN_COMBAT" end
+        if eff.raidcombat or NegHas("raidcombat") then toks[#toks + 1] = "!RAID_IN_COMBAT" end
         return toks
     end
     -- Boss/role merge into one record only when they route to the SAME place; split claims build separate records.
@@ -1074,16 +1145,21 @@ local function EnsureTileContainer(d, t)
         local health = d.rfcHealth
         local unit = d.rfcUnit
         if not (button and health) then return end
-        local dm2 = DM()
+        -- Re-resolve from the ACTIVE union: a tile that left it between
+        -- queue and run (delete, spec swap, per-spec disable) builds nothing.
+        local act = ns.DM_ActiveTiles()
         local t2
-        if dm2 and dm2.tiles then
-            for i = 1, #dm2.tiles do
-                if dm2.tiles[i].id == tileId then t2 = dm2.tiles[i] break end
+        if act then
+            for i = 1, #act do
+                if act[i].id == tileId then t2 = act[i] break end
             end
         end
         if not t2 then return end
         local s2 = SettingsFor(d)
         if not s2 then return end
+        -- EffectFilterFor below reads dm (dispelMode); the active-union
+        -- re-resolve above no longer carries it.
+        local dm2 = DM() or {}
         local styleKey = EnsureTileStyle(d, s2, t2)
         local container = AK.CreateContainerShell(button, {
             point = { "CENTER", health, "CENTER" },
@@ -1190,10 +1266,11 @@ function ns.DM_ApplyDebuffConfig(container, d, s, styleKey)
     -- hosts it as a normal record instead (tile style, glow stays base-only).
     if declared.cc then
         -- A sized base cc record supplants the legacy group: park it or CC debuffs render twice. Under Show All
-        -- the cc lead/glow group is on unless Crowd Control is checked (= subtracted); in add mode it is on
-        -- exactly when checked; fx routing forces it either way.
+        -- the cc lead/glow group is on unless Crowd Control rides the hide lane (dm.neg.cc = subtracted); in add
+        -- mode it is on exactly when the show lane checks it; fx routing forces it either way.
         local allOn = dm.all ~= false
-        local ccPicked = (allOn and dm.cc ~= true) or (not allOn and dm.cc == true)
+        local ccHidden = dm.neg ~= nil and dm.neg.cc == true
+        local ccPicked = (allOn and not ccHidden) or (not allOn and dm.cc == true)
         local ccBase = (ccPicked or (fxCats and fxCats.cc)) and not claims.cc
             and not baseSizedCC
         container:SetAuraGroupMaxFrameCount("cc", ccBase and cap or 0)
@@ -1273,7 +1350,10 @@ function ns.DM_ApplyDebuffConfig(container, d, s, styleKey)
 
     -- Tiles. Stash the host ref the deferred tile builds need (the base debuff container is parented to the unit button on every build path).
     d.dmHost = d.dmHost or (container.GetParent and container:GetParent())
-    local dmTiles = dm.tiles
+    -- The ACTIVE union: tiles from buckets the current spec doesn't render
+    -- (spec swaps, per-spec disables) fall out of `present` below and park
+    -- their containers exactly like a deleted tile.
+    local dmTiles = ns.DM_ActiveTiles()
     local live = d.dmTiles
     local gatedTiles
     if dmTiles then
@@ -1328,10 +1408,14 @@ function ns.DM_ApplyDebuffConfig(container, d, s, styleKey)
                                     local s2 = SettingsFor(d)
                                     local dm2 = DM() or {}
                                     if not s2 then return end
+                                    -- Active-union re-resolve (delete/spec
+                                    -- swap/per-spec disable between queue and
+                                    -- run = skip).
+                                    local act = ns.DM_ActiveTiles()
                                     local t2
-                                    if dm2.tiles then
-                                        for ti2 = 1, #dm2.tiles do
-                                            if dm2.tiles[ti2].id == tileId then t2 = dm2.tiles[ti2] break end
+                                    if act then
+                                        for ti2 = 1, #act do
+                                            if act[ti2].id == tileId then t2 = act[ti2] break end
                                         end
                                     end
                                     local host = d.dmHost
@@ -1547,13 +1631,13 @@ end
 -------------------------------------------------------------------------------
 -- Tile list editing API (consumed by the options page)
 -------------------------------------------------------------------------------
-function ns.DM_Tiles()
-    local dm = DM()
-    if not dm then return nil end
-    if not dm.tiles then dm.tiles = {} end
-    -- Read-heal: expand the old single-cat + width/height square shape once.
-    for i = 1, #dm.tiles do
-        local t = dm.tiles[i]
+-- Read-heals shared by every bucket: expand the old single-cat + width/
+-- height square shape, effect single-cat, fx single-config and healthcolor
+-- alpha once. Legacy shapes only ever existed in the all-specs array, but
+-- healing everywhere is idempotent and keeps one path.
+local function HealTiles(arr)
+    for i = 1, #arr do
+        local t = arr[i]
         if t.type == "square" and not t.claim then
             t.claim = {}
             if t.cat then t.claim[t.cat] = true; t.cat = nil end
@@ -1577,16 +1661,152 @@ function ns.DM_Tiles()
             t.opacity = math.floor((t.color.a * 100) + 0.5)
         end
     end
+end
+
+-- The ALL-SPECS bucket: the legacy dm.tiles array, IN PLACE (zero
+-- migration; profiles opened by older builds keep rendering it).
+function ns.DM_Tiles()
+    local dm = DM()
+    if not dm then return nil end
+    if not dm.tiles then dm.tiles = {} end
+    HealTiles(dm.tiles)
     return dm.tiles
 end
 
-function ns.DM_AddTile(tileType)
+-------------------------------------------------------------------------------
+-- Editing-spec buckets. dm.tiles IS "allspecs"; every other bucket lives
+-- under dm.specTiles[key] = { tiles, inhDis }, key = "nonhealer"/"tanks"/
+-- "dps"/"healers" (group buckets) or "spec<ID>" (a concrete spec -- healer
+-- specs included; the Debuff Manager has no healer-key legacy). Tile ids
+-- stay globally unique across buckets (one shared dm.nextTileId), so
+-- per-spec disables key on the bare tile id. Absent specTiles = feature
+-- unused = the active union degenerates to the legacy array.
+-------------------------------------------------------------------------------
+local function SpecBucket(dm, key, create)
+    local st = dm.specTiles
+    if not st then
+        if not create then return nil end
+        st = {}; dm.specTiles = st
+    end
+    local b = st[key]
+    if not b then
+        if not create then return nil end
+        b = { tiles = {}, inhDis = {} }
+        st[key] = b
+    end
+    if not b.tiles then b.tiles = {} end
+    if not b.inhDis then b.inhDis = {} end
+    return b
+end
+
+-- Bucket tile array for an EDITED view ("allspecs"/nil = the legacy array).
+function ns.DM_BucketTiles(key, create)
+    if not key or key == "allspecs" then return ns.DM_Tiles() end
+    local dm = DM()
+    if not dm then return nil end
+    local b = SpecBucket(dm, key, create)
+    if not b then return nil end
+    HealTiles(b.tiles)
+    return b.tiles
+end
+
+-- Per-spec disable of a GROUP bucket's tile, stored on the viewing spec's
+-- concrete "spec<ID>" bucket (ids are global, so the bare id suffices).
+function ns.DM_InhDisabled(concreteKey, id)
+    local dm = DM()
+    local b = dm and SpecBucket(dm, concreteKey, false)
+    return (b and b.inhDis[id]) and true or false
+end
+
+function ns.DM_SetInhDisabled(concreteKey, id, disabled)
+    local dm = DM()
+    if not (dm and concreteKey and id) then return end
+    local b = SpecBucket(dm, concreteKey, true)
+    b.inhDis[id] = disabled and true or nil
+end
+
+-- The ACTIVE union: every tile the CURRENT spec renders, in bucket order
+-- (allspecs, nonhealer, role group, own spec); group tiles the spec has
+-- per-spec disabled drop out here. Returns a FRESH array per call -- the
+-- apply pass iterates one while nested BuildRecords/EffectiveState calls
+-- build another, so a reused scratch would be wiped under the iterator.
+-- Config-pass frequency only (never per-frame), so the allocation is fine.
+-- The tile TABLES inside are the stable store tables. Role/tracked
+-- resolution rides the Buff Manager helpers (same ns, resolved at call
+-- time).
+function ns.DM_ActiveTiles()
+    -- Read dm.tiles WITHOUT materializing it (DM_Tiles creates the array;
+    -- this runs on the runtime config path and must not write an empty
+    -- table into every tile-less profile's SavedVariables).
+    local dm = DM()
+    if not dm then return nil end
+    local base = dm.tiles
+    if base then HealTiles(base) end
+    local out = {}
+    local st = dm.specTiles
+    local sid
+    do
+        local idx = GetSpecialization and GetSpecialization()
+        sid = idx and GetSpecializationInfo and GetSpecializationInfo(idx) or nil
+    end
+    local con = st and sid and st["spec" .. sid] or nil
+    local dis = con and con.inhDis or nil
+    if base then
+        for i = 1, #base do
+            local t = base[i]
+            if not (dis and dis[t.id]) then out[#out + 1] = t end
+        end
+    end
+    if st and sid then
+        local function AddBucket(key, filtered)
+            local b = st[key]
+            local tl = b and b.tiles
+            if not tl then return end
+            HealTiles(tl)
+            for i = 1, #tl do
+                local t = tl[i]
+                if not (filtered and dis and dis[t.id]) then out[#out + 1] = t end
+            end
+        end
+        if not (ns.BM_SpecKeyForSpecID and ns.BM_SpecKeyForSpecID(sid)) then
+            AddBucket("nonhealer", true)
+        end
+        local roleKey = ns.BM_RoleBucketForSpecID and ns.BM_RoleBucketForSpecID(sid)
+        if roleKey then AddBucket(roleKey, true) end
+        AddBucket("spec" .. sid, false)
+    end
+    return out
+end
+
+function ns.DM_AddTile(tileType, bucketKey)
     local p = ns.db and ns.db.profile
     if not p then return nil end
     local dm = p.dmDebuff
     if not dm then dm = {}; p.dmDebuff = dm end
     if not dm.tiles then dm.tiles = {} end
     local id = (dm.nextTileId or 1)
+    -- Counter heal: ids must stay GLOBALLY unique across every bucket
+    -- (per-spec disables key on the bare id), so a reset/hand-edited
+    -- counter re-bases above every existing tile before allocating.
+    do
+        local maxId = 0
+        for i = 1, #dm.tiles do
+            local tid = tonumber(dm.tiles[i].id) or 0
+            if tid > maxId then maxId = tid end
+        end
+        if dm.specTiles then
+            for _, b in pairs(dm.specTiles) do
+                local tl = b.tiles
+                if tl then
+                    for i = 1, #tl do
+                        local tid = tonumber(tl[i].id) or 0
+                        if tid > maxId then maxId = tid end
+                    end
+                end
+            end
+        end
+        if id <= maxId then id = maxId + 1 end
+    end
     dm.nextTileId = id + 1
     local t = { id = id, enabled = true, type = tileType or "icons" }
     if t.type == "icons" or t.type == "square" then
@@ -1619,15 +1839,58 @@ function ns.DM_AddTile(tileType)
             t.color = { r = 1, g = 0.78, b = 0.38, a = 1 }
         end
     end
-    dm.tiles[#dm.tiles + 1] = t
+    -- The edited bucket owns the new tile; ids come from the ONE shared
+    -- counter above regardless of bucket.
+    local target = dm.tiles
+    if bucketKey and bucketKey ~= "allspecs" then
+        target = SpecBucket(dm, bucketKey, true).tiles
+    end
+    target[#target + 1] = t
+    return t
+end
+
+-- Deep-copies a tile into another bucket (the right-click "Add To" menu):
+-- full settings clone under a fresh GLOBAL id; the source is untouched.
+-- DM_AddTile owns bucket creation + the healed id allocation; its default
+-- fields are then replaced wholesale by the clone (id kept).
+function ns.DM_CopyTile(src, bucketKey)
+    if not src then return nil end
+    local t = ns.DM_AddTile(src.type, bucketKey)
+    if not t then return nil end
+    local keep = t.id
+    local function Copy(v)
+        if type(v) ~= "table" then return v end
+        local o = {}
+        for k, v2 in pairs(v) do o[k] = Copy(v2) end
+        return o
+    end
+    for k in pairs(t) do t[k] = nil end
+    for k, v in pairs(src) do t[k] = Copy(v) end
+    t.id = keep
     return t
 end
 
 function ns.DM_DeleteTile(id)
     local dm = DM()
-    if not (dm and dm.tiles) then return end
-    for i = #dm.tiles, 1, -1 do
-        if dm.tiles[i].id == id then table.remove(dm.tiles, i) end
+    if not dm then return end
+    if dm.tiles then
+        for i = #dm.tiles, 1, -1 do
+            if dm.tiles[i].id == id then table.remove(dm.tiles, i) end
+        end
+    end
+    local st = dm.specTiles
+    if st then
+        for _, b in pairs(st) do
+            local tl = b.tiles
+            if tl then
+                for i = #tl, 1, -1 do
+                    if tl[i].id == id then table.remove(tl, i) end
+                end
+            end
+            -- Sweep the per-spec disable keys everywhere: ids are global and
+            -- never reused, so a deleted tile's key can only leak.
+            if b.inhDis then b.inhDis[id] = nil end
+        end
     end
 end
 

@@ -589,6 +589,17 @@ local function EvalActiveUnit(frame)
     if not frame then return end
     local resolved = ResolveActiveUnit(frame)
     if resolved and resolved ~= frame.unit then
+        -- Never adopt a unit that does not exist yet. Vehicle entry resolves
+        -- "vehicle" at transition START, before the unit is queryable: adopting
+        -- then paints empty text (UnitName nil renders ""), and every later
+        -- vehicle edge no-ops on resolved == frame.unit, so an idle vehicle
+        -- stays blank for the whole ride. Holding the OLD unit keeps this
+        -- re-firing on each transition edge until the resolved unit is real,
+        -- and THAT swap's RepaintAll paints with live data -- the same guard
+        -- the oUF-era swap had. The base unit is exempt: it must always be
+        -- adoptable (nonexistent target/focus frames hide via unit-watch, and
+        -- refusing the base would strand a stale token instead).
+        if resolved ~= frame._euiBaseUnit and not UnitExists(resolved) then return end
         frame.unit = resolved
         Engine.RepaintAll(frame, "UnitChanged")
     end
