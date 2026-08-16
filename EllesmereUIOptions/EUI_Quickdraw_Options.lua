@@ -459,9 +459,9 @@ initFrame:SetScript("OnEvent", function(self)
                 local cap = ns.NestChildCap and ns.NestChildCap(editPalette)
                 local child = ns.ChildIndex(slot)
                 local kids = ns.ChildSlots and ns.ChildSlots(child, cap)
-                caption = ("nested action menu, %d %s"):format(
-                    kids and #kids or 0,
-                    (kids and #kids == 1) and "entry" or "entries")
+                caption = (kids and #kids == 1)
+                    and EllesmereUI.Lf("nested action menu, %1$d entry", 1)
+                    or  EllesmereUI.Lf("nested action menu, %1$d entries", kids and #kids or 0)
                 -- Said where the user meets it, rather than left to be
                 -- discovered by counting the entries that turned up: a menu
                 -- holding more than the halo can show looks broken otherwise.
@@ -1613,6 +1613,41 @@ initFrame:SetScript("OnEvent", function(self)
         return out
     end
 
+    local function PingSlots()
+        return {
+            {
+                kind = "macrotext",
+                name = "Look",
+                macrotext = "/ping look",
+                icon = { atlas = "Ping_Marker_Icon_NonThreat" },
+            },
+            {
+                kind = "macrotext",
+                name = "Assist",
+                macrotext = "/ping assist",
+                icon = { atlas = "Ping_Marker_Icon_Assist" },
+            },
+            {
+                kind = "macrotext",
+                name = "Attack",
+                macrotext = "/ping attack",
+                icon = { atlas = "Ping_Marker_Icon_Attack" },
+            },
+            {
+                kind = "macrotext",
+                name = "Warning",
+                macrotext = "/ping warning",
+                icon = { atlas = "Ping_Marker_Icon_Warning" },
+            },
+            {
+                kind = "macrotext",
+                name = "On My Way",
+                macrotext = "/ping onmyway",
+                icon = { atlas = "Ping_Marker_Icon_OnMyWay" },
+            },
+        }
+    end
+
     -- The base item plus its two expansion siblings, then the toy variants.
     -- The toys all share one cooldown and one destination, so past MAX_SLOTS
     -- the tail is interchangeable with what already made it in.
@@ -1877,6 +1912,7 @@ initFrame:SetScript("OnEvent", function(self)
     local PALETTE_PRESETS = {
         { label = "Target Markers", build = TargetMarkerSlots },
         { label = "World Markers",  build = WorldMarkerSlots },
+        { label = "Pings",          build = PingSlots },
         { label = "Hearthstones",   build = HearthstoneSlots },
         { label = "Teleports",      build = TeleportSlots },
         { label = "Potions",        build = PotionSlots },
@@ -1928,7 +1964,11 @@ initFrame:SetScript("OnEvent", function(self)
     local function MenuRow(menu, i, icon, label, onClick)
         local r = menu:GetRow(i)
         if icon then
-            r.icon:SetTexture(icon)
+            if type(icon) == "table" and icon.atlas then
+                r.icon:SetAtlas(icon.atlas)
+            else
+                r.icon:SetTexture(icon)
+            end
             r.icon:Show()
             r.label:ClearAllPoints()
             r.label:SetPoint("LEFT", r.icon, "RIGHT", 6, 0)
@@ -2522,11 +2562,11 @@ initFrame:SetScript("OnEvent", function(self)
             -- Right-click means two different things on a plainMouse picker
             -- depending on whether it is armed, so it has to say which.
             local tip = plainMouse
-                and "Left-click to set a keybind, then press any key or\n"
+                and EllesmereUI.L("Left-click to set a keybind, then press any key or\n"
                     .. "click any mouse button to use it.\n"
-                    .. "Escape cancels. Right-click here to unbind."
-                or "Left-click to set a keybind.\nRight-click to unbind."
-            if intro then tip = intro .. "\n\n" .. tip end
+                    .. "Escape cancels. Right-click here to unbind.")
+                or EllesmereUI.L("Left-click to set a keybind.\nRight-click to unbind.")
+            if intro then tip = EllesmereUI.L(intro) .. "\n\n" .. tip end
             EllesmereUI.ShowWidgetTooltip(self, tip)
         end)
         kbBtn:SetScript("OnLeave", function()

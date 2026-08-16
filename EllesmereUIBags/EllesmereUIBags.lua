@@ -218,6 +218,35 @@ function EUI_Bags:SetSelectedView(idx)
     selectedGroupName = nil
 end
 
+-- Invalidate categories after the equipment-set list changes (event or the
+-- split-mode toggle). Re-resolves the selection by stable key: the rebuild
+-- shifts indices, and "EquipSet:"..setID survives renames; a vanished
+-- category/group falls back to All Items.
+function EUI_Bags.InvalidateSetCategories()
+    local mgr = _G.EUI_CategoryManager
+    if not mgr then return end
+    local selKey
+    if selectedCategoryIndex > 0 then
+        local cat = mgr:GetCategories()[selectedCategoryIndex]
+        selKey = cat and cat._defaultName
+    end
+    mgr:OnEquipmentSetsChanged()
+    if selKey then
+        local found = 0
+        for i, cat in ipairs(mgr:GetCategories()) do
+            if cat._defaultName == selKey then found = i; break end
+        end
+        selectedCategoryIndex = found
+    end
+    if selectedGroupName then
+        local alive = false
+        for _, cat in ipairs(mgr:GetCategories()) do
+            if cat.groupName == selectedGroupName then alive = true; break end
+        end
+        if not alive then selectedGroupName = nil; selectedCategoryIndex = 0 end
+    end
+end
+
 -- Visual sort: quality desc > name > itemID > bag > slot; the bag+slot tiebreaker makes output deterministic (Lua 5.1 sort is unstable).
 local _trackRank = EUI._TRACK_RANK
 -- Gear category lookup: built lazily, maps catIdx -> true for gear categories
@@ -590,6 +619,73 @@ end
 local itemSlots    = {}
 local reagentSlots = {}
 local bagSlots     = {}
+
+-------------------------------------------------------------------------------
+--  Pawn bag upgrade advisor integration
+-------------------------------------------------------------------------------
+local pawnRegistered = false
+local pawnPending = setmetatable({}, { __mode = "k" })
+local pawnPositioned = setmetatable({}, { __mode = "k" })
+local pawnRetryScheduled = false
+local UpdatePawnArrow
+
+local function RetryPawnArrows()
+    pawnRetryScheduled = false
+    local pending = pawnPending
+    pawnPending = setmetatable({}, { __mode = "k" })
+
+    for btn, expectedLink in pairs(pending) do
+        local parent = btn:GetParent()
+        local currentLink = parent and C_Container.GetContainerItemLink(parent:GetID(), btn:GetID())
+        if btn:IsShown() and currentLink == expectedLink then
+            UpdatePawnArrow(btn, currentLink)
+        end
+    end
+end
+
+UpdatePawnArrow = function(btn, itemLink)
+    if not pawnRegistered or not btn.UpgradeIcon then return end
+    if not pawnPositioned[btn] then
+        btn.UpgradeIcon:ClearAllPoints()
+        btn.UpgradeIcon:SetPoint("BOTTOMRIGHT", btn, "BOTTOMRIGHT", -1, 1)
+        btn.UpgradeIcon:SetSize(16, 16)
+        pawnPositioned[btn] = true
+    end
+    btn.UpgradeIcon:Hide()
+
+    if not itemLink or not PawnCommon or not PawnCommon.ShowBagUpgradeAdvisor then
+        pawnPending[btn] = nil
+        return
+    end
+
+    local isUpgrade = PawnShouldItemLinkHaveUpgradeArrow(itemLink, true)
+    if isUpgrade == nil then
+        pawnPending[btn] = itemLink
+        if not pawnRetryScheduled then
+            pawnRetryScheduled = true
+            C_Timer.After(0, RetryPawnArrows)
+        end
+    else
+        pawnPending[btn] = nil
+        btn.UpgradeIcon:SetShown(isUpgrade)
+    end
+end
+
+local function RefreshPawnArrows()
+    if EUI_Bags:IsVisible() then EUI_Bags:RefreshInventory() end
+    if EUI_BagsReagent:IsVisible() then EUI_BagsReagent:RefreshInventory() end
+end
+
+local function RegisterPawnIntegration()
+    if pawnRegistered or BP().enhancedBags == false then return end
+    if type(PawnRegisterThirdPartyBag) ~= "function"
+        or type(PawnShouldItemLinkHaveUpgradeArrow) ~= "function" then return end
+
+    pawnRegistered = true
+    PawnRegisterThirdPartyBag("EllesmereUI Bags", {
+        RefreshAll = RefreshPawnArrows,
+    })
+end
 
 -------------------------------------------------------------------------------
 --  Per-category state (for targeted sidebar updates on item count changes)
@@ -2098,6 +2194,9 @@ local function GetOrCreateSlot(idx)
     btn.BindTypeText:SetFont(fontPath, bindTypeFontSize, (EllesmereUI and EllesmereUI.SlugFlag and EllesmereUI.SlugFlag("OUTLINE, SLUG")) or "OUTLINE, SLUG")
     btn.BindTypeText:SetText("")
 
+    -- Equipment set name FontString is lazy-created in RenderButton: never
+    -- built while Show Set Name on Gear is off (zero cost disabled).
+
     itemSlots[idx] = btn
     return btn
 end
@@ -2236,6 +2335,7 @@ local function RefreshTextSizes()
         if btn.KeystoneText then btn.KeystoneText:SetFont(fontPath, countSize, (EllesmereUI and EllesmereUI.SlugFlag and EllesmereUI.SlugFlag("OUTLINE, SLUG")) or "OUTLINE, SLUG") end
         if btn.KeystoneDungeonText then btn.KeystoneDungeonText:SetFont(fontPath, math.max(countSize - 2, 7), (EllesmereUI and EllesmereUI.SlugFlag and EllesmereUI.SlugFlag("OUTLINE, SLUG")) or "OUTLINE, SLUG") end
         if btn.BindTypeText then btn.BindTypeText:SetFont(fontPath, bindTypeSize, (EllesmereUI and EllesmereUI.SlugFlag and EllesmereUI.SlugFlag("OUTLINE, SLUG")) or "OUTLINE, SLUG") end
+        if btn.SetNameText then btn.SetNameText:SetFont(fontPath, BP().bagSetNameFontSize or 9, (EllesmereUI and EllesmereUI.SlugFlag and EllesmereUI.SlugFlag("OUTLINE, SLUG")) or "OUTLINE, SLUG") end
     end
     for _, btn in pairs(reagentSlots) do
         if btn.Count then EllesmereUI.ApplyIconTextFont(btn.Count, fontPath, countSize, "bags") end
@@ -2330,6 +2430,7 @@ local function RenderButton(btn, data, _, col, row, startX, currentY, _, interac
         if btn.KeystoneText then btn.KeystoneText:SetText("") end
         if btn.KeystoneDungeonText then btn.KeystoneDungeonText:SetText("") end
         if btn.BindTypeText then btn.BindTypeText:SetText("") end
+        if btn.SetNameText then btn.SetNameText:SetText("") end
         if btn.ProfessionQualityOverlay then btn.ProfessionQualityOverlay:Hide() end
         if btn.IconBorder then btn.IconBorder:Hide() end
         if btn.NormalTexture then btn.NormalTexture:SetAlpha(0) end
@@ -2409,6 +2510,36 @@ local function RenderButton(btn, data, _, col, row, startX, currentY, _, interac
             else
                 btn.BindTypeText:SetText("")
             end
+        end
+
+        -- Equipment set name bottom-center (stamped by ClassifyAll for set gear;
+        -- stamping is gated on the toggle, so _setName is nil while it's off).
+        -- FontString is lazy: never built while off; once built it is cleared on
+        -- every render because buttons are pooled.
+        if data._setName then
+            -- Yields when the upgrade-track rank occupies Count in the same row
+            -- (mirrors the rank-display condition in the ItemLevelText block above)
+            local rankShown = data._isGear and BP().bagShowTrackRank
+                and BP().showItemlevelInBags ~= false
+                and (data._giTrackRank or "") ~= ""
+            if not rankShown then
+                if not btn.SetNameText then
+                    local overlay = btn._textOverlay or btn
+                    btn.SetNameText = overlay:CreateFontString(nil, "OVERLAY", nil, 7)
+                    btn.SetNameText:SetPoint("BOTTOM", btn, "BOTTOM", 0, 2)
+                    btn.SetNameText:SetTextColor(1, 1, 1, 1)
+                    btn.SetNameText:SetJustifyH("CENTER")
+                    btn.SetNameText:SetWordWrap(false)
+                    btn.SetNameText:SetMaxLines(1)
+                    btn.SetNameText:SetWidth(SLOT_SIZE - 4)
+                    btn.SetNameText:SetFont(GetFont(), BP().bagSetNameFontSize or 9, (EllesmereUI and EllesmereUI.SlugFlag and EllesmereUI.SlugFlag("OUTLINE, SLUG")) or "OUTLINE, SLUG")
+                end
+                btn.SetNameText:SetText(data._setName)
+            elseif btn.SetNameText then
+                btn.SetNameText:SetText("")
+            end
+        elseif btn.SetNameText then
+            btn.SetNameText:SetText("")
         end
 
         -- Profession quality overlay: let SetItemButtonQuality decide so every item type is covered, not just guessed "profession" ones.
@@ -2514,6 +2645,7 @@ local function RenderButton(btn, data, _, col, row, startX, currentY, _, interac
         end
 
     end
+    UpdatePawnArrow(btn, data.itemLink)
 end
 
 -------------------------------------------------------------------------------
@@ -3272,6 +3404,16 @@ _dragUpdateFrame:SetScript("OnUpdate", function()
                 end
             end
 
+            -- Set children are a contiguous runtime block re-anchored on rebuild:
+            -- an insert between them would not actually land there, so suppress
+            -- the line instead of promising a position the drop can't keep.
+            if targetBtn and targetBtn._isEquipSet then
+                if line then line:Hide() end
+                _dragDropTarget = nil
+                _dragInsertGroup = nil
+                return
+            end
+
             -- Determine if insert position is inside a group
             local insideGroup = nil
             local fromNoGroup = cats[_dragFromCatIdx] and cats[_dragFromCatIdx].noGroup
@@ -3466,6 +3608,9 @@ local function StopSidebarDrag()
                     for b = #ordered, 1, -1 do
                         table.insert(cats, insertAt, ordered[b])
                     end
+                    -- Persist the block move; without this it reverts on the next
+                    -- rebuild (equip-set groups rebuild on every set change).
+                    EUI_CategoryManager:SaveState()
                 end
             elseif fromGroup then
                 -- Grouped member dragged to insert position
@@ -3717,6 +3862,8 @@ local function ShowCategoryContextMenu(btn, catIdx, isGroupHeader, isGroupMember
     local cats = EUI_CategoryManager:GetCategories()
     local cat = cats[catIdx]
     if not cat then return end
+    -- Set children have no menu actions (rename/group/hide all N/A): no empty menu
+    if cat.isEquipSet then return end
 
     MenuUtil.CreateContextMenu(btn, function(_, rootDescription)
         local myGroup = cat.groupName
@@ -3777,6 +3924,8 @@ local function ShowCategoryContextMenu(btn, catIdx, isGroupHeader, isGroupMember
                 EUI_Bags:RefreshInventory()
             end)
         else
+            -- Equip-set categories are named by the set; renames would not persist
+            if not cat.isEquipSet then
             rootDescription:CreateButton(EllesmereUI.L("Rename"), function()
                 if not EUI.ShowInputPopup then return end
                 EUI:ShowInputPopup({
@@ -3793,6 +3942,7 @@ local function ShowCategoryContextMenu(btn, catIdx, isGroupHeader, isGroupMember
                     end,
                 })
             end)
+            end
 
             if not cat.noGroup then
                 local groupSub = rootDescription:CreateButton(EllesmereUI.L("Create Group With"))
@@ -3819,7 +3969,9 @@ local function ShowCategoryContextMenu(btn, catIdx, isGroupHeader, isGroupMember
                 end
             end
 
-            if not cat.noMove then
+            -- Equip-set children don't render standalone in All Items (they fold
+            -- into their anchor's section), so hide/show doesn't apply to them.
+            if not cat.noMove and not cat.isEquipSet then
                 local catKey = cat._defaultName
                 local catHidden = hiddenSet[catKey]
                 rootDescription:CreateButton(catHidden and EllesmereUI.L("Show in All Items") or EllesmereUI.L("Hide in All Items"), function()
@@ -3859,16 +4011,43 @@ local function BuildSidebarButtons(categoryCounts, totalCount)
         if _k ~= _dbt then displayList[#displayList + 1] = _fixedViews[_k] end
     end
 
+    -- Split-mode set children: rendered nested under the "Item Set Gear" anchor
+    -- wherever it sits (plain or inside a group), skipped by the main loop.
+    -- Scan gated on split mode: zero extra work while it's off.
+    local setChildren, setChildTotal = nil, 0
+    if BP().bagSplitSetGearBySet then
+        for i, c in ipairs(cats) do
+            if c.isEquipSet then
+                setChildren = setChildren or {}
+                setChildren[#setChildren + 1] = i
+                setChildTotal = setChildTotal + (categoryCounts and categoryCounts[i] or 0)
+            end
+        end
+    end
+    local function EmitSetChildren(level)
+        if not setChildren or collapsed then return end
+        for _, sci in ipairs(setChildren) do
+            local sc = cats[sci]
+            displayList[#displayList + 1] = {
+                catIdx = sci, name = sc.name, icon = sc.icon or 134400,
+                count = categoryCounts and categoryCounts[sci] or 0,
+                indent = level, isEquipSet = true,
+            }
+        end
+    end
+    local function IsSetAnchor(c) return c and c.isSetGear and not c.isEquipSet end
+
     local renderedGroups = {}
     for ci, cat in ipairs(cats) do
         if cat.groupName then
             if not renderedGroups[cat.groupName] then
                 renderedGroups[cat.groupName] = true
-                -- Group header: sum counts of all members
+                -- Group header: sum counts of all members (+ set children on the anchor)
                 local members = EUI_CategoryManager:GetGroupMembers(cat.groupName)
                 local groupCount = 0
                 for _, mi in ipairs(members) do
                     groupCount = groupCount + (categoryCounts and categoryCounts[mi] or 0)
+                    if IsSetAnchor(cats[mi]) then groupCount = groupCount + setChildTotal end
                 end
                 -- Use first member's icon for group
                 local firstCat = cats[members[1]]
@@ -3888,17 +4067,23 @@ local function BuildSidebarButtons(categoryCounts, totalCount)
                 if not collapsed then
                     for _, mi in ipairs(members) do
                         local mc = cats[mi]
+                        local anchor = IsSetAnchor(mc)
                         displayList[#displayList + 1] = {
                             catIdx = mi, name = mc.name, icon = mc.icon or 134400, isAtlas = mc.isAtlas,
-                            count = categoryCounts and categoryCounts[mi] or 0,
+                            count = (categoryCounts and categoryCounts[mi] or 0) + (anchor and setChildTotal or 0),
                             indent = true, groupName = cat.groupName, isGroupMember = true,
                             isUserCreated = mc.isUserCreated,
                         }
+                        -- Set children: third level under a grouped anchor
+                        if anchor then EmitSetChildren(2) end
                     end
                 end
             end
+        elseif cat.isEquipSet then
+            -- Emitted by EmitSetChildren under the anchor
         else
-            local count = categoryCounts and categoryCounts[ci] or 0
+            local anchor = IsSetAnchor(cat)
+            local count = (categoryCounts and categoryCounts[ci] or 0) + (anchor and setChildTotal or 0)
             local isUserCreated = not cat.isCatchAll and (not cat.types or #cat.types == 0)
             -- Skip Pinned/Recent Items if disabled
             if cat.isPinned and BP().bagShowPinnedItems == false then
@@ -3907,6 +4092,7 @@ local function BuildSidebarButtons(categoryCounts, totalCount)
                 -- skip
             else
                 displayList[#displayList + 1] = { catIdx = ci, name = cat.name, icon = cat.icon or 134400, isAtlas = cat.isAtlas, count = count, noMove = cat.noMove, isPinned = cat.isPinned, isRecent = cat.isRecent, isUserCreated = cat.isUserCreated }
+                if anchor then EmitSetChildren(1) end
             end
         end
     end
@@ -4016,7 +4202,8 @@ local function BuildSidebarButtons(categoryCounts, totalCount)
             end)
             btn:SetScript("OnMouseDown", function(self, button)
                 if button ~= "LeftButton" then return end
-                if self._catIdx <= 0 or self._noMove then return end
+                -- Equip-set cats: ReorderCategory rejects them; don't start the drag either
+                if self._catIdx <= 0 or self._noMove or self._isEquipSet then return end
                 self._didDrag = false
                 local _, startY = GetCursorPosition()
                 self._dragStartY = startY
@@ -4073,6 +4260,7 @@ local function BuildSidebarButtons(categoryCounts, totalCount)
         btn._isGroupMember = entry.isGroupMember or false
         btn._groupName = entry.groupName
         btn._noMove = entry.noMove or false
+        btn._isEquipSet = entry.isEquipSet or false
         btn._isPinned = entry.isPinned or false
 
         btn:SetParent(sidebarChild or sidebar)
@@ -4080,7 +4268,9 @@ local function BuildSidebarButtons(categoryCounts, totalCount)
         btn:SetPoint("TOPLEFT", sidebarChild or sidebar, "TOPLEFT", 0, y)
         btn:SetWidth(sidebarW)
 
-        local leftPad = (entry.indent and not collapsed) and (8 + INDENT) or 8
+        -- entry.indent: true = 1 level (legacy group members), or a number of levels
+        local indentLv = (entry.indent == true and 1) or entry.indent or 0
+        local leftPad = (indentLv ~= 0 and not collapsed) and (8 + INDENT * indentLv) or 8
         btn._icon:ClearAllPoints()
         if collapsed then
             btn._icon:SetPoint("CENTER", btn, "CENTER", 0, 0)
@@ -4697,6 +4887,10 @@ function EUI_Bags:RefreshInventory()
     -- poisons it (UseContainerItem() -> ADDON_ACTION_FORBIDDEN). GetOrCreateSlot returns nil in combat (pre-warmed pool makes this rare); PLAYER_REGEN_ENABLED replays a full refresh for anything skipped.
     if InCombatLockdown() then EUI_Bags._refreshPendingCombat = true end
 
+    -- Category indices shift when the list rebuilds (split-mode set categories
+    -- come and go); rebuilt below on first IsGearCategory call, so never stale.
+    _gearCatSet = nil
+
     C_NewItems.ClearAll()
 
     -- 1. Gather items from all bags (0-4 + reagent bag 5)
@@ -4842,12 +5036,28 @@ function EUI_Bags:RefreshInventory()
     local isRecentView = recentCatIdx and selectedCategoryIndex == recentCatIdx
     local isPinnedView = pinnedCatIdx and selectedCategoryIndex == pinnedCatIdx
     local filterSet = nil  -- nil = show all
-    if selectedGroupName then
-        filterSet = {}
-        local members = EUI_CategoryManager:GetGroupMembers(selectedGroupName)
-        for _, mi in ipairs(members) do filterSet[mi] = true end
-    elseif selectedCategoryIndex > 0 and not isRecentView and not isPinnedView then
-        filterSet = { [selectedCategoryIndex] = true }
+    do
+        local cats = EUI_CategoryManager:GetCategories()
+        -- The "Item Set Gear" anchor view (and any group holding it) folds in the
+        -- split-mode set children, which hold the actual items.
+        local function AddSetChildren(anchorIdx)
+            if not BP().bagSplitSetGearBySet then return end
+            if not (cats[anchorIdx] and cats[anchorIdx].isSetGear and not cats[anchorIdx].isEquipSet) then return end
+            for i, c in ipairs(cats) do
+                if c.isEquipSet then filterSet[i] = true end
+            end
+        end
+        if selectedGroupName then
+            filterSet = {}
+            local members = EUI_CategoryManager:GetGroupMembers(selectedGroupName)
+            for _, mi in ipairs(members) do
+                filterSet[mi] = true
+                AddSetChildren(mi)
+            end
+        elseif selectedCategoryIndex > 0 and not isRecentView and not isPinnedView then
+            filterSet = { [selectedCategoryIndex] = true }
+            AddSetChildren(selectedCategoryIndex)
+        end
     end
 
     local displayItems = {}
@@ -4936,13 +5146,32 @@ function EUI_Bags:RefreshInventory()
         local n, S
         if selectedCategoryIndex > 0 and not selectedGroupName then
             n = (categoryCounts and categoryCounts[selectedCategoryIndex]) or #tempItems
+            -- The anchor view folds in its set children's items; count them too
+            if BP().bagSplitSetGearBySet then
+                local szCats = EUI_CategoryManager:GetCategories()
+                local selCat = szCats[selectedCategoryIndex]
+                if selCat and selCat.isSetGear and not selCat.isEquipSet and categoryCounts then
+                    for i, c in ipairs(szCats) do
+                        if c.isEquipSet then n = n + (categoryCounts[i] or 0) end
+                    end
+                end
+            end
             S = 1
         elseif selectedCategoryIndex == 0 and not selectedGroupName then
             -- All Items: one section per non-empty category
             n = #tempItems + #emptySlots
             S = 0
             if categoryCounts then
-                for _, c in pairs(categoryCounts) do if c and c > 0 then S = S + 1 end end
+                -- Set children fold into their anchor's section: count them as one
+                local sizeCats = BP().bagSplitSetGearBySet and EUI_CategoryManager:GetCategories() or nil
+                local hasSetChild = false
+                for i, c in pairs(categoryCounts) do
+                    if c and c > 0 then
+                        if sizeCats and sizeCats[i] and sizeCats[i].isEquipSet then hasSetChild = true
+                        else S = S + 1 end
+                    end
+                end
+                if hasSetChild then S = S + 1 end
             end
             if S < 1 then S = 1 end
         elseif selectedCategoryIndex == -2 then
@@ -5625,6 +5854,16 @@ function EUI_Bags:RefreshInventory()
                                     merged[#merged + 1] = data
                                 end
                             end
+                            -- The Item Set Gear anchor folds in its set children's items
+                            if BP().bagSplitSetGearBySet and cats[mi] and cats[mi].isSetGear and not cats[mi].isEquipSet then
+                                for i, c in ipairs(cats) do
+                                    if c.isEquipSet and itemsByCat[i] then
+                                        for _, data in ipairs(itemsByCat[i]) do
+                                            merged[#merged + 1] = data
+                                        end
+                                    end
+                                end
+                            end
                         end
                         if #merged > 0 then
                             ApplySavedOrder(cat.groupName, merged)
@@ -5632,9 +5871,25 @@ function EUI_Bags:RefreshInventory()
                         RenderSection(cat.groupName, merged, false, nil, nil, members[1], true)
                     end
                 end
+            elseif cat.isEquipSet then
+                -- Set children render inside their anchor's section
             else
                 if not hiddenSet[cat._defaultName] then
                     local catItems = itemsByCat[ci] or {}
+                    -- The Item Set Gear anchor folds in its set children's items
+                    if cat.isSetGear and BP().bagSplitSetGearBySet then
+                        local folded = nil
+                        for i, c in ipairs(cats) do
+                            if c.isEquipSet and itemsByCat[i] then
+                                if not folded then
+                                    folded = {}
+                                    for _, data in ipairs(catItems) do folded[#folded + 1] = data end
+                                end
+                                for _, data in ipairs(itemsByCat[i]) do folded[#folded + 1] = data end
+                            end
+                        end
+                        catItems = folded or catItems
+                    end
                     local isUserCreated = cat.isUserCreated
                     RenderSection(cat.name, catItems, isUserCreated, cat.isPinned, cat.isRecent, ci, true)
                 end
@@ -5649,10 +5904,23 @@ function EUI_Bags:RefreshInventory()
 
             local itemsByMember = {}
             for _, mi in ipairs(members) do itemsByMember[mi] = {} end
+            -- Split-mode set children fold into their anchor member's section
+            local anchorMi, childSet
+            if BP().bagSplitSetGearBySet then
+                for _, mi in ipairs(members) do
+                    if cats[mi] and cats[mi].isSetGear and not cats[mi].isEquipSet then anchorMi = mi; break end
+                end
+                if anchorMi then
+                    childSet = {}
+                    for i, c in ipairs(cats) do if c.isEquipSet then childSet[i] = true end end
+                end
+            end
             for _, data in ipairs(displayItems) do
                 local ci = data.categoryIndex
                 if ci and itemsByMember[ci] then
                     itemsByMember[ci][#itemsByMember[ci] + 1] = data
+                elseif ci and childSet and childSet[ci] then
+                    itemsByMember[anchorMi][#itemsByMember[anchorMi] + 1] = data
                 end
             end
 
@@ -5992,6 +6260,7 @@ function EUI_BagsReagent:RefreshInventory()
         btn:Show()
         btn:SetID(data.slot)
         parent:SetID(data.bag)
+        local itemLink = data.info and C_Container.GetContainerItemLink(data.bag, data.slot)
 
         if not data.info then
             btn:SetItemButtonTexture(nil)
@@ -6012,7 +6281,6 @@ function EUI_BagsReagent:RefreshInventory()
             if btn.ItemLevelText and data.info.itemID then
                 local showItemlevel = BP().showItemlevelInBags ~= false
                 if showItemlevel then
-                    local itemLink = C_Container.GetContainerItemLink(data.bag, data.slot)
                     if itemLink then
                         local _, _, quality, level = GetItemInfo(itemLink)
                         if IsGearItem(itemLink) then
@@ -6036,6 +6304,7 @@ function EUI_BagsReagent:RefreshInventory()
             if c then SetInsetBorderColor(btn, c.r, c.g, c.b, 1)
             else SetInsetBorderColor(btn, 0.25, 0.25, 0.25, 1) end
         end
+        UpdatePawnArrow(btn, itemLink)
 
         local col = (i - 1) % REAGENT_COLUMNS
         local row = math.floor((i - 1) / REAGENT_COLUMNS)
@@ -6089,7 +6358,7 @@ function EUI_BagsWindow:RefreshBags()
                 else
                     local bInvID = C_Container.ContainerIDToInventoryID(bagIdx)
                     local bLink = GetInventoryItemLink("player", bInvID)
-                    bName = bLink and GetItemInfo(bLink) or ("Bag " .. bagIdx)
+                    bName = bLink and GetItemInfo(bLink) or EUI.Lf("Bag %1$d", bagIdx)
                 end
                 local bTotal = C_Container.GetContainerNumSlots(bagIdx)
                 local bFree = C_Container.GetContainerNumFreeSlots(bagIdx)
@@ -6113,6 +6382,8 @@ end
 --  StartAddon
 -------------------------------------------------------------------------------
 local function StartAddon()
+    RegisterPawnIntegration()
+
     -- Apply default view based on setting (DB now available)
     local _dbt = GetDefaultBagType()
     if _dbt == "onebag" then
@@ -6421,6 +6692,18 @@ local function StartAddon()
     EUI_Bags:RegisterEvent("PLAYER_MONEY")
     EUI_Bags:RegisterEvent("ITEM_LOCK_CHANGED")
     EUI_Bags:RegisterEvent("CURRENCY_DISPLAY_UPDATE")
+    -- Set created/renamed/deleted: rebuild split categories / refresh name labels.
+    -- Registered only while a set feature is on: zero event cost when disabled
+    -- (merged-mode routing stays correct without it -- the lookup rebuilds per
+    -- classify pass; the event only serves the split children and name labels).
+    function EUI_Bags.UpdateSetEventRegistration()
+        if BP().bagSplitSetGearBySet or BP().bagShowSetGearName == true then
+            EUI_Bags:RegisterEvent("EQUIPMENT_SETS_CHANGED")
+        else
+            EUI_Bags:UnregisterEvent("EQUIPMENT_SETS_CHANGED")
+        end
+    end
+    EUI_Bags.UpdateSetEventRegistration()
     -- Replays a refresh that was deferred during combat (secure-button taint guard).
     EUI_Bags:RegisterEvent("PLAYER_REGEN_ENABLED")
 
@@ -6567,6 +6850,13 @@ local function StartAddon()
             if SetItemPanelOpen(panel[1], panel[2]) and EUI_Bags:IsVisible() then
                 EUI_Bags:RefreshInventory()
             end
+            return
+        end
+        if event == "EQUIPMENT_SETS_CHANGED" then
+            -- Invalidate even while hidden: the next open must not classify with
+            -- categories built from the old set list.
+            EUI_Bags.InvalidateSetCategories()
+            if EUI_Bags:IsVisible() then ScheduleRefresh() end
             return
         end
         if event == "BAG_UPDATE" and EUI_Bags.refreshEnabled ~= false then

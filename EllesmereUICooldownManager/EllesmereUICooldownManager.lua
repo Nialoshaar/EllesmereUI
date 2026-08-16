@@ -3365,6 +3365,23 @@ function ns.AnchorCoordToCenter(pt, sx, sy, fw, fh)
     return x, y
 end
 
+-- "Additional Bar Offset" (bd.addOffsetX/Y; ADDITIONAL BAR OFFSET options
+-- section): a render-only displacement stacked on top of whatever positioned
+-- the bar -- saved position, module anchor (party/player/ERB), or the shared
+-- unlock anchor system (which folds it through _anchorExtraOffset instead of
+-- this helper). Suppressed while unlock mode is active so movers show and save
+-- TRUE positions; the shift-provider lifecycle hooks strip it on unlock entry
+-- and re-apply it on exit. nil/0 = zero work and zero movement (purely
+-- additive feature). On ns: this file is at the 200-local cap.
+ns.CDMAddOffset = function(bd)
+    if not bd then return 0, 0 end
+    local ox = bd.addOffsetX or 0
+    local oy = bd.addOffsetY or 0
+    if ox == 0 and oy == 0 then return 0, 0 end
+    if EllesmereUI._unlockActive then return 0, 0 end
+    return ox, oy
+end
+
 local function ApplyBarPositionCentered(frame, pos, barKey)
     if not pos or not pos.point then return end
     local fw = frame:GetWidth() or 0
@@ -3399,6 +3416,11 @@ local function ApplyBarPositionCentered(frame, pos, barKey)
             end
         end
     end
+
+    -- Additional Bar Offset: applied PRE-snap so the sum lands on the pixel
+    -- grid; a zero offset is a guaranteed no-op.
+    local aox, aoy = ns.CDMAddOffset(bd)
+    px, py = px + aox, py + aoy
 
     -- Snap to physical pixel grid. CENTER anchor: SnapCenterForDim preserves the +0.5 offset
     -- odd-pixel-dim frames need for whole-pixel edges. Single-edge anchors: the growth-axis
@@ -3468,11 +3490,17 @@ local function SaveCDMBarPosition(barKey, frame)
         ay = cy * ratio
     end
 
-    -- Store relative to UIParent CENTER so offset math is consistent
+    -- Store relative to UIParent CENTER so offset math is consistent.
+    -- Additional Bar Offset: live geometry includes the render-only offset
+    -- while out of unlock mode -- subtract it so the SAVED position is always
+    -- the BASE (else the Row Growth recapture bakes it in and the bar drifts
+    -- by one offset per edit). In unlock mode both terms are already base:
+    -- the frame carries no offset and CDMAddOffset returns 0.
+    local aox, aoy = ns.CDMAddOffset(bd)
     p.cdmBarPositions[barKey] = {
         point = pt, relPoint = "CENTER",
-        x = (ax - uiW / 2) / scale,
-        y = (ay - uiH / 2) / scale,
+        x = (ax - uiW / 2) / scale - aox,
+        y = (ay - uiH / 2) / scale - aoy,
     }
 end
 
@@ -3767,6 +3795,10 @@ BuildCDMBar = function(barIndex)
             local side = barData.partyFrameSide or "LEFT"
             local oX = barData.partyFrameOffsetX or 0
             local oY = barData.partyFrameOffsetY or 0
+            do -- Additional Bar Offset stacks on the anchor's own offsets
+                local aox, aoy = ns.CDMAddOffset(barData)
+                oX, oY = oX + aox, oY + aoy
+            end
             local PPa = EllesmereUI and EllesmereUI.PP
             if PPa and PPa.SnapForES then
                 local es = frame:GetEffectiveScale()
@@ -3803,6 +3835,10 @@ BuildCDMBar = function(barIndex)
             local side = barData.playerFrameSide or "LEFT"
             local oX = barData.playerFrameOffsetX or 0
             local oY = barData.playerFrameOffsetY or 0
+            do -- Additional Bar Offset stacks on the anchor's own offsets
+                local aox, aoy = ns.CDMAddOffset(barData)
+                oX, oY = oX + aox, oY + aoy
+            end
             local PPa = EllesmereUI and EllesmereUI.PP
             if PPa and PPa.SnapForES then
                 local es = frame:GetEffectiveScale()
@@ -3846,6 +3882,10 @@ BuildCDMBar = function(barIndex)
             local gap = barData.spacing or 2
             local oX = barData.anchorOffsetX or 0
             local oY = barData.anchorOffsetY or 0
+            do -- Additional Bar Offset stacks on the anchor's own offsets
+                local aox, aoy = ns.CDMAddOffset(barData)
+                oX, oY = oX + aox, oY + aoy
+            end
             local PPa = EllesmereUI and EllesmereUI.PP
             if PPa and PPa.SnapForES then
                 local es = frame:GetEffectiveScale()
@@ -3962,6 +4002,17 @@ local function ComputeTopRowStride(barData, count)
     return stride, numRows, topCount
 end
 
+-- Minimum Bar Size, counted in icon slots along the GROWTH axis. That axis is ALWAYS the `stride`
+-- term of the size formulas (width on horizontal bars, height on vertical), so one rule covers both
+-- orientations. Returns the stride the CONTAINER reserves; the LAYOUT stride is never replaced --
+-- grid wrapping (col = idx % stride) and per-row centering keep using the real icon count, and the
+-- reserved surplus becomes a single centering offset. nil/0 (the default) is a straight passthrough.
+local function ReserveStride(barData, stride)
+    local minN = barData.minSizeIcons
+    if minN and minN > stride then return minN end
+    return stride
+end
+
 -- Empty custom bars still need a stable footprint so unlock mode can keep a visible mover and convert drag positions correctly before any icons exist.
 local EMPTY_CDM_BAR_SIZE = { 100, 36 }
 
@@ -3988,14 +4039,17 @@ local function ComputeCDMBarSize(barData, count)
     -- custom top-row split's second row is empty, so no empty row is reserved.
     local stride, rows = ComputeTopRowStride(barData, count)
     if rows < 1 then rows = 1 end
+    -- Minimum Bar Size reserves extra growth-axis slots (no-op when unset). Unlike LayoutCDMBar
+    -- there is no match gate here: this is the pre-layout footprint estimate, and a matched bar's live frame rect (checked first by GetStableCDMBarSize) always wins over it.
+    local resStride = ReserveStride(barData, stride)
     local grow = barData.growDirection or "CENTER"
     local isH = (grow == "RIGHT" or grow == "LEFT" or grow == "CENTER")
     if isH then
-        return stride * iW + (stride - 1) * sp,
+        return resStride * iW + (resStride - 1) * sp,
                rows * iH + (rows - 1) * sp
     end
     return rows * iW + (rows - 1) * sp,
-           stride * iH + (stride - 1) * sp
+           resStride * iH + (resStride - 1) * sp
 end
 
 -- Authoritative footprint for unlock mode: live frame when it has bounds, else derived from bar config, else the stable empty-bar placeholder.
@@ -4235,6 +4289,24 @@ LayoutCDMBar = function(barKey)
         perRowActive = true
     end
 
+    -- Minimum Bar Size: reserve growth-axis room for at least minSizeIcons icon slots so a bar that
+    -- loses icons (spec/talent swap, shift-hidden cooldowns) keeps its footprint -- everything
+    -- matching its width or anchored to its edges then stays put, and the icons still present are
+    -- centered in the surplus. SKIPPED while the GROWTH axis is match-owned: that axis measures
+    -- exactly what the match target dictates and padding it would overshoot. A match on the
+    -- PERPENDICULAR axis is fine -- the growth axis still varies with icon count there.
+    local growMatched
+    if isHoriz then growMatched = widthMatchTarget else growMatched = heightMatchTarget end
+    local resStride = growMatched and stride or ReserveStride(barData, stride)
+    -- What resStride real icons measure at the BASE icon size, spacing included. Integer physical px like every other term here, so both bar edges stay on the pixel grid.
+    local reservedPx = 0
+    if resStride > stride then
+        local basePx = isHoriz and iconWPx or iconHPx
+        reservedPx = resStride * basePx + (resStride - 1) * spacingPx
+    end
+    -- Offset that centers the real icon block inside the surplus (uniform layout only; the per-row branch centers each row inside the total already).
+    local padOffsetPx = 0
+
     local totalWPx, totalHPx
     if perRowActive then
         -- Two rows, independent icon sizes. Top row = customTopCount icons, the bottom takes the
@@ -4245,19 +4317,30 @@ LayoutCDMBar = function(barKey)
             local topRowW = topN * rowWPx[1] + math.max(0, topN - 1) * spacingPx
             local botRowW = botN * rowWPx[2] + math.max(0, botN - 1) * spacingPx
             totalWPx = math.max(topRowW, botRowW)
+            -- No pad offset needed: both rows are centered against totalWPx below, so growing it IS the centering.
+            if reservedPx > totalWPx then totalWPx = reservedPx end
             totalHPx = rowHPx[1] + rowHPx[2] + spacingPx
         else
             local topColH = topN * rowHPx[1] + math.max(0, topN - 1) * spacingPx
             local botColH = botN * rowHPx[2] + math.max(0, botN - 1) * spacingPx
             totalHPx = math.max(topColH, botColH)
+            if reservedPx > totalHPx then totalHPx = reservedPx end
             totalWPx = rowWPx[1] + rowWPx[2] + spacingPx
         end
     elseif isHoriz then
         totalWPx = stride  * iconWPx + (stride  - 1) * spacingPx + extraPixels
         totalHPx = effRows * iconHPx + (effRows - 1) * spacingPx + extraPixelsH
+        if reservedPx > totalWPx then
+            padOffsetPx = math.floor((reservedPx - totalWPx) / 2 + 0.5)
+            totalWPx = reservedPx
+        end
     else
         totalWPx = effRows * iconWPx + (effRows - 1) * spacingPx + extraPixels
         totalHPx = stride  * iconHPx + (stride  - 1) * spacingPx + extraPixelsH
+        if reservedPx > totalHPx then
+            padOffsetPx = math.floor((reservedPx - totalHPx) / 2 + 0.5)
+            totalHPx = reservedPx
+        end
     end
 
     -- Do NOT force an even totalWPx for CENTER grow: SnapCenterForDim (used by ApplyBarPositionCentered
@@ -4371,6 +4454,8 @@ LayoutCDMBar = function(barKey)
     -- Uniform icon size: every bar except the 2-row per-row-size case above.
     local stepW = iconW + spacing
     local stepH = iconH + spacing
+    -- Minimum Bar Size surplus in coord space: shifts the whole icon block along the GROWTH axis so it sits centered in the reserved footprint. 0 whenever the reservation is off or already filled.
+    local padOffset = padOffsetPx * onePx
 
     local topRowCount = customTopCount
     if topRowCount < 0 then topRowCount = 0 end
@@ -4470,7 +4555,7 @@ LayoutCDMBar = function(barKey)
                 rowOffset = math.floor((stride - rowCount) * stepW / 2 + 0.5)
             end
             anchorPt, anchorRelPt = "TOPLEFT", "TOPLEFT"
-            anchorX = (posX + rowOffset) * iS
+            anchorX = (posX + rowOffset + padOffset) * iS
             anchorY = -(posY + extraBeforeR) * iS
         else
             if rowHasLess then
@@ -4478,7 +4563,7 @@ LayoutCDMBar = function(barKey)
             end
             anchorPt, anchorRelPt = "TOPLEFT", "TOPLEFT"
             anchorX = (vRow * stepW + extraBeforeR) * iS
-            anchorY = -(col * stepH + extraBefore + rowOffset) * iS
+            anchorY = -(col * stepH + extraBefore + rowOffset + padOffset) * iS
         end
 
         if anchorPt then
@@ -8764,6 +8849,29 @@ RegisterCDMUnlockElements = function()
             local isMouseAnchored = barData.anchorTo == "mouse"
             if not isPartyAnchored and not isPlayerFrameAnchored and not isMouseAnchored then
             local bd = barDataByKey[key]
+            -- Additional Bar Offset: the unlock-anchored side folds through the
+            -- shared _anchorExtraOffset registry (both ApplyAnchorPosition
+            -- placement branches consume it) -- the getter is registered ONLY
+            -- while the offset is nonzero (zero-cost otherwise) and cleared
+            -- here so an edit back to 0 leaves no stale entry. It returns 0
+            -- during unlock mode: movers show and save the BASE position.
+            local hasAddOffset = (barData.addOffsetX or 0) ~= 0 or (barData.addOffsetY or 0) ~= 0
+            do
+                local xoff = EllesmereUI._anchorExtraOffset
+                if not xoff then
+                    xoff = {}
+                    EllesmereUI._anchorExtraOffset = xoff
+                end
+                if hasAddOffset then
+                    xoff["CDM_" .. key] = function()
+                        local bd3 = barDataByKey[key]
+                        if not bd3 or EllesmereUI._unlockActive then return 0, 0 end
+                        return bd3.addOffsetX or 0, bd3.addOffsetY or 0
+                    end
+                else
+                    xoff["CDM_" .. key] = nil
+                end
+            end
             -- Collect linked unlock element keys (children anchored to this bar)
             local linked = nil
             if anchorChildren[key] then
@@ -8781,6 +8889,18 @@ RegisterCDMUnlockElements = function()
                 label = "CDM: " .. barData.name,
                 group = "Cooldown Manager",
                 order = 600,
+                -- Additional Bar Offset marker: distinct warm mover tint +
+                -- explanatory tooltip while an offset is set (nil otherwise --
+                -- the mover renders exactly as before).
+                moverBg = hasAddOffset and { r = 0.32, g = 0.19, b = 0.05 } or nil,
+                moverTooltip = hasAddOffset and function()
+                    local bd3 = barDataByKey[key]
+                    local ox = (bd3 and bd3.addOffsetX) or 0
+                    local oy = (bd3 and bd3.addOffsetY) or 0
+                    return EllesmereUI.Lf(
+                        "This bar has an Additional Bar Offset (X %1$s, Y %2$s) set in its options. Unlock mode shows the base position; the offset re-applies when you exit.",
+                        ox, oy)
+                end or nil,
                 linkedKeys = linked,
                 noAnchorTarget = isDynamic,
                 noResize = isDynamic,
@@ -8923,6 +9043,79 @@ RegisterCDMUnlockElements = function()
     end
     -- Expose for ApplyAnchorPosition's growth-direction edge read. Width-independent: stores edge anchor directly (LEFT/RIGHT/TOP).
     EllesmereUI._cdmBarPositions = ECME.db.profile.cdmBarPositions
+end
+
+-- "Additional Bar Offset" unlock lifecycle: rides the shared shift-provider
+-- list (EUI_UnlockMode.lua; direct or-preserve push, never an API call). dir
+-- is inert -- anchored bars receive the offset through _anchorExtraOffset, not
+-- the shift path. enter (unlock entry + combat resume, before positions are
+-- snapshotted) re-builds so UN-anchored offset bars land at their true saved
+-- positions (_unlockActive is already set, the offset helper returns 0);
+-- restore (unlock exit) re-builds to re-apply the offset and re-runs the
+-- anchors of unlock-anchored offset bars (the build deliberately leaves those
+-- positions alone). Everything self-gates on a nonzero offset existing, so a
+-- profile that never touches the setting schedules ZERO work. do-block: this
+-- file is at the 200-local cap, nothing here may persist a file-scope local.
+do
+    local function AnyBarHasAddOffset()
+        local p = ECME and ECME.db and ECME.db.profile
+        local bars = p and p.cdmBars and p.cdmBars.bars
+        if not bars then return false end
+        for i = 1, #bars do
+            local bd = bars[i]
+            if bd.enabled and ((bd.addOffsetX or 0) ~= 0 or (bd.addOffsetY or 0) ~= 0) then
+                return true
+            end
+        end
+        return false
+    end
+    EllesmereUI._anchorShiftProviders = EllesmereUI._anchorShiftProviders or {}
+    table.insert(EllesmereUI._anchorShiftProviders, {
+        dir = function() return 0 end,
+        wants = AnyBarHasAddOffset,
+        enter = function()
+            -- Reposition ONLY the offset bars, never a full rebuild: a rebuild
+            -- re-applies saved positions to EVERY un-anchored bar, which would
+            -- revert un-saved mover drags on the combat-resume path
+            -- (audit-caught). _unlockActive is already true here, so the
+            -- offset helper reads 0 and each bar lands at its BASE position
+            -- for the snapshot. Unlock-ANCHORED offset bars are stripped by
+            -- the wants-gated anchor reapply that follows; module-anchored
+            -- bars have no movers and snapshot nothing.
+            local p = ECME and ECME.db and ECME.db.profile
+            local bars = p and p.cdmBars and p.cdmBars.bars
+            if not bars then return end
+            for i = 1, #bars do
+                local bd = bars[i]
+                if bd.enabled and ((bd.addOffsetX or 0) ~= 0 or (bd.addOffsetY or 0) ~= 0)
+                    and (bd.anchorTo or "none") == "none"
+                    and not (EllesmereUI.IsUnlockAnchored and EllesmereUI.IsUnlockAnchored("CDM_" .. bd.key)) then
+                    local frame = cdmBarFrames[bd.key]
+                    local pos = p.cdmBarPositions and p.cdmBarPositions[bd.key]
+                    if frame and pos and pos.point then
+                        ApplyBarPositionCentered(frame, pos, bd.key)
+                    end
+                end
+            end
+        end,
+        restore = function()
+            if not AnyBarHasAddOffset() then return end
+            BuildAllCDMBars()
+            if EllesmereUI.PropagateAnchorChain and EllesmereUI.IsUnlockAnchored then
+                local p = ECME and ECME.db and ECME.db.profile
+                local bars = p and p.cdmBars and p.cdmBars.bars
+                if bars then
+                    for i = 1, #bars do
+                        local bd = bars[i]
+                        if bd.enabled and ((bd.addOffsetX or 0) ~= 0 or (bd.addOffsetY or 0) ~= 0)
+                            and EllesmereUI.IsUnlockAnchored("CDM_" .. bd.key) then
+                            EllesmereUI.PropagateAnchorChain("CDM_" .. bd.key)
+                        end
+                    end
+                end
+            end
+        end,
+    })
 end
 ns.RegisterCDMUnlockElements = RegisterCDMUnlockElements
 _G._ECME_RegisterUnlock = RegisterCDMUnlockElements
@@ -9188,6 +9381,8 @@ function ECME:CDMFinishSetup()
                             -- Effective row count: collapses to 1 when a custom top-row split has no icons in its second row yet.
                             local stride, numRows = ComputeTopRowStride(barData, cachedCount)
                             if numRows < 1 then numRows = 1 end
+                            -- Minimum Bar Size reserves extra growth-axis slots (no-op when unset); without it a bar under its minimum pre-sizes too small and visibly snaps once real data lands.
+                            local resStride = ReserveStride(barData, stride)
                             local isHoriz = (grow == "RIGHT" or grow == "LEFT" or (grow == "CENTER" and not barData.verticalOrientation))
                             -- Compute total in integer phys px to avoid PP.Scale floor losing 1 px to floating-point dust on the multiply.
                             local PPpc = EllesmereUI and EllesmereUI.PP
@@ -9197,11 +9392,11 @@ function ECME:CDMFinishSetup()
                             local spacingPx = math.floor(spacing / onePxPc + 0.5)
                             local totalWPx, totalHPx
                             if isHoriz then
-                                totalWPx = stride  * iconWPx + (stride  - 1) * spacingPx
-                                totalHPx = numRows * iconHPx + (numRows - 1) * spacingPx
+                                totalWPx = resStride * iconWPx + (resStride - 1) * spacingPx
+                                totalHPx = numRows   * iconHPx + (numRows   - 1) * spacingPx
                             else
-                                totalWPx = numRows * iconWPx + (numRows - 1) * spacingPx
-                                totalHPx = stride  * iconHPx + (stride  - 1) * spacingPx
+                                totalWPx = numRows   * iconWPx + (numRows   - 1) * spacingPx
+                                totalHPx = resStride * iconHPx + (resStride - 1) * spacingPx
                             end
                             local totalW = totalWPx * onePxPc
                             local totalH = totalHPx * onePxPc

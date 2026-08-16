@@ -3281,11 +3281,18 @@ initFrame:SetScript("OnEvent", function(self)
         end
 
         -- Validate the group selection against the live group list (groups dissolve when
-        -- their last bar is deleted).
+        -- their last bar is deleted). Bar-less GLOBAL groups are legal selections: the
+        -- Currently Editing menu lists them on every spec precisely so their shared
+        -- settings stay editable, and their local gid persists through its globalKey
+        -- link with no member bars (every GROUP MODE section is group-keyed and the
+        -- previews hide/guard on an empty member list).
         if _tbbSelectedGroup then
             local ok = false
             for _, g in ipairs(ns.TBBGroupIDsInUse()) do
                 if g == _tbbSelectedGroup then ok = true; break end
+            end
+            if not ok and ns.TBBGroupGlobalKey and ns.TBBGroupGlobalKey(_tbbSelectedGroup) then
+                ok = true
             end
             if not ok then _tbbSelectedGroup = nil end
         end
@@ -4555,8 +4562,13 @@ initFrame:SetScript("OnEvent", function(self)
                   end }
             );  y = y - h
 
-            -- Global Group | (empty)
-            _, h = W:DualRow(parent, y,
+            -- Global Group | Shift Elements If No Bars
+            local function GlobalEntry()
+                local gk = ns.TBBGroupGlobalKey and ns.TBBGroupGlobalKey(gid)
+                return gk and ns.TBBGlobalGroup and ns.TBBGlobalGroup(gk) or nil
+            end
+            local shiftRow
+            shiftRow, h = W:DualRow(parent, y,
                 { type = "toggle", text = "Global Group",
                   tooltip = "Share this group's name, layout, and position across all specs.",
                   getValue = function()
@@ -4568,8 +4580,72 @@ initFrame:SetScript("OnEvent", function(self)
                       ns.BuildTrackedBuffBars()
                       EllesmereUI:RefreshPage(true)
                   end },
-                { type = "label", text = "" }
+                { type = "dropdown", text = "Shift Elements If No Bars",
+                  tooltip = "When the current spec has no bars in this group, keeps elements anchored to the group in place and shifts them up or down by one bar height (tune with the cog's Extra Y Offset) to cover its empty slot.",
+                  disabled = function() return GlobalEntry() == nil end,
+                  disabledTooltip = "Global Group",
+                  values = { None = "None", Up = "Up", Down = "Down" },
+                  order = { "None", "Up", "Down" },
+                  getValue = function()
+                      local e = GlobalEntry()
+                      return (e and e.shiftNoBar) or "None"
+                  end,
+                  setValue = function(v)
+                      local e = GlobalEntry()
+                      if not e then return end
+                      if v == "Up" or v == "Down" then
+                          e.shiftNoBar = v
+                      else
+                          e.shiftNoBar = nil
+                      end
+                      ns.BuildTrackedBuffBars()
+                      EllesmereUI:RefreshPage()
+                  end }
             );  y = y - h
+            -- Inline reposition cog on the shift dropdown: Extra Y Offset
+            -- (ResourceBars "Shift Elements if No Resource" parity). The bar-mode
+            -- MakeCogBtn helper is declared past this branch's early return, so
+            -- the identical attach is inlined here.
+            if not EllesmereUI._prebuilding then
+                local rgn = shiftRow._rightRegion
+                local _, cogShow = EllesmereUI.BuildCogPopup({
+                    title = "Shift Offset",
+                    rows = {
+                        { type = "slider", label = "Extra Y Offset", min = -50, max = 50, step = 1,
+                          get = function()
+                              local e = GlobalEntry()
+                              return (e and e.shiftNoBarExtraY) or 0
+                          end,
+                          set = function(v)
+                              local e = GlobalEntry()
+                              if not e then return end
+                              e.shiftNoBarExtraY = (v ~= 0) and v or nil
+                              ns.BuildTrackedBuffBars()
+                              -- The build tail's cascade is EDGE-gated on the
+                              -- shift direction, which a magnitude edit never
+                              -- flips -- re-cascade explicitly so the slider
+                              -- applies live (deferred batch coalesces drags).
+                              local gk = ns.TBBGroupGlobalKey and ns.TBBGroupGlobalKey(gid)
+                              if gk and EllesmereUI.PropagateAnchorChain then
+                                  EllesmereUI.PropagateAnchorChain("TBBG_" .. gk)
+                              end
+                          end },
+                    },
+                })
+                local anchor = (rgn and (rgn._lastInline or rgn._control)) or rgn
+                local cogBtn = CreateFrame("Button", nil, rgn)
+                cogBtn:SetSize(26, 26)
+                cogBtn:SetPoint("RIGHT", anchor, "LEFT", -8, 0)
+                cogBtn:SetFrameLevel(rgn:GetFrameLevel() + 5)
+                cogBtn:SetAlpha(0.4)
+                local cogTex = cogBtn:CreateTexture(nil, "OVERLAY")
+                cogTex:SetAllPoints()
+                cogTex:SetTexture(EllesmereUI.DIRECTIONS_ICON)
+                cogBtn:SetScript("OnEnter", function(self) self:SetAlpha(0.7) end)
+                cogBtn:SetScript("OnLeave", function(self) self:SetAlpha(0.4) end)
+                cogBtn:SetScript("OnClick", function(self) cogShow(self) end)
+                rgn._lastInline = cogBtn
+            end
 
             -- Ensure bar frames exist before showing placeholders
             ns.BuildTrackedBuffBars()
@@ -5066,7 +5142,7 @@ initFrame:SetScript("OnEvent", function(self)
                           bd.timerDecimals = v or nil; RefreshTBB()
                       end })
                 table.insert(durationRows, 3,
-                    { type = "slider", label = "Decimal Threshold", min = 3, max = 120, step = 1,
+                    { type = "slider", label = "Decimal Threshold", min = 1, max = 120, step = 1,
                       disabled = function()
                           local bd = SelectedTBB()
                           return not (bd and bd.timerDecimals)
@@ -16739,6 +16815,7 @@ initFrame:SetScript("OnEvent", function(self)
         -- Keep Buffs in Same Place (native buff bars): reserves every tracked buff's slot so
         -- active buffs never reposition; inactive slots are invisible. Reuses the Always-Show
         -- placeholder path internally (placeholders injected, then rendered alpha 0). Mutually exclusive with Always Show Buffs -- disabled while that is on.
+        -- (Minimum Bar Size moved to the Icon Scale inline cog, user-directed.)
         if isBuffBar then
             _, h = W:DualRow(parent, y,
                 { type="toggle", text="Keep Buffs in Same Place",
@@ -17184,6 +17261,42 @@ initFrame:SetScript("OnEvent", function(self)
                       bd._matchStrideH = nil
                       ns.BuildAllCDMBars(); Refresh(); UpdateCDMPreviewAndResize()
                   end });  y = y - h
+
+            -- Inline cog on Icon Scale: Minimum Bar Size (growth-axis icon-slot
+            -- reservation; lives here rather than as its own Bar Layout row,
+            -- user-directed). The popup slider stays always-editable -- the
+            -- runtime skips the reservation while the growth axis is
+            -- width/height matched, so no MatchGuard lock is needed and an
+            -- existing value can always be lowered or cleared. Orientation
+            -- resolves at build time; the page rebuilds on orientation flips.
+            if not isFocusKick then
+                local minVert = BD().verticalOrientation == true
+                local _, minCogShow = EllesmereUI.BuildCogPopup({
+                    title = minVert and "Minimum Height" or "Minimum Width",
+                    rows = {
+                        { type="slider",
+                          label=minVert and "Icon Slots Tall (0 = Off)" or "Icon Slots Wide (0 = Off)",
+                          min=0, max=20, step=1,
+                          get=function() return BD().minSizeIcons or 0 end,
+                          set=function(v)
+                              if v == 0 then v = nil end
+                              local bd = BD()
+                              bd.minSizeIcons = v
+                              -- Growth-axis extent changed: cached match dims stale.
+                              bd._matchIconPhys = nil
+                              bd._matchExtraPixels = nil
+                              bd._matchStride = nil
+                              bd._matchExtraPixelsH = nil
+                              bd._matchStrideH = nil
+                              ns.BuildAllCDMBars(); Refresh(); UpdateCDMPreviewAndResize()
+                          end },
+                    },
+                })
+                if not EllesmereUI._prebuilding then
+                    local rgn = scaleAnimRow._rightRegion
+                    MakeCogBtn(rgn, minCogShow, nil, EllesmereUI.RESIZE_ICON)
+                end
+            end
 
             -- Inline cog on Always Show Buffs toggle (per-bar; native buff bars)
             if isBuffBar then
@@ -18725,6 +18838,66 @@ initFrame:SetScript("OnEvent", function(self)
         end
 
         end -- custom_buff extras guard
+
+        -----------------------------------------------------------------
+        --  ADDITIONAL BAR OFFSET -- render-only X/Y displacement stacked on
+        --  top of the bar's normal position (saved, module-anchored, or
+        --  unlock-anchored). Unlock mode always shows the BASE position (the
+        --  bar's mover gets a distinct tint + tooltip while an offset is set);
+        --  the offset re-applies on exit. 0/0 = the feature is fully inert.
+        --  FocusKick is nameplate-pinned (no free position, no mover), so the
+        --  section would be dead controls there.
+        -----------------------------------------------------------------
+        if not isFocusKick then
+        _, h = W:SectionHeader(parent, "ADDITIONAL BAR OFFSET", y);  y = y - h
+        do
+            local function SetAddOffset(axisKey, v)
+                local b = BD(); if not b then return end
+                b[axisKey] = (v ~= 0) and v or nil
+                local hasOff = (b.addOffsetX or 0) ~= 0 or (b.addOffsetY or 0) ~= 0
+                -- Keep the anchor extra-offset registry in sync immediately
+                -- (unlock-anchored bars fold the offset through it): set a
+                -- fresh live-reading getter or clear the entry. The unlock
+                -- registration pass maintains the same entries at setup.
+                local xoff = EllesmereUI._anchorExtraOffset
+                if not xoff then
+                    xoff = {}
+                    EllesmereUI._anchorExtraOffset = xoff
+                end
+                if hasOff then
+                    xoff["CDM_" .. b.key] = function()
+                        if EllesmereUI._unlockActive then return 0, 0 end
+                        return b.addOffsetX or 0, b.addOffsetY or 0
+                    end
+                else
+                    xoff["CDM_" .. b.key] = nil
+                end
+                -- Re-register unlock elements so the mover's offset marker
+                -- (tint + tooltip) reflects the new state at the next unlock
+                -- entry, then re-apply positions: the build covers saved and
+                -- module-anchored placement, the cascade covers an
+                -- unlock-anchored bar (the build deliberately leaves those
+                -- positions to the anchor system).
+                if ns.RegisterCDMUnlockElements then ns.RegisterCDMUnlockElements() end
+                ns.BuildAllCDMBars()
+                if EllesmereUI.IsUnlockAnchored and EllesmereUI.IsUnlockAnchored("CDM_" .. b.key)
+                    and EllesmereUI.PropagateAnchorChain then
+                    EllesmereUI.PropagateAnchorChain("CDM_" .. b.key)
+                end
+                Refresh()
+            end
+            _, h = W:DualRow(parent, y,
+                { type = "slider", text = "Offset X", min = -500, max = 500, step = 1, trackWidth = 120,
+                  tooltip = "Extra horizontal shift stacked on top of this bar's normal position. Unlock mode shows the base position; the offset re-applies when you exit.",
+                  getValue = function() local b = BD(); return (b and b.addOffsetX) or 0 end,
+                  setValue = function(v) SetAddOffset("addOffsetX", v) end },
+                { type = "slider", text = "Offset Y", min = -500, max = 500, step = 1, trackWidth = 120,
+                  tooltip = "Extra vertical shift stacked on top of this bar's normal position. Unlock mode shows the base position; the offset re-applies when you exit.",
+                  getValue = function() local b = BD(); return (b and b.addOffsetY) or 0 end,
+                  setValue = function(v) SetAddOffset("addOffsetY", v) end }
+            );  y = y - h
+        end
+        end -- not isFocusKick
 
         return math.abs(y)
     end

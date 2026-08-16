@@ -3405,6 +3405,38 @@ initFrame:SetScript("OnEvent", function(self)
                       if ns.FB_Apply then ns.FB_Apply() end
                       EllesmereUI:RefreshPage()
                   end }); y = y - h
+            -- Inline cog on the display dropdown: Show in Dungeons (opt-in;
+            -- the group gate is raid-only without it). Dimmed while Never,
+            -- like every row below the dropdown.
+            if not EllesmereUI._prebuilding then
+                local rgn = row._leftRegion
+                local _, fbCogShow = EllesmereUI.BuildCogPopup({
+                    title = "Friendly Boss Group",
+                    rows = {
+                        { type="toggle", label="Show in Dungeons",
+                          get=function() return FBSet().showInDungeons == true end,
+                          set=function(v)
+                              -- Absent = off (additive key); FB_Apply re-registers
+                              -- the secure group driver, so the flip is live.
+                              FBSet().showInDungeons = v and true or nil
+                              if ns.FB_Apply then ns.FB_Apply() end
+                          end },
+                    },
+                })
+                local cogBtn = CreateFrame("Button", nil, rgn)
+                cogBtn:SetSize(26, 26)
+                cogBtn:SetPoint("RIGHT", rgn._lastInline or rgn._control, "LEFT", -8, 0)
+                rgn._lastInline = cogBtn
+                cogBtn:SetFrameLevel(rgn:GetFrameLevel() + 5)
+                cogBtn:SetAlpha(FBEnabled() and 0.4 or 0.15)
+                local cogTex = cogBtn:CreateTexture(nil, "OVERLAY")
+                cogTex:SetAllPoints()
+                cogTex:SetTexture(EllesmereUI.COGS_ICON)
+                cogBtn:SetScript("OnEnter", function(self) if FBEnabled() then self:SetAlpha(0.7) end end)
+                cogBtn:SetScript("OnLeave", function(self) self:SetAlpha(FBEnabled() and 0.4 or 0.15) end)
+                cogBtn:SetScript("OnClick", function(self) if FBEnabled() then fbCogShow(self) end end)
+                EllesmereUI.RegisterWidgetRefresh(function() cogBtn:SetAlpha(FBEnabled() and 0.4 or 0.15) end)
+            end
             if FBEnabled() then
             -- Free Move Position: label left, Move Frames button right (Free Move only). Right slot: Boss Health Color.
             row, h = W:DualRow(parent, y,

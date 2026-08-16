@@ -2594,6 +2594,27 @@ EllesmereUI.RegisterMigration({
 })
 
 EllesmereUI.RegisterMigration({
+    id          = "blizzskin_widget_bars_seed_v1",
+    scope       = "global",
+    description = "Seed the new Reskin Widget Bars toggle from existing chrome preferences: on only when Reskin Tooltips AND Reskin Popups and Menus are both on, so accounts that turned those off do not get newly skinned HUD bars.",
+    body        = function(ctx)
+        local db = ctx.db
+        if not db then return end
+        -- Registered AFTER the master-split migration on purpose: an account
+        -- jumping many versions gets reskinPopupsMenus seeded first in the
+        -- same pass, so this reads the settled value. Writes an explicit
+        -- boolean both ways; the key is independent from here on (same
+        -- contract as reskinPopupsMenus itself). Fresh installs never run
+        -- this (genesis stamp) and keep nil = on, which matches both masters
+        -- defaulting on.
+        if db.reskinWidgetBars == nil then
+            db.reskinWidgetBars = (db.customTooltips ~= false)
+                and (db.reskinPopupsMenus ~= false)
+        end
+    end,
+})
+
+EllesmereUI.RegisterMigration({
     id          = "texture_kringel_diamonds_to_blinkii_v1",
     scope       = "profile",
     description = "Rename the saved 'kringel-diamonds' bar texture value to its replacement 'blinkii-diamonds' across Unit Frames, Raid Frames, Nameplates, Resource Bars, and Damage Meters.",
@@ -3849,6 +3870,34 @@ EllesmereUI.RegisterMigration({
         local willBeLive = (ss and ss.healthBar  == false) and true or false
         if wasLive ~= willBeLive then
             rf.party_threatBorderSize = nil
+        end
+    end,
+})
+
+--------------------------------------------------------------------------------
+--  Cyrillic locales gained real font choice: several bundled faces carry the
+--  full Cyrillic block (EllesmereUI.FONT_CYRILLIC) and ResolveFontName now
+--  honours them instead of forcing the system glyph font. That must not change
+--  what anyone already sees, so existing installs are pinned to System Default
+--  and the new faces stay an opt-in pick.
+--
+--  Detecting "untouched" is exact here: before this change the ruRU picker could
+--  only ever store the __system sentinel, the __expressway sentinel, or an
+--  external SharedMedia name. Plain "Expressway" was unreachable as a choice, so
+--  it can only be the seeded default -- rewriting just that value leaves every
+--  deliberate pick alone. Fresh installs never reach this body; GetFontsDB seeds
+--  the correct default for them directly.
+--------------------------------------------------------------------------------
+EllesmereUI.RegisterMigration({
+    id          = "ru_cyrillic_font_optin_v1",
+    scope       = "global",
+    description = "Pin existing Cyrillic-locale installs to the system glyph font so the newly selectable bundled Cyrillic faces stay opt-in.",
+    body        = function(ctx)
+        if EllesmereUI.LOCALE_SCRIPT ~= "cyrillic" then return end
+        local fonts = ctx.db and ctx.db.fonts
+        if not fonts then return end            -- fresh install: GetFontsDB seeds it
+        if fonts.global == "Expressway" then
+            fonts.global = EllesmereUI.SYSTEM_FONT_KEY
         end
     end,
 })

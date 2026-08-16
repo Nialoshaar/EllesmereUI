@@ -318,7 +318,9 @@ local defaults = {
         showWhenRaid     = true,
         frameStrata      = "LOW",
 
-        -- Friendly Boss Frames (boss1-5 healable NPC frames, raid only)
+        -- Friendly Boss Frames (boss1-5 healable NPC frames; raid, plus party
+        -- via the opt-in showInDungeons key -- absent = raid only, no default
+        -- on purpose so existing users keep the raid-only behavior)
         friendlyBoss = {
             display  = "never",   -- "never" | "healers" | "always"
             position = "right",   -- "left" | "right" | "free"
@@ -1487,11 +1489,13 @@ end
 -- live frames (via ResolveDisplayName) and every preview surface. Skips secret
 -- strings entirely (#, string.byte and string.sub all throw on secrets), so a
 -- secret name shows verbatim and uncapped. nameMaxLength 0 = off. On ns (local cap).
-function ns.CapName(display)
+-- Takes the caller's settings table `s` so a party override applies correctly.
+function ns.CapName(display, s)
     if type(display) ~= "string" then return display end
     if issecretvalue and issecretvalue(display) then return display end
     if display == "" then return display end
-    local maxLen = db and db.profile and db.profile.nameMaxLength or 15
+    s = s or (db and db.profile)
+    local maxLen = s and s.nameMaxLength or 15
     if not maxLen or maxLen <= 0 then return display end
     local bytes = #display
     local i, chars, endByte = 1, 0, nil
@@ -1520,7 +1524,7 @@ ns.RF_NAME_WIDTH_FRACTION = 1.0
 -- NSAPI:GetName self-gates on its global nicknames toggle AND that checkbox and returns the short
 -- name when unset, falling through to the next source. Every source gates itself entirely (no
 -- EUI-side toggle); pcall keeps a misbehaving external API from breaking name rendering.
-local function ResolveDisplayName(unit, applyCap)
+local function ResolveDisplayName(unit, applyCap, s)
     local name = UnitName(unit) or ""
     local display
     if NSAPI and NSAPI.GetName then
@@ -1582,7 +1586,7 @@ local function ResolveDisplayName(unit, applyCap)
         display = name
     end
     -- Cap only the in-frame name (applyCap), not the top name bar banner.
-    if applyCap then display = ns.CapName(display) end
+    if applyCap then display = ns.CapName(display, s) end
     return display
 end
 
@@ -1692,14 +1696,16 @@ function ns.RefreshAllNames()
     if not s then return end
     local function refresh(unit, btn)
         local d = GetFFD(btn)
+        -- Party buttons read through the party proxy so a per-party cap applies.
+        local bs = (d and d._isParty) and (ns._scaledPartyProxy or s) or s
         if d and d.nameText then
-            d.nameText:SetText(ResolveDisplayName(unit, true))
-            local nr, ng, nb = GetNameColor(unit, s)
+            d.nameText:SetText(ResolveDisplayName(unit, true, bs))
+            local nr, ng, nb = GetNameColor(unit, bs)
             d.nameText:SetTextColor(nr, ng, nb)
         end
-        if d and d.topNameBarText and s.topNameBarEnabled then
-            d.topNameBarText:SetText(ResolveDisplayName(unit))
-            local tr, tg, tb = GetTopNameBarColor(unit, s)
+        if d and d.topNameBarText and bs.topNameBarEnabled then
+            d.topNameBarText:SetText(ResolveDisplayName(unit, false, bs))
+            local tr, tg, tb = GetTopNameBarColor(unit, bs)
             d.topNameBarText:SetTextColor(tr, tg, tb)
         end
     end
@@ -3978,14 +3984,14 @@ local function UpdateButton(button)
 
     -- Name (visibility owned by AnchorNameText, which hides it when the Top Name Bar is enabled)
     if d.nameText then
-        d.nameText:SetText(ResolveDisplayName(unit, true))
+        d.nameText:SetText(ResolveDisplayName(unit, true, s))
         local nr, ng, nb = GetNameColor(unit, s)
         d.nameText:SetTextColor(nr, ng, nb)
     end
 
     -- Top Name Bar text (unit name + class/custom color); size/anchor/visibility are LayoutTopNameBar's.
     if d.topNameBarText and s.topNameBarEnabled then
-        d.topNameBarText:SetText(ResolveDisplayName(unit))
+        d.topNameBarText:SetText(ResolveDisplayName(unit, false, s))
         local tr, tg, tb = GetTopNameBarColor(unit, s)
         d.topNameBarText:SetTextColor(tr, tg, tb)
     end
@@ -4611,11 +4617,15 @@ ns._UpdateButtonHealth = function(button)
 end
 
 -------------------------------------------------------------------------------
---  Friendly Boss Frames (raid only): five standalone secure unit buttons for
+--  Friendly Boss Frames (any group): five standalone secure unit buttons for
 --  boss1-boss5. A secure visibility driver on [@bossN,help] is the entire
 --  detection (encounters expose healable friendly NPCs as boss units) -- no
---  NPC database, fully combat safe. Buttons render ONLY health bar +
---  name/health text, following raid-frame settings. Excluded from preview and
+--  NPC database, fully combat safe. Dungeon encounters use the same boss unit
+--  tokens as raids, so the group gate can cover party too -- behind the Show
+--  in Dungeons opt-in (fb.showInDungeons, default off); attached positions
+--  slot in beside the party container there. Buttons render ONLY health bar +
+--  name/health text, following the RAID frame settings in a party too (one
+--  styled group, and the indicator containers are built once). Excluded from preview and
 --  unlock mode (Free Move uses its own drag overlay). Display "healers"
 --  builds/activates only on a healer spec.
 -------------------------------------------------------------------------------
@@ -4795,7 +4805,7 @@ FB.Update = function(b)
         fbc and fbc.b or 49/255, (s.healthBarOpacity or 100) / 100)
 
     if b._nameText then
-        b._nameText:SetText(ResolveDisplayName(unit, true))
+        b._nameText:SetText(ResolveDisplayName(unit, true, s))
         local nr, ng, nb = GetNameColor(unit, s)
         b._nameText:SetTextColor(nr, ng, nb)
     end
@@ -4983,13 +4993,13 @@ FB.EnsureBuilt = function()
     -- Slot controller: collapses friendly bosses into the FIRST slots (button positions fixed;
     -- units assigned in bossN order, buttons shown/hidden). Runs in the restricted environment so
     -- mid-combat spawns/despawns reflow safely (insecure code cannot Show/Hide or re-unit protected
-    -- buttons in combat). Drivers registered in FB_Apply feed state-inraid / state-fb1..5. One
+    -- buttons in combat). Drivers registered in FB_Apply feed state-ingroup / state-fb1..5. One
     -- shared body per attribute; FB_Apply also force-runs it via SecureHandlerExecute because the
     -- driver manager skips the handler when a re-registered driver's value is unchanged.
     FB.RELAYOUT = [[
-        local inraid = self:GetAttribute("state-inraid")
+        local ingroup = self:GetAttribute("state-ingroup")
         local slot = 0
-        if inraid == 1 or inraid == "1" then
+        if ingroup == 1 or ingroup == "1" then
             for i = 1, 5 do
                 local v = self:GetAttribute("state-fb" .. i)
                 if v == 1 or v == "1" then
@@ -5015,7 +5025,7 @@ FB.EnsureBuilt = function()
     -- The relayout body lives in its own attribute so the handler and the force-run share it.
     controller:SetAttributeNoHandler("fb_relayout", FB.RELAYOUT)
     controller:SetAttributeNoHandler("_onattributechanged", [[
-        if name == "state-inraid" or name == "state-fb1" or name == "state-fb2"
+        if name == "state-ingroup" or name == "state-fb1" or name == "state-fb2"
            or name == "state-fb3" or name == "state-fb4" or name == "state-fb5" then
             self:RunAttribute("fb_relayout")
         end
@@ -5134,7 +5144,30 @@ FB.Anchor = function(owner)
                 anchorHdr = xf.container
             end
         end
-        if not anchorHdr and s.mergeGroups then
+        -- Party/dungeon: every raid group header is hidden there, so the boss group slots in beside
+        -- the party container as if it were the next group -- along the axis the party frames do NOT
+        -- stack on, the way "before first / after last group" reads in a raid. Extra Frames is raid
+        -- only and keeps the raid path. Party frames off screen leaves nothing to attach to: this
+        -- branch anchors nothing and the free position below takes over.
+        if owner == FB and not anchorHdr and not IsInRaid()
+           and fb.showInDungeons == true then
+            local pc = ns._partyContainerFrame
+            if pc and pc:IsShown() then
+                local gap = s.groupSpacing or -1
+                local before = (fb.position == "left")
+                -- Party growth axis comes from partyHorizontal alone (_LayoutPartyFrames): the flip
+                -- and "centered" variants only reverse it, and the container spans all five slots
+                -- either way, so the perpendicular attach point is the same.
+                if s.partyHorizontal then
+                    if before then c:SetPoint("BOTTOMLEFT", pc, "TOPLEFT", 0, gap)
+                    else c:SetPoint("TOPLEFT", pc, "BOTTOMLEFT", 0, -gap) end
+                else
+                    if before then c:SetPoint("TOPRIGHT", pc, "TOPLEFT", -gap, 0)
+                    else c:SetPoint("TOPLEFT", pc, "TOPRIGHT", gap, 0) end
+                end
+                return
+            end
+        elseif not anchorHdr and s.mergeGroups then
             anchorHdr = ns._flatHeader
         elseif not anchorHdr then
             -- The boss group slots in before the first / after the last group that is BOTH enabled
@@ -5192,6 +5225,16 @@ FB.Anchor = function(owner)
     c:SetPoint("CENTER", UIParent, "CENTER", p.x or 100, p.y or 0)
 end
 
+-- Re-anchor only (no restyle): the party visibility pass calls this on the party container's
+-- show/hide edge, since attached positions hang off that container outside a raid. Gated on
+-- the Show in Dungeons opt-in: with it off the party attach branch is inert, so the party
+-- layout/visibility hooks skip the re-anchor entirely (zero added work for raid-only users).
+function ns.FB_ReAnchor()
+    if not FB.built then return end
+    local fb = FB.Settings and FB.Settings()
+    if fb and fb.showInDungeons == true then FB.Anchor() end
+end
+
 -- Master apply: activates, deactivates and refreshes the whole feature. Called from OnEnable, the
 -- options dropdowns, spec changes, profile swaps (_ERF_RefreshAll) and the post-combat dirty pass.
 function ns.FB_Apply()
@@ -5203,7 +5246,7 @@ function ns.FB_Apply()
     if not FB.ShouldBeActive() then
         if FB.built then
             if FB.controller then
-                UnregisterAttributeDriver(FB.controller, "state-inraid")
+                UnregisterAttributeDriver(FB.controller, "state-ingroup")
                 for i = 1, 5 do
                     UnregisterAttributeDriver(FB.controller, "state-fb" .. i)
                 end
@@ -5224,7 +5267,14 @@ function ns.FB_Apply()
     FB.Anchor()
     FB.container:Show()
     -- Drivers feed the slot controller, which assigns bosses to the first slots in bossN order and shows/hides buttons securely.
-    RegisterAttributeDriver(FB.controller, "state-inraid", "[@raid1,exists] 1; 0")
+    -- Group gate: raid only by default; raid OR party with Show in Dungeons on (the cog on
+    -- Add Friendly Boss Group -- opt-in, so existing users keep raid-only behavior). Dungeon
+    -- encounters expose the same healable bossN tokens. The toggle's setter re-runs FB_Apply,
+    -- so re-registering here applies the flip live in either direction.
+    local groupCond = (fb.showInDungeons == true)
+        and "[@raid1,exists][@party1,exists] 1; 0"
+        or "[@raid1,exists] 1; 0"
+    RegisterAttributeDriver(FB.controller, "state-ingroup", groupCond)
     for i = 1, 5 do
         RegisterAttributeDriver(FB.controller, "state-fb" .. i, "[@boss" .. i .. ",help] 1; 0")
     end
@@ -8317,7 +8367,7 @@ do
             "powerUniformAnchors", "extendHealthBehindPower",
         },
         textDisplay = {
-            "nameSize", "nameColorMode", "nameCustomColor",
+            "nameSize", "nameMaxLength", "nameColorMode", "nameCustomColor",
             "namePosition", "nameOffsetX", "nameOffsetY",
             "healthTextMode", "healthTextColorMode", "healthTextCustomColor",
             "healthTextSize", "healthTextPosition", "healthTextOffsetX", "healthTextOffsetY",
@@ -9011,6 +9061,12 @@ ns._LayoutPartyFrames = function()
     -- Self button + header slot positioning ran above (ns._PositionPartySlots),
     -- before the attribute pass so a header Hide/Show re-process anchors the
     -- children against the already-correct header position and size.
+
+    -- The friendly boss group attaches to this container (and to the growth axis derived above)
+    -- while not in a raid, so every layout pass -- Horizontal Frames, Flip Growth, party size,
+    -- cell spacing -- has to move it too. OOC only (this function bails in combat). In a raid the
+    -- boss group hangs off the raid headers instead, so skip the re-anchor scan there.
+    if not IsInRaid() and ns.FB_ReAnchor then ns.FB_ReAnchor() end
 end
 
 -- Party visibility: show/hide based on group state.
@@ -9073,6 +9129,14 @@ ns._UpdatePartyVisibility = function()
         end
 
         wipe(ns._partyUnitToButton)
+    end
+
+    -- Attach-point edges the layout pass above cannot cover: the boss group's own roster pass can
+    -- run before the party frames are up, and the hidden branch never lays out at all (the group
+    -- then falls back to its free position). EDGE only -- this recompute runs on every roster event.
+    if ns._fbPartyAttachState ~= visible then
+        ns._fbPartyAttachState = visible
+        if ns.FB_ReAnchor then ns.FB_ReAnchor() end
     end
 end
 
@@ -12512,7 +12576,7 @@ local function ApplyPreviewData(f, index)
         end
         -- Force text re-render (WoW doesn't visually re-layout on JustifyH change alone)
         f._nameText:SetText("")
-        f._nameText:SetText(ns.CapName(name))
+        f._nameText:SetText(ns.CapName(name, s))
         ApplyFont(f._nameText, s.nameSize or 10)
         local nameMode = s.nameColorMode or "class"
         if nameMode == "accent" then
@@ -14418,29 +14482,60 @@ function ERF:OnEnable()
     -- Extra Frames: initial activation (raid-only member duplicates)
     if ns.XF_Apply then ns.XF_Apply() end
 
-    -- DEFERRED LOGIN PASS. Runs in its OWN C_Timer execution -- its own
-    -- script-watchdog budget -- on the first frame after the loading screen
-    -- (timers never fire during it), normally before that frame renders.
-    -- Everything here is combat-legal: the insecure styling bodies for every
+    -- DEFERRED LOGIN PASS, BUDGET-FRAGMENTED. Starts on the first frame
+    -- after the loading screen (timers never fire during it). Everything
+    -- here is combat-legal: the insecure styling bodies for every
     -- pre-spawned button (~80% of this module's login CPU), then the full
     -- reload passes, whose protected ops self-gate in combat and heal on the
-    -- regen dirty-flag path. Order is load-bearing: BM lookup before the
-    -- bodies (aura shell pools size from the indicator lists), bodies before
-    -- the restyle loops.
+    -- regen dirty-flag path. Order is load-bearing and preserved by C_Timer
+    -- FIFO: BM lookup before the bodies (aura shell pools size from the
+    -- indicator lists), bodies before the restyle loops.
+    --
+    -- WHY FRAGMENTED: each C_Timer callback is its own execution and so its
+    -- own 12.1 script-watchdog budget -- but a budget is a fixed slice, and
+    -- this pass's cost scales with button count x profile size. As ONE tick
+    -- it exceeded its own budget on slower machines (field: watchdog kill
+    -- inside _RefreshProxyModes at the TAIL of the tick -- the named line is
+    -- just where the budget died, not the culprit). Now the styling loop
+    -- self-limits with debugprofilestop and re-queues, and each reload pass
+    -- runs as its own execution, so no single execution here scales with
+    -- data size. Fast machines still finish styling in one tick; slow ones
+    -- style progressively over a few frames instead of erroring. Buttons
+    -- created between slices (roster spawns) are healed by the restyle-loop
+    -- fallbacks and the 0.5s safety pass, same as the existing one-tick gap;
+    -- UpdateButton's `not d.styled` guard covers event dispatch in the gap.
     C_Timer.After(0, function()
-        -- Invalidate the login frame's paint stamps so the deferred repaint
-        -- can never be deduped away (mirrors _ERF_RefreshAll).
+        -- Invalidate the frame's paint stamps so the deferred repaint can
+        -- never be deduped away (mirrors _ERF_RefreshAll). Re-bumped in each
+        -- later stage: every stage is a new frame with its own stamps.
         ns._paintGen = (ns._paintGen or 0) + 1
         if ns.BM_RebuildLookup then ns.BM_RebuildLookup(db) end
-        for _, btn in ipairs(allButtons) do
-            StyleButton(btn)
+        local queue = {}
+        for _, btn in ipairs(allButtons) do queue[#queue + 1] = btn end
+        for _, btn in ipairs(ns._partyAllButtons) do queue[#queue + 1] = btn end
+        local idx = 1
+        local function drain()
+            local deadline = debugprofilestop() + 8
+            while idx <= #queue do
+                StyleButton(queue[idx])
+                idx = idx + 1
+                if idx <= #queue and debugprofilestop() > deadline then
+                    C_Timer.After(0, drain)
+                    return
+                end
+            end
+            -- Styling complete: each remaining pass gets a whole budget.
+            C_Timer.After(0, function()
+                ns._paintGen = (ns._paintGen or 0) + 1
+                ReloadFrames()
+            end)
+            C_Timer.After(0, function()
+                ns._paintGen = (ns._paintGen or 0) + 1
+                ns.ReloadPartyFrames()
+            end)
+            C_Timer.After(0, RegisterWithUnlockMode)
         end
-        for _, btn in ipairs(ns._partyAllButtons) do
-            StyleButton(btn)
-        end
-        ReloadFrames()
-        ns.ReloadPartyFrames()
-        RegisterWithUnlockMode()
+        drain()
     end)
 
     -- Profile-swap refresh: EllesmereUI.RefreshAllAddons calls this on a profile

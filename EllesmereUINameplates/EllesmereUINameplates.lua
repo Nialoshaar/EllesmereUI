@@ -259,6 +259,7 @@ local defaults = {
     hitboxScaleY = 100,
     nameplateYOffset = 0,
     enemyNameTextSize = 11,
+    enemyNameTextReactionColor = false,
     debuffTimerColor = { r = 1, g = 1, b = 1 },
     auraTextPosition = "topleft",
     debuffTimerPosition = "topleft",
@@ -4445,7 +4446,60 @@ end
 local _inThreatContent = false
 local _isTankRole      = false
 
+-- Off-tank color under identity restriction: the mob-target ROLE is secret, so
+-- the question flips sides -- "is any OTHER tank tanking this mob" -- via
+-- UnitDetailedThreatSituation(tankToken, mob) (plain tokens in; isTanking
+-- boolean out, plain or secret; field-probed real boolean in keys) folded
+-- through C_CurveUtil.EvaluateColorValueFromBoolean so no secret is ever read
+-- in Lua. Returns ok plus possibly-SECRET r,g,b: the caller must hand them to
+-- SETTERS ONLY -- never compare, cache, multiply or format them. Tank tokens
+-- rebuild lazily off ns._otherTanksDirty (set by RefreshThreatCache's existing
+-- roster/role/zone events -- zero new registrations; own-group role reads are
+-- plain). On ns (file is at the 200-local cap).
+function ns.ComputeOffTankFold(unit, br, bg, bb, otr, otg, otb)
+    local eval = C_CurveUtil and C_CurveUtil.EvaluateColorValueFromBoolean
+    if not eval then return false end
+    if ns._otherTanksDirty or not ns._otherTankTokens then
+        ns._otherTanksDirty = false
+        local t = ns._otherTankTokens
+        if t then wipe(t) else t = {}; ns._otherTankTokens = t end
+        local n = 0
+        local prefix, count
+        if IsInRaid() then prefix, count = "raid", GetNumGroupMembers()
+        elseif IsInGroup() then prefix, count = "party", GetNumGroupMembers() - 1 end
+        if prefix then
+            for i = 1, count do
+                if n >= 3 then break end
+                local tok = prefix .. i
+                if not UnitIsUnit(tok, "player")
+                    and UnitGroupRolesAssigned(tok) == "TANK" then
+                    n = n + 1; t[n] = tok
+                end
+            end
+        end
+    end
+    local toks = ns._otherTankTokens
+    if not toks[1] then return false end
+    -- All colors arrive from the caller: the _C accessor is declared far BELOW
+    -- this function, so resolving colors here read a nil global (field crash).
+    local r, g, b = br, bg, bb
+    if not (r and otr) then return false end
+    for i = 1, #toks do
+        local isTanking = UnitDetailedThreatSituation(toks[i], unit)
+        -- type() is legal on secrets and reports the underlying type, so one
+        -- check admits both plain and secret booleans; a refused call (nil)
+        -- skips and the accumulator keeps the safe tankNoAggro color.
+        if type(isTanking) == "boolean" then
+            r = eval(isTanking, otr, r)
+            g = eval(isTanking, otg, g)
+            b = eval(isTanking, otb, b)
+        end
+    end
+    return true, r, g, b
+end
+
 local function RefreshThreatCache()
+    ns._otherTanksDirty = true
     -- Zone: party/raid instances and delves (difficultyID 204) are threat-relevant
     local _, instanceType, difficultyID = GetInstanceInfo()
     difficultyID = tonumber(difficultyID) or 0
@@ -4613,6 +4667,25 @@ local function ResolveNeutralColor(unit)
     local c = _C("neutral")
     return c.r, c.g, c.b
 end
+-- Enemy Name Text "Reaction Color" (EXTRAS toggle, default off): colors the name text
+-- Hostile or Neutral to match the unit's reaction, independent of the health-bar palette.
+-- Every NameplateFrame unit is an enemy (HideBlizzardFrame only suppresses Blizzard's frame
+-- on UnitCanAttack units), so only these two reactions are ever relevant here. Same
+-- reaction/UnitCanAttack idiom as the health-bar Neutral check below (GetReactionColor step 5)
+-- so a secret reaction read (identity-restricted units) falls through safely instead of erroring.
+local function GetEnemyNameReactionColor(unit)
+    local reaction = UnitReaction(unit, "player")
+    local isNeutral = (reaction and reaction == 4)
+        or (UnitCanAttack("player", unit) and not UnitIsEnemy(unit, "player"))
+    local db = p or defaults
+    local c
+    if isNeutral then
+        c = db.enemyNameNeutralColor or defaults.neutral
+    else
+        c = db.enemyNameHostileColor or defaults.hostile
+    end
+    return c.r, c.g, c.b
+end
 -- Blizzard's own plate for this unit, colored by untainted code. Under HideBlizzardFrame the
 -- UnitFrame keeps its unit and its events (only castBar is silenced), so its health bar still
 -- carries whatever CompactUnitFrame_UpdateHealthColor last resolved -- including the class
@@ -4645,6 +4718,11 @@ local function GetReactionColor(unit)
     -- Same idiom, for the enemy player class color at step 6: set when the class token
     -- came back redacted, so UpdateHealthColor knows to mirror Blizzard's bar instead.
     ns._reactionMirrorClass = false
+    -- Same idiom, for the off-tank color under identity restriction: set when the
+    -- mob-target ROLE read came back secret with Off-Tank Color enabled, so
+    -- UpdateHealthColor asks ns.ComputeOffTankFold for a C-folded color instead
+    -- of the plain tankNoAggro fallback this function returns.
+    ns._reactionOffTankFold = false
     local db = p or defaults
     -- 1. Tapped always highest
     if UnitIsTapDenied(unit) then
@@ -4679,7 +4757,18 @@ local function GetReactionColor(unit)
                 end
                 end
             else
-                -- Tank: losing aggro / no aggro absolute priority
+                -- Tank arm. 12.1 field facts (side-by-side dump): the situation
+                -- API pins 3 on plate tokens while the DETAILED API returns
+                -- SECRET booleans for plate pairings (plain only for "target"
+                -- pairings) -- no Lua branch can know who holds the mob. With
+                -- Off-Tank Color on, mark EVERY tank-arm paint for the C-side
+                -- fold: it starts from the plain color this function returns
+                -- and overrides toward offTankAggro exactly when a co-tank's
+                -- isTanking folds true. One tank holds per mob, so the fold
+                -- self-resolves with zero secret reads.
+                local otE = db.offTankAggroEnabled
+                if otE == nil then otE = defaults.offTankAggroEnabled end
+                if otE then ns._reactionOffTankFold = true end
                 if status < 3 and status >= 2 then
                     local c = _C("tankLosingAggro")
                     return c.r, c.g, c.b
@@ -4690,9 +4779,22 @@ local function GetReactionColor(unit)
                     -- Role reads on identity-restricted units return SECRET values: never
                     -- truthiness-chain or compare one. Unreadable role reads as non-tank.
                     local targetRole = "NONE"
+                    local roleSecret = false
                     if UnitExists(unitTarget) then
                         local r = UnitGroupRolesAssigned(unitTarget)
-                        if not issecretvalue(r) and r then targetRole = r end
+                        if issecretvalue(r) then roleSecret = true
+                        elseif r then targetRole = r end
+                    end
+                    -- Role unreadable (identity restriction): the plain path
+                    -- below lands on tankNoAggro, but mark the frame so
+                    -- UpdateHealthColor can answer the REAL question from the
+                    -- other side -- "is any other tank tanking this mob" via
+                    -- UnitDetailedThreatSituation + the C_CurveUtil color fold
+                    -- (field-probed: returns a real boolean in keys).
+                    if roleSecret then
+                        local otE = db.offTankAggroEnabled
+                        if otE == nil then otE = defaults.offTankAggroEnabled end
+                        if otE then ns._reactionOffTankFold = true end
                     end
                     if targetRole ~= "TANK" then
                         local c = _C("tankNoAggro")
@@ -5044,16 +5146,11 @@ local function HideBlizzardFrame(nameplate, unit)
                 local base = stf and stf:GetParent()
                 local ufUnit = base and base.namePlateUnitToken
                 if not ufUnit then return end
-                -- Non-self unit comparison: secret boolean whenever the unit is
-                -- identity-restricted -- which is NORMAL for enemies, and hostile
-                -- interactables (skinnable corpses, quest objects) are legitimate
-                -- soft-interact targets. Secret = cannot judge = leave the icon
-                -- alone (stock shows every soft-target icon; fail toward stock,
-                -- never toward hiding -- collapsing secret to hidden killed
-                -- enemy interact icons in the field).
-                local same = UnitIsUnit(ufUnit, "softinteract")
-                if issecretvalue and issecretvalue(same) then return end
-                if same ~= true then self:Hide() end
+                -- Hide only for attackable enemies. NPCs and non-attackable
+                -- objects, even hostile ones, keep the icon.
+                local canAttack = UnitCanAttack("player", ufUnit)
+                if issecretvalue and issecretvalue(canAttack) then return end
+                if canAttack then self:Hide() end
             end)
         end
     end
@@ -5330,6 +5427,12 @@ function NameplateFrame:ApplyAppearance()
         local nr, ng, nb = GetTextSlotColor(nameSlotKey)
         self.name:SetTextColor(nr, ng, nb, 1)
     end
+    -- Enemy Name Text "Reaction Color" cache: ApplyAppearance is a second writer of
+    -- self.name's color (the slot-color line above), so invalidate the skip-if-unchanged
+    -- cache here too -- otherwise a stale cache can wrongly skip re-applying the reaction
+    -- color on the very next UpdateHealthColor call (which always runs immediately after
+    -- this, from the same SetUnit), leaving the plate showing this slot color instead.
+    self._lastNameReactR, self._lastNameReactG, self._lastNameReactB = nil, nil, nil
     self:RefreshNamePosition()
     -- Cast text sizes, colors, and offsets
     local cns = (p and p.castNameSize) or defaults.castNameSize
@@ -6279,13 +6382,44 @@ function NameplateFrame:UpdateHealthColor()
     else
         self._mirrorPending = nil
     end
+    -- Off-tank fold: same shape as mirror -- the folded components can be
+    -- SECRET, so they bypass the value compare, never enter the caches, and
+    -- reach setters only. hr/hg/hb stay the plain tankNoAggro fallback.
+    local folded, fr, fg, fb = false
+    if not mirrored and ns._reactionOffTankFold and ns.ComputeOffTankFold then
+        local otc = _C("offTankAggro")
+        folded, fr, fg, fb = ns.ComputeOffTankFold(unit, hr, hg, hb, otc.r, otc.g, otc.b)
+    end
     if mirrored then
         -- Cache invalidated, never written with a secret: the next plain colour must reapply.
         self._lastHCr, self._lastHCg, self._lastHCb = nil, nil, nil
         self.health:SetStatusBarColor(mr, mg, mb)
+    elseif folded then
+        self._lastHCr, self._lastHCg, self._lastHCb = nil, nil, nil
+        self.health:SetStatusBarColor(fr, fg, fb)
     elseif hr ~= self._lastHCr or hg ~= self._lastHCg or hb ~= self._lastHCb then
         self._lastHCr, self._lastHCg, self._lastHCb = hr, hg, hb
         self.health:SetStatusBarColor(hr, hg, hb)
+    end
+    -- Enemy Name Text "Reaction Color" (EXTRAS toggle): zero cost while off (one field read),
+    -- other than the one-time restore below for a plate that was previously colored by this
+    -- feature. Piggybacks on this function's existing event-driven calls rather than
+    -- registering anything of its own.
+    if p and p.enemyNameTextReactionColor then
+        local nnr, nng, nnb = GetEnemyNameReactionColor(unit)
+        if nnr ~= self._lastNameReactR or nng ~= self._lastNameReactG or nnb ~= self._lastNameReactB then
+            self._lastNameReactR, self._lastNameReactG, self._lastNameReactB = nnr, nng, nnb
+            self.name:SetTextColor(nnr, nng, nnb, 1)
+        end
+    elseif self._lastNameReactR then
+        -- Toggled off after having been applied to this plate: restore the slot color
+        -- directly here rather than depending on ApplyAppearance re-running elsewhere.
+        self._lastNameReactR, self._lastNameReactG, self._lastNameReactB = nil, nil, nil
+        local nameSlotKey = ns.FindNameSlot()
+        if nameSlotKey then
+            local nr, ng, nb = GetTextSlotColor(nameSlotKey)
+            self.name:SetTextColor(nr, ng, nb, 1)
+        end
     end
     -- Near-aggro glow (Non-Tank Threat cog): ns._reactionNearAggro was written
     -- by the GetReactionColor call ABOVE (same decision that picked the color).
@@ -6331,6 +6465,8 @@ function NameplateFrame:UpdateHealthColor()
         if NoTintFlag(db2, "focusOverlayNoTint") then
             if mirrored then
                 ocr, ocg, ocb, forced = mr, mg, mb, true
+            elseif folded then
+                ocr, ocg, ocb, forced = fr, fg, fb, true
             else
                 ocr, ocg, ocb = hr, hg, hb
             end
@@ -6387,6 +6523,8 @@ function NameplateFrame:UpdateHealthColor()
         if NoTintFlag(db2, "targetOverlayNoTint") then
             if mirrored then
                 ocr, ocg, ocb, forced = mr, mg, mb, true
+            elseif folded then
+                ocr, ocg, ocb, forced = fr, fg, fb, true
             else
                 ocr, ocg, ocb = hr, hg, hb
             end
@@ -8528,4 +8666,5 @@ ns._oocPlatesCtl:SetScript("OnEvent", function(self, event)
     end
 end)
 ns._oocPlatesCtl:RegisterEvent("PLAYER_LOGIN")
+
 
