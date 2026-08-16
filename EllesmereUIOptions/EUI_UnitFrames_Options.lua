@@ -5960,7 +5960,7 @@ initFrame:SetScript("OnEvent", function(self)
                   -- healthClassColored are left exactly as the user had them and come
                   -- back untouched the moment Dynamic Color goes to Off.
                   disabled = function() return SVal("healthColorMode", "none") ~= "none" end,
-                  disabledTooltip = "Dynamic Color is on -- the fill color comes from the unit's health",
+                  disabledTooltip = "Dynamic Color is on -- the fill color comes from the unit's health", rawTooltip = true,
                   getValue = function()
                       local c = SGet("customFillColor")
                       if c then return c.r, c.g, c.b end
@@ -5995,7 +5995,7 @@ initFrame:SetScript("OnEvent", function(self)
                   -- uses the class color, but as the 100% stop of the curve, not as
                   -- this flat choice.
                   disabled = function() return SVal("healthColorMode", "none") ~= "none" end,
-                  disabledTooltip = "Dynamic Color is on -- the fill color comes from the unit's health",
+                  disabledTooltip = "Dynamic Color is on -- the fill color comes from the unit's health", rawTooltip = true,
                   getValue = function()
                       local _, ct = UnitClass("player")
                       if ct and RAID_CLASS_COLORS[ct] then

@@ -788,18 +788,26 @@ local function BuildAssignedDebuffsFields(frame, fontPath, sy, cfg, apply)
         local rgn = safRow._leftRegion
         if rgn._control then rgn._control:Hide() end
         local PAB_ALL_DEBUFFS_KEY = "__allDebuffs"
+        local PAB_DEBUFF_HAS_DUR_KEY = "__debuffHasDuration"
         local function AllOn() return cfg.showAllDebuffs ~= false end
+        -- Hovering a dimmed Show box explains the dim (the lane is inert
+        -- while All Debuffs already shows everything). Has Duration is an
+        -- AND-modifier, not a mode: it never locks the lane.
+        local lockedTip = L("All Debuffs is selected, so every debuff already shows. Use the red Hide box to exclude these instead.")
         local function FilterItems()
             local items = {
                 { key = PAB_ALL_DEBUFFS_KEY, label = "All Debuffs",
                   tooltip = "Show every debuff. Use the Hide lane below to remove specific filters." },
+                { key = PAB_DEBUFF_HAS_DUR_KEY, label = "Has Duration",
+                  tooltip = "Only show debuffs that have a duration, excluding permanent ones. Combines with the filters below; checked alone it shows every timed debuff." },
                 { isHeader = true, label = "Show", rightLabel = "Hide" },
             }
             local classItems = ns.PAB_ClassItems and ns.PAB_ClassItems(false) or {}
             for i = 1, #classItems do
                 local ci = classItems[i]
                 items[#items + 1] = { key = ci.key, label = ci.label, tooltip = ci.tooltip,
-                    dual = true, showLockedFn = AllOn }
+                    dual = true, showLockedFn = AllOn,
+                    showLockedTooltip = lockedTip }
             end
             return items
         end
@@ -809,6 +817,7 @@ local function BuildAssignedDebuffsFields(frame, fontPath, sy, cfg, apply)
             FilterItems,
             function(k, neg)
                 if k == PAB_ALL_DEBUFFS_KEY then return AllOn() end
+                if k == PAB_DEBUFF_HAS_DUR_KEY then return cfg.hasDuration == true end
                 if neg then
                     local nf = cfg.negClassFilters
                     return nf and nf[k] == true
@@ -822,6 +831,16 @@ local function BuildAssignedDebuffsFields(frame, fontPath, sy, cfg, apply)
                     -- same convention as showAllBuffs). Lanes persist across
                     -- mode flips (the hide lane subtracts in both modes).
                     cfg.showAllDebuffs = v
+                    apply()
+                    EllesmereUI:RefreshPage()
+                    return
+                end
+                if k == PAB_DEBUFF_HAS_DUR_KEY then
+                    -- AND-modifier (native maxDuration on every debuff group;
+                    -- permanents excluded): combines with All Debuffs or any
+                    -- class-filter selection; alone it acts as the timed
+                    -- catch-all (DebuffCatchAllOn).
+                    cfg.hasDuration = v or nil
                     apply()
                     EllesmereUI:RefreshPage()
                     return

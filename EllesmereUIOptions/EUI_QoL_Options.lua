@@ -616,7 +616,8 @@ initFrame:SetScript("OnEvent", function(self)
               end }
         );  y = y - h
 
-        -- Row: Hide Loot Rolls Window (left, with settings cog)
+        -- Row: Hide Loot Rolls Window (left, with settings cog) | Combat
+        -- Alert (right, with its own settings cog below)
         local lootHistRow
         lootHistRow, h = W:DualRow(parent, y,
             { type="toggle", text="Hide Loot Rolls Window",
@@ -630,7 +631,17 @@ initFrame:SetScript("OnEvent", function(self)
                   if EllesmereUI._applyHideLootHistory then EllesmereUI._applyHideLootHistory() end
                   EllesmereUI:RefreshPage()  -- update the cog disabled state
               end },
-            { type="label", text="" }
+            { type="toggle", text="Combat Alert",
+              tooltip="Shows a large on-screen text when you enter and/or leave combat (e.g. \"+Combat\" / \"-Combat\"). Use the cog to set the display text, size, colors and which transitions are shown; use Unlock Mode to reposition the alert.",
+              getValue=function()
+                  return EllesmereUIDB and EllesmereUIDB.combatAlertEnabled or false
+              end,
+              setValue=function(v)
+                  if not EllesmereUIDB then EllesmereUIDB = {} end
+                  EllesmereUIDB.combatAlertEnabled = v
+                  if EllesmereUI._applyCombatAlert then EllesmereUI._applyCombatAlert() end
+                  EllesmereUI:RefreshPage()
+              end }
         );  y = y - h
 
         -- Inline cog (mode + auto-close delay) on the Hide Loot Rolls toggle
@@ -835,26 +846,10 @@ initFrame:SetScript("OnEvent", function(self)
             if deathInitOff then deathCogBlock:Show() else deathCogBlock:Hide() end
         end
 
-        -- Row: Combat Alert (left, with settings cog)
-        local combatAlertRow
-        combatAlertRow, h = W:DualRow(parent, y,
-            { type="toggle", text="Combat Alert",
-              tooltip="Shows a large on-screen text when you enter and/or leave combat (e.g. \"+Combat\" / \"-Combat\"). Use the cog to set the display text, size, colors and which transitions are shown; use Unlock Mode to reposition the alert.",
-              getValue=function()
-                  return EllesmereUIDB and EllesmereUIDB.combatAlertEnabled or false
-              end,
-              setValue=function(v)
-                  if not EllesmereUIDB then EllesmereUIDB = {} end
-                  EllesmereUIDB.combatAlertEnabled = v
-                  if EllesmereUI._applyCombatAlert then EllesmereUI._applyCombatAlert() end
-                  EllesmereUI:RefreshPage()
-              end },
-            { type="label", text="" }
-        );  y = y - h
-
         -- Inline cog (text, size, colors, mode) on the Combat Alert toggle
+        -- (the RIGHT slot of the Hide Loot Rolls row above).
         if not EllesmereUI._prebuilding then
-            local leftRgn = combatAlertRow._leftRegion
+            local leftRgn = lootHistRow._rightRegion
             local function caOff()
                 return not (EllesmereUIDB and EllesmereUIDB.combatAlertEnabled)
             end

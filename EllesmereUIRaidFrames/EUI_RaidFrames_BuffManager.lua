@@ -1408,6 +1408,11 @@ function ns.BM_ApplyPreviewIndicators(f, index, s)
             if #kept == 0 then return end
             local v = {}
             for k, val in pairs(ind) do v[k] = val end
+            -- Preview parity: per-filter square colors expand exactly like the
+            -- live view assembly.
+            if ns.BM2_SquareFilterColors then
+                v.spellColors = ns.BM2_SquareFilterColors(ind) or ind.spellColors
+            end
             -- Healing-preset groups preview stacked icons (HoTs coexist); others preview ONE. Read by the render cap.
             local multi = false
             if ind.filters and ns.BM2_GetFilter then
@@ -4795,6 +4800,40 @@ function ns.BM_BuildPage(pageName, parent, yOffset)
                     local nm = C_Spell and C_Spell.GetSpellName and C_Spell.GetSpellName(mySid)
                     if nm then
                         swatch:HookScript("OnEnter", function() EllesmereUI.ShowWidgetTooltip(swatch, nm) end)
+                        swatch:HookScript("OnLeave", function() EllesmereUI.HideWidgetTooltip() end)
+                    end
+                end
+                -- One swatch per ASSIGNED FILTER, continuing the chain: colors
+                -- every spell that filter shows (direct per-spell swatches
+                -- above win on overlap -- BM2_SquareFilterColors doctrine).
+                -- Ascending fid order matches the runtime's overlap resolution.
+                if ind.filters then
+                    local fids = {}
+                    for fid in pairs(ind.filters) do fids[#fids + 1] = fid end
+                    table.sort(fids)
+                    for _, fid in ipairs(fids) do
+                        local myFid = fid
+                        local swatch = EllesmereUI.BuildColorSwatch(
+                            rgn, stacksRow:GetFrameLevel() + 3,
+                            function()
+                                local c = (ind.filterColors and ind.filterColors[myFid])
+                                    or ind.color or DEFAULT_SQ
+                                return c.r, c.g, c.b, 1
+                            end,
+                            function(r, g, b)
+                                if not ind.filterColors then ind.filterColors = {} end
+                                ind.filterColors[myFid] = { r=r, g=g, b=b }
+                                ReloadAndUpdate()
+                            end, false, 20)
+                        if prev then
+                            swatch:SetPoint("RIGHT", prev, "LEFT", -8, 0)
+                        else
+                            swatch:SetPoint("RIGHT", rgn, "RIGHT", -20, 0)
+                        end
+                        prev = swatch
+                        local f = ns.BM2_GetFilter and ns.BM2_GetFilter(myFid)
+                        local fname = (f and f.name) or ("Filter " .. tostring(myFid))
+                        swatch:HookScript("OnEnter", function() EllesmereUI.ShowWidgetTooltip(swatch, fname) end)
                         swatch:HookScript("OnLeave", function() EllesmereUI.HideWidgetTooltip() end)
                     end
                 end

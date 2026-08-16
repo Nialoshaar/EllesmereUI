@@ -7745,7 +7745,16 @@ function EllesmereUI.BuildVisOptsCBDropdown(parentFrame, ddW, fLevel, items, get
                         chk:Hide()
                         boxBrd:SetColor(0.4, 0.4, 0.4, 0.6)
                     end
-                    if box and item.dual then box:SetAlpha(ShowLaneLocked() and 0.3 or 1) end
+                    if box and item.dual then
+                        local laneLocked = ShowLaneLocked()
+                        box:SetAlpha(laneLocked and 0.3 or 1)
+                        -- Mouse only while locked AND the item explains the
+                        -- dim (item.showLockedTooltip): the disabled box then
+                        -- swallows its own hover for the tooltip, and clicks,
+                        -- like any disabled control. Unlocked, the box goes
+                        -- mouse-inert again so the ROW keeps every click.
+                        box:EnableMouse((laneLocked and item.showLockedTooltip) and true or false)
+                    end
                 end
                 if negChk then
                     if getFn(item.key, true) then
@@ -7846,6 +7855,24 @@ function EllesmereUI.BuildVisOptsCBDropdown(parentFrame, ddW, fLevel, items, get
                     hl:SetColorTexture(1, 1, 1, 0)
                     EllesmereUI.HideWidgetTooltip()
                 end)
+                -- The SHOW box mirrors the hide box's self-explanation, but
+                -- only while a broad mode locks the lane: UpdateCheck enables
+                -- its mouse exactly then, so these scripts never fire for an
+                -- active lane and row clicks stay untouched.
+                if box then
+                    box:SetScript("OnEnter", function()
+                        lbl:SetTextColor(1, 1, 1, 1)
+                        hl:SetColorTexture(1, 1, 1, 0.04)
+                        local tt = item.showLockedTooltip
+                        if type(tt) == "function" then tt = tt() end
+                        if tt then EllesmereUI.ShowWidgetTooltip(box, tt) end
+                    end)
+                    box:SetScript("OnLeave", function()
+                        if not row._isLocked then lbl:SetTextColor(0.75, 0.75, 0.75, 1) end
+                        hl:SetColorTexture(1, 1, 1, 0)
+                        EllesmereUI.HideWidgetTooltip()
+                    end)
+                end
             end
             _allRows[#_allRows + 1] = { frame = row, isHeader = false, label = item.label, height = ITEM_H }
             yOff = yOff - ITEM_H

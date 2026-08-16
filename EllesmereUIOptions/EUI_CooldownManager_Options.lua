@@ -18811,12 +18811,13 @@ initFrame:SetScript("OnEvent", function(self)
                   BD().barStrata = v
                   ns.BuildAllCDMBars(); Refresh()
               end },
-            -- Profile-wide (one switch covers the Light's Potential and
-            -- Recklessness presets on every CD/utility bar): a pot preset whose
-            -- own family is fully out of bags swaps its icon/count/cooldown to
-            -- the best pot of the other family instead of sitting greyed.
-            { type = "toggle", text = "Swap Light/Reckless Pots When Missing",
-              tooltip = "When your bags have none of one potion type, its icon swaps to track the other type.",
+            -- Profile-wide (one switch covers the Light's Potential, Recklessness
+            -- and Liquid Luster presets on every CD/utility bar): a pot preset
+            -- whose own family is fully out of bags swaps its icon/count/cooldown
+            -- to the best pot of the partner families instead of sitting greyed
+            -- (Liquid Luster is the final fallback for the other two).
+            { type = "toggle", text = "Swap Combat Potions When Missing",
+              tooltip = "When your bags have none of one combat potion type, its icon swaps to track the next type you own.",
               getValue = function()
                   local p = DB(); return p and p.cdmBars and p.cdmBars.swapPotionsWhenMissing == true
               end,

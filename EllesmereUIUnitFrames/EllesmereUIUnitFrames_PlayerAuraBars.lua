@@ -364,7 +364,8 @@ local function ClassEnabled(class, isBuff, cfg)
     -- "Show All Debuffs": bypasses every class toggle without touching saved
     -- classFilters, so turning it back off restores exactly what was configured.
     -- Debuffs only -- buffs never read classFilters. ~= false not == true: nil
-    -- (unconfigured bar) means ON, matching showAllBuffs' "nil == on".
+    -- (unconfigured bar) means ON, matching showAllBuffs' "nil == on". Has
+    -- Duration is a MODIFIER, not a mode: it never bypasses class toggles.
     if not isBuff and cfg.showAllDebuffs ~= false then return false end
     -- playerUnitOnly classes ("nonplayer") always apply: player unit only.
     return cfg.classFilters and cfg.classFilters[class.skey] == true
@@ -1021,6 +1022,37 @@ local function BuffCandidateExtras(cfg)
     return out
 end
 
+-- Debuff-side twin of BuffCandidateExtras: "Has Duration" narrows every debuff
+-- group (class groups AND the catch-all, via the same extras merge) to
+-- duration-carrying debuffs with the native maxDuration check. math.huge never
+-- trips the `>` half, so this excludes exactly the permanent (duration = 0)
+-- debuffs. The inverse ("permanents only") is NOT expressible -- maxDuration is
+-- the engine's only duration filter (Blizzard_AuraContainerUtil), so Has
+-- Duration exists as a show-side AND-modifier only, never a hide-lane entry.
+local function DebuffCandidateExtras(cfg)
+    if cfg and cfg.hasDuration then
+        return { maxDuration = math.huge }
+    end
+    return nil
+end
+
+-- Has Duration is an AND-MODIFIER (user directive 2026-08-16), not a broad
+-- mode: it rides every chain link via DebuffCandidateExtras, so with class
+-- filters checked it narrows exactly those. The catch-all only joins when
+-- nothing narrower is selected -- All Debuffs on, or Has Duration checked with
+-- no class filters picked (alone = every timed debuff).
+local function DebuffCatchAllOn(cfg)
+    if cfg.showAllDebuffs ~= false then return true end
+    if cfg.hasDuration ~= true then return false end
+    local cf = cfg.classFilters
+    if cf then
+        for _, v in pairs(cf) do
+            if v == true then return false end
+        end
+    end
+    return true
+end
+
 -- MergeCandidateFilters (below) merges `extra` onto a copy of `base`, nil-safe both
 -- ways: e.g. a chain-link's own candidateFilters (debuff class token) plus
 -- BuffCandidateExtras' maxDuration.
@@ -1561,7 +1593,7 @@ local function DebuffBarOtherContent(bar)
     return false
 end
 local function DebuffBarHasContent(bar)
-    if bar.showAllDebuffs ~= false then return true end
+    if bar.showAllDebuffs ~= false or bar.hasDuration == true then return true end
     return DebuffBarOtherContent(bar)
 end
 ns.PAB_BuffBarHasContent = BuffBarHasContent
@@ -2219,7 +2251,7 @@ local function CreateBars()
     ApplyDefaultBarShown(true)
     ApplyDefaultBarShown(false)
 
-    local debuffChain = BuildChain("HARMFUL", function(class) return ClassEnabled(class, false, debuffCfg) or (PAB_FxSafeToForce(class) and PAB_FxWantsCategory(debuffCfg.fxList, class.key)) end, debuffCfg.showAllDebuffs ~= false, DebuffSubtractFn(debuffCfg))
+    local debuffChain = BuildChain("HARMFUL", function(class) return ClassEnabled(class, false, debuffCfg) or (PAB_FxSafeToForce(class) and PAB_FxWantsCategory(debuffCfg.fxList, class.key)) end, DebuffCatchAllOn(debuffCfg), DebuffSubtractFn(debuffCfg))
 
     -- Single scalar padding, feeding ONLY ApplyGroupConfig's per-group
     -- elementSpacing/lineSpacing/groupSpacing/groupLineSpacing (gap BETWEEN icons).
@@ -2309,7 +2341,7 @@ local function CreateBars()
         debuffsContainer = container
         ApplyContainerAnchorAndGrowth(container, debuffsParent, debuffCfg, debuffGrid)
         declared.debuffs = {}
-        ApplyGroupConfig(container, debuffChain, declared.debuffs, STYLE_DEBUFFS, debuffGrid.effectiveMax, debuffPad, debuffGrid.rowGap, debuffCfg)
+        ApplyGroupConfig(container, debuffChain, declared.debuffs, STYLE_DEBUFFS, debuffGrid.effectiveMax, debuffPad, debuffGrid.rowGap, debuffCfg, DebuffCandidateExtras(debuffCfg))
     end)
     RegisterPABUnlock()
     ReloadAllCustomBars()
@@ -2656,8 +2688,8 @@ local function ApplyLiveConfig(isBuff)
             end
         end
     else
-        local chain = BuildChain("HARMFUL", function(class) return ClassEnabled(class, false, cfg) or (PAB_FxSafeToForce(class) and PAB_FxWantsCategory(cfg.fxList, class.key)) end, cfg.showAllDebuffs ~= false, DebuffSubtractFn(cfg))
-        ApplyGroupConfig(container, chain, declared.debuffs, STYLE_DEBUFFS, grid.effectiveMax, pad, grid.rowGap, cfg)
+        local chain = BuildChain("HARMFUL", function(class) return ClassEnabled(class, false, cfg) or (PAB_FxSafeToForce(class) and PAB_FxWantsCategory(cfg.fxList, class.key)) end, DebuffCatchAllOn(cfg), DebuffSubtractFn(cfg))
+        ApplyGroupConfig(container, chain, declared.debuffs, STYLE_DEBUFFS, grid.effectiveMax, pad, grid.rowGap, cfg, DebuffCandidateExtras(cfg))
     end
 
     if PAB_MaybeRefreshPreview then PAB_MaybeRefreshPreview(isBuff and "buff" or "debuff", "default") end
@@ -2869,13 +2901,29 @@ end
 
 -- Checkbox state for one spell within one filter. state=nil removes the spell
 -- entirely: every PAB filter spell is "custom", no curated/preset spell to fall back to.
+-- The write applies to the whole SAME-NAME FAMILY within the filter: PAB flattens
+-- curated alternates into their own keys, and the Filter Editor shows one row per
+-- NAME (lowest id), so a click on the visible row must carry the hidden alternates
+-- with it -- otherwise a disabled-seeded family like Divine Hymn (64843 + alt
+-- 64844) checks only the primary while the buff that actually lands is the alt
+-- (field report 2026-08-16: "64844 not tracked"). Name-matching mirrors the
+-- editor's dedup exactly (both fall back to the id when the name is uncached).
 function ns.PAB_SetSpellState(filterId, spellID, state)
     local f = ns.PAB_GetFilter(filterId)
     if not f then return end
-    if state == nil then
-        f.spells[spellID] = nil
-    else
-        f.spells[spellID] = state and true or false
+    local function Write(id)
+        if state == nil then
+            f.spells[id] = nil
+        else
+            f.spells[id] = state and true or false
+        end
+    end
+    Write(spellID)
+    local name = C_Spell and C_Spell.GetSpellName and C_Spell.GetSpellName(spellID)
+    if name then
+        for id in pairs(f.spells) do
+            if id ~= spellID and C_Spell.GetSpellName(id) == name then Write(id) end
+        end
     end
 end
 
@@ -3090,6 +3138,9 @@ end
 -- set. "ALL"-class spells get no hint (no class header row for them).
 local SPELL_CLASS_HINTS = {}
 local BM2_FILTER_SEED = {}
+-- Curated primary -> alts (own copy: the RF bridge is absent when that
+-- module is disabled, and the family heal below must not depend on it).
+local PRESET_ALTS = {}
 do
     local BP = EllesmereUI.BUFF_PRESETS
     for i = 1, #BP.filters do
@@ -3102,6 +3153,7 @@ do
                 dst[#dst + 1] = id
                 if info.class ~= "ALL" then SPELL_CLASS_HINTS[id] = info.class end
                 if info.alts then
+                    PRESET_ALTS[id] = info.alts
                     for j = 1, #info.alts do
                         local alt = info.alts[j]
                         dst[#dst + 1] = alt
@@ -3172,6 +3224,17 @@ function ns.PAB_ImportBM2Filters()
             for j = 1, #seed.disabled do
                 local id = seed.disabled[j]
                 if f.spells[id] == nil then f.spells[id] = false end
+            end
+            -- Family heal: a checked PRIMARY whose curated alternates were left
+            -- unchecked (the pre-fix editor toggled only the visible row) pulls
+            -- its alternates up. Enable-only, primary->alt only, curated
+            -- families only: never disables, never touches user-added ids.
+            for primary, alts in pairs(PRESET_ALTS) do
+                if f.spells[primary] == true then
+                    for k = 1, #alts do
+                        if f.spells[alts[k]] == false then f.spells[alts[k]] = true end
+                    end
+                end
             end
         end
     end
@@ -3872,7 +3935,7 @@ local function ReloadCustomDebuffBarImpl(barId)
         parent:SetSize(grid.width, grid.height)
     end
 
-    local chain = BuildChain("HARMFUL", function(class) return ClassEnabled(class, false, bar) or (PAB_FxSafeToForce(class) and PAB_FxWantsCategory(bar.fxList, class.key)) end, bar.showAllDebuffs ~= false, DebuffSubtractFn(bar))
+    local chain = BuildChain("HARMFUL", function(class) return ClassEnabled(class, false, bar) or (PAB_FxSafeToForce(class) and PAB_FxWantsCategory(bar.fxList, class.key)) end, DebuffCatchAllOn(bar), DebuffSubtractFn(bar))
     local _, spec = BuildContainerSpec(parent, bar, grid)
     local pad = bar.padding or 5
 
@@ -3881,12 +3944,12 @@ local function ReloadCustomDebuffBarImpl(barId)
             customDebuffContainers[barId] = container
             ApplyContainerAnchorAndGrowth(container, parent, bar, grid)
             customDebuffDeclared[barId] = {}
-            ApplyGroupConfig(container, chain, customDebuffDeclared[barId], styleKey, grid.effectiveMax, pad, grid.rowGap, bar)
+            ApplyGroupConfig(container, chain, customDebuffDeclared[barId], styleKey, grid.effectiveMax, pad, grid.rowGap, bar, DebuffCandidateExtras(bar))
         end)
     else
         local container = customDebuffContainers[barId]
         ApplyContainerAnchorAndGrowth(container, parent, bar, grid)
-        ApplyGroupConfig(container, chain, customDebuffDeclared[barId], styleKey, grid.effectiveMax, pad, grid.rowGap, bar)
+        ApplyGroupConfig(container, chain, customDebuffDeclared[barId], styleKey, grid.effectiveMax, pad, grid.rowGap, bar, DebuffCandidateExtras(bar))
     end
 end
 
@@ -4422,7 +4485,7 @@ local function HasFillerSource(isBuff, cfg)
     if isBuff then
         return cfg.showAllBuffs ~= false or cfg.hasDuration == true
     end
-    return cfg.showAllDebuffs ~= false or HasAnyTrue(cfg.classFilters)
+    return cfg.showAllDebuffs ~= false or cfg.hasDuration == true or HasAnyTrue(cfg.classFilters)
 end
 
 -- BuildPreviewSlots (below) builds one descriptor per icon slot (length `count`).

@@ -955,6 +955,77 @@ end
 -------------------------------------------------------------------------------
 EllesmereUI._WHATSNEW_PATCHES = {
     {
+        version = "8.9.0",
+        heroes = {
+            {
+                module = "Unit Frames",
+                title  = "Dynamic Health Color",
+                desc   = "Color your health bars by how wounded you are. Classic runs green through yellow to red, Custom Colors blends your own three stops, and Class Reactive shows class color at full health bleeding into your chosen colors as damage comes in. Matches the party frame modes exactly.",
+                nav    = { module = "EllesmereUIUnitFrames", page = "Main Frames" },
+            },
+            {
+                module = "Nameplates",
+                title  = "Hover Effect",
+                desc   = "The mouseover highlight now offers the full Target Effect set: EUI Glow, Border Color, Highlight, and Border Size, each with its own colors. Your current hover look is preserved exactly until you opt into more.",
+                nav    = { module = "EllesmereUINameplates", page = "Display" },
+            },
+        },
+        features = {
+            {
+                module = "Bags",
+                title  = "Pawn Upgrade Arrows",
+                desc   = "Upgrade arrows on bag and reagent items with Pawn's Bag Upgrade Advisor",
+                nav    = { module = "EllesmereUIBags", page = "Bags" },
+            },
+            {
+                module = "Cooldown Manager",
+                title  = "Liquid Luster",
+                desc   = "New potion preset, and the swap option now covers all three combat potions",
+                nav    = { module = "EllesmereUICooldownManager", page = "CDM Bars" },
+            },
+            {
+                module = "Nameplates",
+                title  = "Enemy Buff Filter",
+                desc   = "Important (new default), Dispellable, or all buffs; the Dispel Glow marks dispellable buffs under any filter",
+                nav    = { module = "EllesmereUINameplates", page = "General" },
+            },
+            {
+                module = "Raid Frames",
+                title  = "Extra Frames Indicator Sizing",
+                desc   = "A new cog on the Extra Frames size sliders can keep indicators and auras at their normal size",
+                nav    = { module = "EllesmereUIRaidFrames", page = "Frames" },
+            },
+            {
+                module = "Raid Frames & Unit Frames",
+                title  = "Has Duration Filter",
+                desc   = "Combines with any debuff selection to show only timed debuffs, hiding permanent ones",
+                nav    = { module = "EllesmereUIRaidFrames", page = "Debuff Manager" },
+            },
+        },
+        fixes = {
+            { module = "Bags", text = "Bank search now matches tooltip content (armor type, upgrade track, stats) like bag search, instead of item names only." },
+            { module = "Blizz UI Enhanced", text = "Starting a ready check no longer leaves an empty skinned box on the initiator's screen, and the prompt's title and layout are properly centered." },
+            { module = "Chat", text = "Changing the font size from a chat tab's right-click menu now survives /reload." },
+            { module = "Chat", text = "Saved chat history no longer shows Battle.net whispers under the wrong friend's name after logging in again." },
+            { module = "Chat", text = "Hovering or right-clicking chat lines is no longer off by one message after receiving a message while scrolled up." },
+            { module = "Cooldown Manager", text = "The Minimum Bar Size setting is available on every bar type again, not only buff bars." },
+            { module = "Cooldown Manager", text = "Buffs hosted on cooldown bars no longer leak onto other specs' and classes' bars through the Generic CDs/Buffs sync, and removing a leaked icon now sticks." },
+            { module = "Cooldown Manager", text = "The Health Potion preset now tracks the new Concentrated Health Potion first, falling back to Silvermoon potions." },
+            { module = "Cooldown Manager", text = "Tracked trinket buffs now respect their custom buff bar assignment while the Trinket Slot presets are in use, and trinkets no longer occasionally jump from a custom bar back to the Cooldowns bar." },
+            { module = "Nameplates", text = "Enemy buffs and the purge glow show again in arenas and battlegrounds." },
+            { module = "Options", text = "Fixed a blank settings panel and an error when another addon opened EUI options via a deep link (such as a profile installer) before the panel's first open." },
+            { module = "Player Aura Bars", text = "Filter spells with alternate ids (such as Divine Hymn) now track correctly when checked in the Filter Editor." },
+            { module = "Raid Frames", text = "Metamorphosis now displays correctly for Havoc in the buff presets." },
+            { module = "Raid Frames", text = "The Healer Mana Display mover no longer appears in Unlock Mode while the feature is disabled." },
+            { module = "Raid Frames", text = "Debuff Manager indicators with Center growth at a top or bottom position no longer sit half an icon off the frame edge." },
+            { module = "Raid Frames", text = "Debuff Manager indicators now use the full two-lane filter dropdown, with Show and Hide lanes, All Debuffs, and Non-Player Auras, instead of the old single list." },
+            { module = "Raid Frames & Player Aura Bars", text = "Hovering a disabled filter checkbox now explains that All Debuffs is selected." },
+            { module = "Raid Frames & Unit Frames", text = "The Movement buff preset now includes Piercing Howl and every class's Time Spiral buff." },
+            { module = "Resource Bars", text = "The Rapid Fire cast bar now shows shot tick marks, including Quick Draw's extra shots." },
+            { module = "Localization", text = "German translations massively expanded and corrected (including German search keywords), plus Korean and Traditional Chinese catch-ups for everything new in 8.8.9." },
+        },
+    },
+    {
         version = "8.8.9",
         heroes = {
             {
