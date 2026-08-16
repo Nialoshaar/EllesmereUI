@@ -1894,6 +1894,45 @@ local function EnsurePipContinuousPartialTexture(pip)
     return tex
 end
 
+local function HidePipPartialFill(pip)
+    if pip._rechargeBar then pip._rechargeBar:Hide() end
+    if pip._continuousRechargeFill then pip._continuousRechargeFill:Hide() end
+end
+
+local function UpdatePipPartialFill(pip, frac, orientation, r, g, b, a, configureNativeOrientation)
+    if pip._continuousTexture then
+        local tex = EnsurePipContinuousPartialTexture(pip)
+        if pip._rechargeBar then pip._rechargeBar:Hide() end
+        tex:SetVertexColor(r, g, b, a)
+        if UpdatePipContinuousPartial(pip, tex, frac, orientation) then tex:Show() end
+        return
+    end
+
+    if pip._continuousRechargeFill then pip._continuousRechargeFill:Hide() end
+    if not pip._rechargeBar then
+        local bar = CreateFrame("StatusBar", nil, pip)
+        bar:SetAllPoints(pip)
+        bar:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
+        bar:SetFrameLevel(pip:GetFrameLevel())
+        bar:SetMinMaxValues(0, 1)
+        if pip._texKey then
+            local path = EllesmereUI.ResolveTexturePath(_G._ERB_BarTextures, pip._texKey, nil)
+            if path then bar:SetStatusBarTexture(path) end
+        end
+        pip._rechargeBar = bar
+    end
+    if configureNativeOrientation and pip._rechargeOri ~= orientation then
+        local vertical = orientation ~= "HORIZONTAL"
+        pip._rechargeBar:SetOrientation(vertical and "VERTICAL" or "HORIZONTAL")
+        pip._rechargeBar:SetRotatesTexture(vertical)
+        pip._rechargeBar:SetReverseFill(orientation == "VERTICAL_DOWN" or orientation == "VERTICAL")
+        pip._rechargeOri = orientation
+    end
+    pip._rechargeBar:SetValue(frac)
+    pip._rechargeBar:SetStatusBarColor(r, g, b, a)
+    pip._rechargeBar:Show()
+end
+
 -- Create a single pip (for combo points, holy power, etc.)
 local function CreatePip(parent, w, h, idx, borderSize, borderR, borderG, borderB, borderA)
     local pip = CreateFrame("Frame", nil, parent)
@@ -4988,8 +5027,7 @@ local function UpdateSecondaryResource()
                     else
                         rf:SetActive(active, r, g, b, a)
                     end
-                    if rf._rechargeBar then rf._rechargeBar:Hide() end
-                    if rf._continuousRechargeFill then rf._continuousRechargeFill:Hide() end
+                    HidePipPartialFill(rf)
                     if rf._cdText then rf._cdText:SetText("") end
                 end
             end
@@ -5074,8 +5112,7 @@ local function UpdateSecondaryResource()
                         else
                             rf:SetActive(true, r, g, b, a)
                         end
-                        if rf._rechargeBar then rf._rechargeBar:Hide() end
-                        if rf._continuousRechargeFill then rf._continuousRechargeFill:Hide() end
+                        HidePipPartialFill(rf)
                         if rf._cdText then rf._cdText:SetText("") end
                     else
                         -- Cooling-down rune: hide normal fill, show recharge bar.
@@ -5110,40 +5147,7 @@ local function UpdateSecondaryResource()
                             rr, rg, rb, ra = r * 0.75, g * 0.75, b * 0.75, a
                         end
 
-                        if rf._continuousTexture then
-                            EnsurePipContinuousPartialTexture(rf)
-                            if rf._rechargeBar then rf._rechargeBar:Hide() end
-                            rf._continuousRechargeFill:SetVertexColor(rr, rg, rb, ra)
-                            if UpdatePipContinuousPartial(rf, rf._continuousRechargeFill, frac, pipOri) then
-                                rf._continuousRechargeFill:Show()
-                            end
-                        else
-                            if rf._continuousRechargeFill then rf._continuousRechargeFill:Hide() end
-                            -- The normal mode keeps the native StatusBar recharge renderer.
-                            if not rf._rechargeBar then
-                                local sb = CreateFrame("StatusBar", nil, rf)
-                                sb:SetAllPoints(rf)
-                                sb:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
-                                sb:SetFrameLevel(rf:GetFrameLevel())
-                                sb:SetMinMaxValues(0, 1)
-                                if rf._texKey then
-                                    local path = EllesmereUI.ResolveTexturePath(_G._ERB_BarTextures, rf._texKey, nil)
-                                    if path then sb:SetStatusBarTexture(path) end
-                                end
-                                rf._rechargeBar = sb
-                            end
-                            if rf._rechargeOri ~= pipOri then
-                                local vertPip = pipOri ~= "HORIZONTAL"
-                                rf._rechargeBar:SetOrientation(vertPip and "VERTICAL" or "HORIZONTAL")
-                                rf._rechargeBar:SetRotatesTexture(vertPip)
-                                rf._rechargeBar:SetReverseFill(
-                                    pipOri == "VERTICAL_DOWN" or pipOri == "VERTICAL")
-                                rf._rechargeOri = pipOri
-                            end
-                            rf._rechargeBar:SetValue(frac)
-                            rf._rechargeBar:SetStatusBarColor(rr, rg, rb, ra)
-                            rf._rechargeBar:Show()
-                        end
+                        UpdatePipPartialFill(rf, frac, pipOri, rr, rg, rb, ra, true)
 
                         -- Show duration text if Resource Text is enabled (DK runes use it for cooldown)
                         if rf._cdText then
@@ -5969,8 +5973,7 @@ local function UpdateSecondaryResource()
                     pips[i]:SetActive(active, r, g, b, a)
                 end
                 -- Hide any leftover partial-fill overlay on non-fractional pips
-                if pips[i]._rechargeBar then pips[i]._rechargeBar:Hide() end
-                if pips[i]._continuousRechargeFill then pips[i]._continuousRechargeFill:Hide() end
+                HidePipPartialFill(pips[i])
             end
         end
 
@@ -5987,32 +5990,8 @@ local function UpdateSecondaryResource()
                 fr, fg, fb = tr, tg, tb
             end
             local shade = sp.darkenPartialPips == false and 1 or 0.75
-            if nextPip._continuousTexture then
-                EnsurePipContinuousPartialTexture(nextPip)
-                if nextPip._rechargeBar then nextPip._rechargeBar:Hide() end
-                nextPip._continuousRechargeFill:SetVertexColor(fr * shade, fg * shade, fb * shade, a)
-                if UpdatePipContinuousPartial(nextPip, nextPip._continuousRechargeFill, frac,
-                    sp.pipOrientation or "HORIZONTAL") then
-                    nextPip._continuousRechargeFill:Show()
-                end
-            else
-                if nextPip._continuousRechargeFill then nextPip._continuousRechargeFill:Hide() end
-                if not nextPip._rechargeBar then
-                    local sb = CreateFrame("StatusBar", nil, nextPip)
-                    sb:SetAllPoints(nextPip)
-                    sb:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
-                    sb:SetFrameLevel(nextPip:GetFrameLevel())
-                    sb:SetMinMaxValues(0, 1)
-                    if nextPip._texKey then
-                        local path = EllesmereUI.ResolveTexturePath(_G._ERB_BarTextures, nextPip._texKey, nil)
-                        if path then sb:SetStatusBarTexture(path) end
-                    end
-                    nextPip._rechargeBar = sb
-                end
-                nextPip._rechargeBar:SetValue(frac)
-                nextPip._rechargeBar:SetStatusBarColor(fr * shade, fg * shade, fb * shade, a)
-                nextPip._rechargeBar:Show()
-            end
+            UpdatePipPartialFill(nextPip, frac, sp.pipOrientation or "HORIZONTAL",
+                fr * shade, fg * shade, fb * shade, a, false)
         end
 
         if sp.showText and secondaryFrame._countText then
