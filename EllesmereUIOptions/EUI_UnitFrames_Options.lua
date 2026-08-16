@@ -1108,6 +1108,12 @@ initFrame:SetScript("OnEvent", function(self)
             else
                 hR, hG, hB = 0.8, 0.2, 0.2
             end
+            -- Dynamic Health Color outranks every flat source above, exactly as it
+            -- does on the live bar. The preview's health percent is a known fake,
+            -- so this takes the clean-number twin of the engine curve rather than
+            -- UnitHealthPercent.
+            local pvDynR, pvDynG, pvDynB = ns.UF_PreviewDynamicColor(settings, _previewHealthPct or 0.70)
+            if pvDynR then hR, hG, hB = pvDynR, pvDynG, pvDynB end
             -- Class-colored background (designer shows the player's class), else custom.
             local bgClassCC
             if settings.bgClassColored then
@@ -2481,6 +2487,10 @@ initFrame:SetScript("OnEvent", function(self)
                     else
                         uHR, uHG, uHB = 0.8, 0.2, 0.2
                     end
+                    -- Dynamic Health Color overrides the flat sources above (see the
+                    -- build-time twin); resolved at the preview's fake health percent.
+                    local uDynR, uDynG, uDynB = ns.UF_PreviewDynamicColor(s, _previewHealthPct or 0.70)
+                    if uDynR then uHR, uHG, uHB = uDynR, uDynG, uDynB end
                     -- Class-colored background (designer shows the player's class), else custom.
                     local uBgClassCC
                     if s.bgClassColored then
@@ -5944,6 +5954,13 @@ initFrame:SetScript("OnEvent", function(self)
                   end },
                 { tooltip = "Custom Colored Fill",
                   hasAlpha = false,
+                  -- Dynamic Color resolves the fill from health percent, so the flat
+                  -- custom/class choice below has no effect while it is on. Greyed and
+                  -- click-blocked rather than reset: the stored customFillColor and
+                  -- healthClassColored are left exactly as the user had them and come
+                  -- back untouched the moment Dynamic Color goes to Off.
+                  disabled = function() return SVal("healthColorMode", "none") ~= "none" end,
+                  disabledTooltip = "Dynamic Color is on -- the fill color comes from the unit's health",
                   getValue = function()
                       local c = SGet("customFillColor")
                       if c then return c.r, c.g, c.b end
@@ -5973,6 +5990,12 @@ initFrame:SetScript("OnEvent", function(self)
                   end },
                 { tooltip = "Class Colored Fill",
                   hasAlpha = false,
+                  -- Same as the custom swatch: inert while Dynamic Color is on, so it
+                  -- greys out instead of silently doing nothing. Class Reactive still
+                  -- uses the class color, but as the 100% stop of the curve, not as
+                  -- this flat choice.
+                  disabled = function() return SVal("healthColorMode", "none") ~= "none" end,
+                  disabledTooltip = "Dynamic Color is on -- the fill color comes from the unit's health",
                   getValue = function()
                       local _, ct = UnitClass("player")
                       if ct and RAID_CLASS_COLORS[ct] then
@@ -6100,6 +6123,9 @@ initFrame:SetScript("OnEvent", function(self)
         -- Sync icon: Bar Color (left) -- fill/class color and gradient
         if not EllesmereUI._prebuilding then
             local rgn = sharedHealthColorRow._leftRegion
+            -- Dynamic Color lives in this slot's cog, and its three stops are inline
+            -- swatches on this row, so they travel with the rest of Bar Color.
+            local DYN_STOP_KEYS = { "dynamicColor100", "dynamicColor50", "dynamicColor0" }
             local function ApplyColorTo(keys)
                 local src = UNIT_DB_MAP[selectedUnit]()
                 local cc = src.healthClassColored or false
@@ -6107,6 +6133,7 @@ initFrame:SetScript("OnEvent", function(self)
                 local gEn = src.gradientEnabled or false
                 local gDir = src.gradientDir or "HORIZONTAL"
                 local gc = src.gradientColor
+                local dynMode = src.healthColorMode or "none"
                 for _, key in ipairs(keys) do
                     if key ~= selectedUnit then
                         local d = UNIT_DB_MAP[key]()
@@ -6117,6 +6144,11 @@ initFrame:SetScript("OnEvent", function(self)
                         d.gradientDir = gDir
                         if gc then d.gradientColor = { r=gc.r, g=gc.g, b=gc.b }
                         else d.gradientColor = nil end
+                        d.healthColorMode = dynMode
+                        for _, ck in ipairs(DYN_STOP_KEYS) do
+                            local sc = src[ck]
+                            if sc then d[ck] = { r=sc.r, g=sc.g, b=sc.b } else d[ck] = nil end
+                        end
                     end
                 end
                 ReloadAndUpdate(); EllesmereUI:RefreshPage()
@@ -6139,6 +6171,10 @@ initFrame:SetScript("OnEvent", function(self)
                         if (d.gradientEnabled or false) ~= (src.gradientEnabled or false) then return false end
                         if not colEq(d.gradientColor, src.gradientColor) then return false end
                         if (d.gradientDir or "HORIZONTAL") ~= (src.gradientDir or "HORIZONTAL") then return false end
+                        if (d.healthColorMode or "none") ~= (src.healthColorMode or "none") then return false end
+                        for _, ck in ipairs(DYN_STOP_KEYS) do
+                            if not colEq(d[ck], src[ck]) then return false end
+                        end
                     end
                     return true
                 end,
@@ -6151,12 +6187,29 @@ initFrame:SetScript("OnEvent", function(self)
                 },
             })
         end
-        -- Gradient cog on Bar Color (left region)
+        -- Fill Color cog on Bar Color (left region): the two settings that decide
+        -- what color the fill actually ends up, beyond the flat swatches.
+        -- Dynamic Color and Gradient COMPOSE -- Dynamic picks the color from the
+        -- unit's health percent, Gradient then runs from that color to the
+        -- gradient end color -- so they share one popup rather than fighting.
         if not EllesmereUI._prebuilding then
             local rgn = sharedHealthColorRow._leftRegion
             local _, gradCogShow = EllesmereUI.BuildCogPopup({
-                title = "Gradient Settings",
+                title = "Fill Color Settings",
                 rows = {
+                    -- Ported from the Raid Frames "Fill Color" dropdown: same modes,
+                    -- same curve shape, same stop defaults, so a unit frame and a
+                    -- party frame on the same mode paint the same color at the same
+                    -- health. The 100%/50%/0% stops are swatches on the row itself
+                    -- (cog popups have no color row type).
+                    { type="dropdown", label="Dynamic Color",
+                      tooltip="Color the health bar by how much health is left, instead of a flat color. Classic runs green at full health through yellow to red at empty. Custom Colors blends between the three stop swatches on this row -- full (100%), half (50%) and empty (0%). Class Reactive shows the class color at full health, bleeding into the 50% and 0% colors as the unit takes damage. Off leaves the flat Fill Color swatches in charge; either way the Gradient below still applies, running from whichever color this picks.",
+                      values={ none="Off", classic="Classic",
+                               customDynamic="Custom Colors", classReactive="Class Reactive" },
+                      order={ "none", "classic", "customDynamic", "classReactive" },
+                      get=function() return SVal("healthColorMode", "none") end,
+                      -- RefreshPage re-runs the stop swatches' show/hide pass.
+                      set=function(v) SSet("healthColorMode", v); ReloadAndUpdate(); UpdatePreview(); EllesmereUI:RefreshPage() end },
                     { type="toggle", label="Enable Gradient",
                       get=function() return SVal("gradientEnabled", false) end,
                       set=function(v) SSet("gradientEnabled", v); ReloadAndUpdate(); UpdatePreview(); EllesmereUI:RefreshPage() end },
@@ -6167,6 +6220,60 @@ initFrame:SetScript("OnEvent", function(self)
                 },
             })
             MakeCogBtn(rgn, gradCogShow)
+        end
+        -- Dynamic Color stop swatches (100% | 50% | 0%), chained LEFT of the cog so
+        -- they sit at the far end of the row's inline run: hiding them for the modes
+        -- that don't read them then leaves no hole in the middle of the controls,
+        -- and Off restores exactly the original [cog][gradient][custom][class] look.
+        if not EllesmereUI._prebuilding then
+            local rgn = sharedHealthColorRow._leftRegion
+            local dynDefs = {
+                { key = "dynamicColor100", def = { r = 0, g = 1, b = 0 },
+                  tip = "Health bar color at full (100%) health" },
+                { key = "dynamicColor50",  def = { r = 0xEC/255, g = 0xEC/255, b = 0x32/255 },
+                  tip = "Health bar color at half (50%) health" },
+                { key = "dynamicColor0",   def = { r = 0xE3/255, g = 0x30/255, b = 0x30/255 },
+                  tip = "Health bar color at empty (0%) health" },
+            }
+            local dynSwatches, dynUpdaters = {}, {}
+            local prevAnchor = rgn._lastInline or rgn._control
+            for i = #dynDefs, 1, -1 do
+                local dd = dynDefs[i]
+                local sw, swUpdate = EllesmereUI.BuildColorSwatch(
+                    rgn, sharedHealthColorRow:GetFrameLevel() + 3,
+                    function()
+                        local c = SGet(dd.key) or dd.def
+                        return c.r, c.g, c.b, 1
+                    end,
+                    function(r, g, b)
+                        UNIT_DB_MAP[selectedUnit]()[dd.key] = { r=r, g=g, b=b }
+                        ReloadAndUpdate(); UpdatePreview()
+                    end, false, 18)
+                sw:SetPoint("RIGHT", prevAnchor, "LEFT", -8, 0)
+                sw:HookScript("OnEnter", function() EllesmereUI.ShowWidgetTooltip(sw, dd.tip) end)
+                sw:HookScript("OnLeave", function() EllesmereUI.HideWidgetTooltip() end)
+                dynSwatches[i] = sw
+                dynUpdaters[i] = swUpdate
+                prevAnchor = sw
+            end
+            rgn._lastInline = prevAnchor
+            -- dynSwatches[1] is the 100% stop. Class Reactive drives that stop from
+            -- the unit's own class color, so only 50%/0% are editable there.
+            -- The swatch UPDATERS must run on every refresh too: the stops are
+            -- per-unit, and switching the selected unit refreshes widgets rather
+            -- than rebuilding the page, so without this the swatches keep showing
+            -- the previous unit's colors.
+            local function UpdateDynSwatchVis()
+                local mode = SVal("healthColorMode", "none")
+                local isDynamic = mode == "customDynamic"
+                local isReactive = mode == "classReactive"
+                for i, sw in ipairs(dynSwatches) do
+                    if dynUpdaters[i] then dynUpdaters[i]() end
+                    if isDynamic or (isReactive and i > 1) then sw:Show() else sw:Hide() end
+                end
+            end
+            RegisterWidgetRefresh(UpdateDynSwatchVis)
+            UpdateDynSwatchVis()
         end
 
         -- Dark Mode: disable all Bar Color + Bar Background controls (the flat dark

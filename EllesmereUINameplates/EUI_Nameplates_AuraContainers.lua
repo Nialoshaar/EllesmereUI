@@ -216,13 +216,13 @@ local function ApplyNPText(button, d, style)
     end
 end
 
--- Buffs pass: shared text styling + the purge glow. Dispellability of a specific shown
--- buff is engine-secret, so the signal chain is: a CONTENTLESS texture (no image, no
--- fill -- renders nothing however the engine shows/tints/alphas it) registered as the
--- engine aura border -- the engine shows/hides it exactly when the buff is dispellable
--- (= purgeable) -- and a real Glows-library glow whose alpha is slaved to
--- that texture's shown-state via SetAlphaFromBoolean (secret-safe), re-evaluated after
--- each UNIT_AURA for the plate. Style and color come from the Dispel Glow options.
+-- Buffs pass: shared text styling + the purge glow. Dispellability of a SPECIFIC shown buff
+-- is unreadable in restricted content -- the engine aura border that used to signal it is a
+-- button call the client denies while auras are secret, so in instanced PvP the glow never
+-- lit. The row answers the question instead: the buff group is narrowed to dispellable auras
+-- (see BuffFilter) and the glow is suppressed whenever that narrowing is off, so every
+-- displayed buff is purgeable by construction and no per-aura signal is needed. Style and
+-- color come from the Dispel Glow options.
 
 -- Effective glow state: with Show All Enemy Buffs on, the row is no
 -- longer dispellable-only, so the glow is suppressed entirely (the style
@@ -237,38 +237,8 @@ local NP_TO_SHARED_GLOW = { 1, 2, 3, 5, 6, 7 }
 
 local function ApplyNPBuffExtra(button, d, style)
     ApplyNPText(button, d, style)
-    if not d.npPurgeInit then return end
     local Glows = EllesmereUI.Glows
     if style.purgeGlow and Glows and Glows.StartGlow then
-        if not d.npPurgeRegistered then
-            -- A tint-only style is MANDATORY: the signal texture is contentless by
-            -- design, and 68914's BorderWithIcon default (style omitted) stamps real
-            -- atlas art onto it. The old Color semantics live on as
-            -- DispelTypeTextureStyle PreserveAsset (CustomAuraButtonBorderStyle is
-            -- deleted; its CVar-shim global is the stale-build fallback). If neither
-            -- resolves, SKIP registration outright -- a default-styled registration is
-            -- worse than no purge signal.
-            local tint = Enum and Enum.CustomAuraButtonDispelTypeTextureStyle
-                and Enum.CustomAuraButtonDispelTypeTextureStyle.PreserveAsset
-            if tint == nil then
-                local legacy = (Enum and Enum.CustomAuraButtonBorderStyle) or AuraButtonBorderStyle
-                tint = legacy and legacy.Color
-            end
-            -- Stamp only on SUCCESS: the registration is a button call, denied while
-            -- auras are secret (12.1 access restriction). A denied attempt parks the
-            -- key for the restriction-lift drain (the early-nil in the OFF branch below
-            -- is load-bearing and stays pre-stamped: it must kill PurgeEval even when
-            -- the clear call is denied).
-            if tint ~= nil then
-                local opts = { showWhenHelpful = true, showWhenHarmful = false, style = tint }
-                local addFn = button.AddDispelTypeTexture or button.SetAuraBorder
-                if addFn and pcall(addFn, button, d.npPurge, opts) then
-                    d.npPurgeRegistered = true
-                elseif AK.DeferRestyle then
-                    AK.DeferRestyle(d.styleKey)
-                end
-            end
-        end
         local host = d.npGlowHost
         if not host then
             -- Child of the engine button (cross-tree anchoring TO engine
@@ -276,8 +246,7 @@ local function ApplyNPBuffExtra(button, d, style)
             -- forbidden aspects). Visibility therefore rides the button:
             -- the shared Glows driver skips hidden pool buttons for free, and under
             -- restriction (secret visibility) it skips the ticks too -- the glow
-            -- renders statically there, same accepted degrade as the RF CC glow. The
-            -- alpha binding decides whether it renders at all (dispellability).
+            -- renders statically there, same accepted degrade as the RF CC glow.
             host = CreateFrame("Frame", nil, button)
             host:SetAllPoints(button)
             -- Just above the border, below the duration/stack text: the
@@ -290,9 +259,11 @@ local function ApplyNPBuffExtra(button, d, style)
                 host:SetFrameLevel(button:GetFrameLevel() + 1)
             end
             host:EnableMouse(false)
-            host:SetAlpha(0) -- shown via the alpha binding only
             d.npGlowHost = host
         end
+        -- Every buff in this row is dispellable (the group filter says so), so the glow
+        -- rides the button's own visibility -- no readback of per-aura state.
+        host:SetAlpha(1)
         -- C-side animations only: identical in and out of restricted content.
         -- StartEngineGlow renders Pixel as the genuine dash march and routes the other
         -- driver styles to their FlipBook equivalents. purgeStyle carries a
@@ -309,40 +280,11 @@ local function ApplyNPBuffExtra(button, d, style)
             host._npStyle, host._npW = gType, sz
             host._npR, host._npG, host._npB = cr, cg, cb
         end
-    else
-        if d.npPurgeRegistered then
-            d.npPurgeRegistered = nil
-            local clearFn = button.ClearDispelTypeTextures or button.ClearAuraBorder
-            if clearFn then pcall(clearFn, button) end
-            d.npPurge:Hide()
+    elseif d.npGlowHost then
+        if Glows and Glows.StopGlow and d.npGlowHost._euiGlowActive then
+            Glows.StopGlow(d.npGlowHost)
         end
-        if d.npGlowHost then
-            if Glows and Glows.StopGlow and d.npGlowHost._euiGlowActive then
-                Glows.StopGlow(d.npGlowHost)
-            end
-            d.npGlowHost:SetAlpha(0)
-        end
-    end
-end
-
--- Re-evaluates every tracked buff button's glow alpha against its border
--- texture's engine-driven shown-state (a secret in restricted content --
--- SetAlphaFromBoolean consumes it natively). Deferred a beat behind
--- UNIT_AURA so the engine's parse/layout drain has applied first.
-local function PurgeEval(b)
-    for i = 1, #b.buffButtons do
-        local t = b.buffButtons[i]
-        local host, sig = t.dd.npGlowHost, t.dd.npPurge
-        if host and sig and t.dd.npPurgeRegistered then
-            local ok, shown = pcall(sig.IsShown, sig)
-            if ok then
-                if host.SetAlphaFromBoolean then
-                    pcall(host.SetAlphaFromBoolean, host, shown, 1, 0)
-                elseif not (issecretvalue and issecretvalue(shown)) then
-                    host:SetAlpha(shown and 1 or 0)
-                end
-            end
-        end
+        d.npGlowHost:SetAlpha(0)
     end
 end
 
@@ -789,36 +731,6 @@ local function NPF_EnsureRecords(b)
     NPF_ApplyContainer(b.containers.cc, "cc", "np:cc", 2)
 end
 
--- One deferred purge re-evaluation per bundle per aura burst; the small
--- delay lets the engine's parse/layout drain apply the border state first.
--- Shared drain, NOT per-bundle C_Timer.After: with 20-40 plates in an AoE
--- fight the per-bundle timers allocated hundreds of timer objects per
--- second (a measurable slice of the module's frame-time average). One
--- hidden-when-idle worker sweeps every pending bundle per 0.05s window.
-local purgePendingSet = {}
-local purgeElapsed = 0
-local purgeDrain = CreateFrame("Frame")
-purgeDrain:Hide()
-purgeDrain:SetScript("OnUpdate", function(self, dt)
-    purgeElapsed = purgeElapsed + dt
-    if purgeElapsed < 0.05 then return end
-    purgeElapsed = 0
-    for b in pairs(purgePendingSet) do
-        purgePendingSet[b] = nil
-        PurgeEval(b)
-    end
-    if not next(purgePendingSet) then self:Hide() end
-end)
-
-local function SchedulePurgeEval(b)
-    if purgePendingSet[b] then return end
-    purgePendingSet[b] = true
-    if not purgeDrain:IsShown() then
-        purgeElapsed = 0
-        purgeDrain:Show()
-    end
-end
-
 -- Bundle construction is split into one job per container for the shared AuraKit build
 -- scheduler: each container's group is a 10-button engine batch (~4-6ms), and a whole
 -- bundle in one gulp was a per-frame spike during the post-login pool build.
@@ -828,9 +740,7 @@ local function CreateBundleShell()
     holder:SetSize(1, 1)
     holder:SetPoint("CENTER", UIParent, "BOTTOMLEFT", -200, -200)
 
-    local b = { holder = holder, containers = {}, buffButtons = {} }
-    holder:SetScript("OnEvent", function() SchedulePurgeEval(b) end)
-    return b
+    return { holder = holder, containers = {} }
 end
 
 -- Builds one bundle container from a pre-born shell when available (group add + finish
@@ -849,6 +759,31 @@ local function BundleContainer(b, kind, groupSpec)
     }))
 end
 
+-- Enemy buff narrowing belongs in the FILTER STRING, not in candidateFilters. A candidate
+-- filter is a Lua compare against auraData.isStealable, and aura data on an enemy unit is
+-- SECRET in instanced PvP: there "isStealable ~= true" is true for every buff, so the group
+-- renders nothing. (Blizzard's own nameplate rule survives the same secrecy only because it
+-- tests "== false" -- an unreadable aura is kept, not dropped.) DISPELLABLE is evaluated by
+-- the engine in C, like every filter string, so it stays plain under restriction -- which is
+-- also why the debuff row never broke. Clients predating the token keep the old candidate
+-- filter: no worse than before, and PvE is unaffected either way.
+local DISPELLABLE = AuraUtil and AuraUtil.AuraFilters and AuraUtil.AuraFilters.Dispellable
+
+-- INCLUDE_NAME_PLATE_ONLY matches Blizzard's own buffFilterString: without it a
+-- nameplate-only enemy buff never enters the container at all.
+local function BuffFilter()
+    local t = { "HELPFUL", "INCLUDE_NAME_PLATE_ONLY" }
+    if DISPELLABLE and not PVal("showAllEnemyBuffs") then
+        t[#t + 1] = DISPELLABLE
+    end
+    return t
+end
+
+local function BuffCand()
+    if DISPELLABLE or PVal("showAllEnemyBuffs") then return nil end
+    return { isStealable = true }
+end
+
 local function AddBundleDebuffs(b)
     b.containers.debuffs = BundleContainer(b, "debuffs", {
         key = "np",
@@ -863,33 +798,18 @@ end
 
 local function AddBundleBuffs(b)
     -- Default: dispellable (purgeable/stealable) enemy buffs only, matching
-    -- the live behavior; "Show All Enemy Buffs" clears the candidate filter
-    -- live (no swap) and falls back to the important-sorted full set.
+    -- the live behavior; "Show All Enemy Buffs" drops the narrowing live
+    -- and falls back to the important-sorted full set.
     b.containers.buffs = BundleContainer(b, "buffs", {
         key = "np",
-        filter = { "HELPFUL" },
+        filter = BuffFilter(),
         maxFrameCount = 4,
         sortMethod = SORT_IMPORTANT,
-        -- Falsy-safe form: the truthy arm is a table ("X and nil or T" collapsed to T
-        -- in BOTH toggle states -- an and/or chain can never select a nil arm).
-        candidateFilters = not PVal("showAllEnemyBuffs") and { isStealable = true } or nil,
+        candidateFilters = BuffCand(),
         style = "np:buffs",
-        -- Purge indicator: engine-driven aura border, shown ONLY on
-        -- dispellable (= purgeable) buffs, tinted by dispel type.
-        -- Registered once; the toggle drives registration via the
-        -- style pass (ApplyNPBuffExtra).
+        -- Purge glow: built on first paint so a button born while the glow is
+        -- already on does not wait for the next style pass.
         extraInit = function(btn, dd)
-            -- Pure signal texture: NO image and NO color fill, so it renders nothing no
-            -- matter how the engine shows/tints/ alphas it (the engine's border
-            -- management drives alpha too -- an alpha-0 color fill came back as a solid
-            -- tinted square over the icon). Only its SHOWN state matters: the glow
-            -- alpha binding reads it as the dispellability signal.
-            dd.npPurge = btn:CreateTexture(nil, "OVERLAY", nil, 7)
-            dd.npPurge:SetPoint("TOPLEFT", btn, "TOPLEFT", -1, 1)
-            dd.npPurge:SetPoint("BOTTOMRIGHT", btn, "BOTTOMRIGHT", 1, -1)
-            dd.npPurge:Hide()
-            dd.npPurgeInit = true
-            b.buffButtons[#b.buffButtons + 1] = { btn = btn, dd = dd }
             local style = AK.styles["np:buffs"]
             if style and style.purgeGlow then
                 ApplyNPBuffExtra(btn, dd, style)
@@ -1286,17 +1206,6 @@ function ns.NPC_AttachPlate(plate, unit)
     BindContainer(b.containers.buffs, unit, bs)
     BindContainer(b.containers.cc, unit, cs)
     ReanchorArrows(plate)
-
-    -- Purge glow: watch this unit's aura changes (deferred re-eval of the
-    -- glow alpha bindings). Registered only while the feature is on AND a
-    -- buff row is actually displayed (the glow decorates buff buttons; a
-    -- "none" buff slot has nothing to evaluate).
-    if PurgeGlowActive() and bs and bs ~= "none" then
-        b.holder:RegisterUnitEvent("UNIT_AURA", unit)
-        SchedulePurgeEval(b)
-    else
-        b.holder:UnregisterEvent("UNIT_AURA")
-    end
 end
 
 function ns.NPC_DetachPlate(plate)
@@ -1306,8 +1215,6 @@ function ns.NPC_DetachPlate(plate)
     local b = active[plate]
     if not b then return end
     active[plate] = nil
-    purgePendingSet[b] = nil
-    b.holder:UnregisterEvent("UNIT_AURA")
     for i = 1, #KINDS do
         local c = b.containers[KINDS[i]]
         if c and c._npcBoundUnit then
@@ -1406,17 +1313,9 @@ local function NpEnsureWireSoon()
     npEnsurePending = true
     C_Timer.After(0.05, function()
         npEnsurePending = false
-        local _, bs = ns.GetAuraSlots()
-        local wantPurge = PurgeGlowActive()
         for plate, b in pairs(active) do
-            if plate.unit then
-                if b.containers.buffs then
-                    b.containers.buffs._npcAttackable = not not UnitCanAttack("player", plate.unit)
-                end
-                if wantPurge and bs and bs ~= "none" then
-                    b.holder:RegisterUnitEvent("UNIT_AURA", plate.unit)
-                    SchedulePurgeEval(b)
-                end
+            if plate.unit and b.containers.buffs then
+                b.containers.buffs._npcAttackable = not not UnitCanAttack("player", plate.unit)
             end
         end
         ReanchorActive()
@@ -1488,10 +1387,10 @@ function ns.NPC_ReloadAll()
         local maxDbf = PVal("maxDebuffs") or 5
         local sort = DebuffSort()
         local dbfCand = DebuffCand()
-        -- Empty table (not nil) when showing all: guarantees the setter
+        -- Empty table (not nil) when nothing narrows: guarantees the setter
         -- REPLACES the stored filter rather than risking a nil no-op.
-        local buffCand = {}
-        if not PVal("showAllEnemyBuffs") then buffCand = { isStealable = true } end
+        local buffCand = BuffCand() or {}
+        local buffFilter = AK.Filter(unpack(BuffFilter()))
         local function apply(b)
             -- Conditional bundles: a row's container may not exist.
             if b.containers.debuffs then
@@ -1507,6 +1406,11 @@ function ns.NPC_ReloadAll()
             end
             if b.containers.buffs then
                 b.containers.buffs:SetAuraGroupCandidateFilters("np", buffCand)
+                -- Show All Enemy Buffs adds/removes a filter-string token now, so the
+                -- toggle has to re-drive the string (the setter no-ops when unchanged).
+                if b.containers.buffs.SetAuraGroupFilterString then
+                    b.containers.buffs:SetAuraGroupFilterString("np", buffFilter)
+                end
             end
             -- NPF record groups + np counts: declares run on the queued,
             -- budgeted ensure path (npcEnsurePending dedupes).
@@ -1523,20 +1427,6 @@ function ns.NPC_ReloadAll()
         -- their next attach; active ones right now).
         geoGen = geoGen + 1
         ReanchorActive()
-    end
-
-    -- Purge glow toggle/state: (un)register the per-plate watchers to match
-    -- the current setting and re-evaluate the alpha bindings. Gated on a
-    -- displayed buff row, same as the attach path.
-    local wantPurge = PurgeGlowActive()
-    local _, bSlot = ns.GetAuraSlots()
-    for plate, b in pairs(active) do
-        if wantPurge and bSlot and bSlot ~= "none" and plate.unit then
-            b.holder:RegisterUnitEvent("UNIT_AURA", plate.unit)
-            SchedulePurgeEval(b)
-        else
-            b.holder:UnregisterEvent("UNIT_AURA")
-        end
     end
 end
 
