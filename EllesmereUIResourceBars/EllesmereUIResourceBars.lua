@@ -1854,6 +1854,46 @@ function ns.ApplyPipContinuousTexCoord(pip, tex)
     end
 end
 
+local function UpdatePipContinuousPartial(pip, tex, frac, orientation)
+    if not tex then return end
+    if frac <= 0 then
+        tex:Hide()
+        return false
+    end
+    local startCoord = pip._continuousStart
+    local endCoord = pip._continuousEnd
+    local coordRange = endCoord - startCoord
+    tex:ClearAllPoints()
+    if orientation == "VERTICAL_UP" then
+        tex:SetPoint("BOTTOMLEFT", pip, "BOTTOMLEFT")
+        tex:SetSize(pip:GetWidth(), pip:GetHeight() * frac)
+        tex:SetTexCoord(0, 1, endCoord - coordRange * frac, endCoord)
+    elseif orientation == "VERTICAL_DOWN" or orientation == "VERTICAL" then
+        tex:SetPoint("TOPLEFT", pip, "TOPLEFT")
+        tex:SetSize(pip:GetWidth(), pip:GetHeight() * frac)
+        tex:SetTexCoord(0, 1, startCoord, startCoord + coordRange * frac)
+    else
+        tex:SetPoint("TOPLEFT", pip, "TOPLEFT")
+        tex:SetSize(pip:GetWidth() * frac, pip:GetHeight())
+        tex:SetTexCoord(startCoord, startCoord + coordRange * frac, 0, 1)
+    end
+    return true
+end
+
+local function EnsurePipContinuousPartialTexture(pip)
+    if pip._continuousRechargeFill then return pip._continuousRechargeFill end
+    local tex = pip:CreateTexture(nil, "ARTWORK", nil, 1)
+    local path = EllesmereUI.ResolveTexturePath(
+        _G._ERB_BarTextures, pip._texKey, "Interface\\Buttons\\WHITE8x8")
+    tex:SetTexture(path)
+    if tex.SetSnapToPixelGrid then
+        tex:SetSnapToPixelGrid(false)
+        tex:SetTexelSnappingBias(0)
+    end
+    pip._continuousRechargeFill = tex
+    return tex
+end
+
 -- Create a single pip (for combo points, holy power, etc.)
 local function CreatePip(parent, w, h, idx, borderSize, borderR, borderG, borderB, borderA)
     local pip = CreateFrame("Frame", nil, parent)
@@ -1884,9 +1924,17 @@ local function CreatePip(parent, w, h, idx, borderSize, borderR, borderG, border
         self._continuousStart = continuousStart
         self._continuousEnd = continuousEnd
         self._continuousVertical = continuousVertical or nil
+        self._continuousPosition = nil
+        self._continuousOrientation = nil
         self._texKey = texKey
         local path = EllesmereUI.ResolveTexturePath(_G._ERB_BarTextures, texKey, "Interface\\Buttons\\WHITE8x8")
         self._fill:SetTexture(path)
+        if self._continuousRechargeFill then
+            self._continuousRechargeFill:SetTexture(path)
+            if not self._continuousTexture then
+                self._continuousRechargeFill:Hide()
+            end
+        end
         if self._rechargeBar then
             self._rechargeBar:SetStatusBarTexture(path)
         end
@@ -4941,6 +4989,7 @@ local function UpdateSecondaryResource()
                         rf:SetActive(active, r, g, b, a)
                     end
                     if rf._rechargeBar then rf._rechargeBar:Hide() end
+                    if rf._continuousRechargeFill then rf._continuousRechargeFill:Hide() end
                     if rf._cdText then rf._cdText:SetText("") end
                 end
             end
@@ -4981,7 +5030,7 @@ local function UpdateSecondaryResource()
             local numPips = 6
             local totalW = sp.pipWidth or 214
             local pipSp = sp.pipSpacing or 1
-            local slots = CalcPipGeometry(totalW, numPips, pipSp, secondaryFrame)
+            local slots, _, _, widthSnapped = CalcPipGeometry(totalW, numPips, pipSp, secondaryFrame)
 
             for pos = 1, totalRunes do
                 local runeIdx = _runeOrder[pos]
@@ -5003,6 +5052,16 @@ local function UpdateSecondaryResource()
                         rf:SetWidth(w)
                     end
 
+                    if rf._continuousTexture
+                        and (rf._continuousPosition ~= pos or rf._continuousOrientation ~= pipOri) then
+                        rf._continuousStart = x0 / widthSnapped
+                        rf._continuousEnd = slot.x1 / widthSnapped
+                        rf._continuousVertical = pipOri ~= "HORIZONTAL"
+                        rf._continuousPosition = pos
+                        rf._continuousOrientation = pipOri
+                        ns.ApplyPipContinuousTexCoord(rf, rf._fill)
+                    end
+
                     if _runeReady[runeIdx] then
                         -- Ready rune: full brightness + restore background, hide recharge overlay
                         rf._bg:SetAlpha(1)
@@ -5016,6 +5075,7 @@ local function UpdateSecondaryResource()
                             rf:SetActive(true, r, g, b, a)
                         end
                         if rf._rechargeBar then rf._rechargeBar:Hide() end
+                        if rf._continuousRechargeFill then rf._continuousRechargeFill:Hide() end
                         if rf._cdText then rf._cdText:SetText("") end
                     else
                         -- Cooling-down rune: hide normal fill, show recharge bar.
@@ -5031,41 +5091,6 @@ local function UpdateSecondaryResource()
                         rf:SetActive(false, r, g, b, a)
                         if not rf._fillOp then rf._bg:SetAlpha(0) end
 
-                        -- Lazily create a StatusBar overlay for recharge progress
-                        if not rf._rechargeBar then
-                            local sb = CreateFrame("StatusBar", nil, rf)
-                            sb:SetAllPoints(rf)
-                            sb:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
-                            sb:SetFrameLevel(rf:GetFrameLevel())
-                            sb:SetMinMaxValues(0, 1)
-                            -- Apply the same bar texture if one is set
-                            if rf._texKey then
-                                local path = EllesmereUI.ResolveTexturePath(_G._ERB_BarTextures, rf._texKey, nil)
-                                if path then
-                                    sb:SetStatusBarTexture(path)
-                                    if rf._continuousTexture then
-                                        ns.ApplyPipContinuousTexCoord(rf, sb:GetStatusBarTexture())
-                                    end
-                                end
-                            end
-                            rf._rechargeBar = sb
-                        end
-
-                        -- Recharge fill follows the pip orientation: a lazily
-                        -- created StatusBar defaults to HORIZONTAL and persists
-                        -- across orientation swaps. Same direction convention
-                        -- as ApplyBarOrientation (VERTICAL_DOWN = reverse =
-                        -- fills from the top). Change-guarded on the full
-                        -- orientation token (up/down differ only in reverse).
-                        if rf._rechargeOri ~= pipOri then
-                            local vertPip = pipOri ~= "HORIZONTAL"
-                            rf._rechargeBar:SetOrientation(vertPip and "VERTICAL" or "HORIZONTAL")
-                            rf._rechargeBar:SetRotatesTexture(vertPip)
-                            rf._rechargeBar:SetReverseFill(
-                                pipOri == "VERTICAL_DOWN" or pipOri == "VERTICAL")
-                            rf._rechargeOri = pipOri
-                        end
-
                         -- Compute recharge fraction (0 = just started, 1 = almost ready)
                         local frac = 0
                         local rStart, rDur = _runeStart[runeIdx], _runeDuration[runeIdx]
@@ -5073,17 +5098,52 @@ local function UpdateSecondaryResource()
                             local elapsed = now - rStart
                             frac = max(0, min(1, elapsed / rDur))
                         end
-                        rf._rechargeBar:SetValue(frac)
                         -- Recharge color: custom color when enabled, otherwise 75%
                         -- brightness (subtle dim), matching threshold color when active
+                        local rr, rg, rb, ra
                         if sp.runesCustomRecharge then
-                            rf._rechargeBar:SetStatusBarColor(sp.runesRechargeR or 0.5, sp.runesRechargeG or 0.5, sp.runesRechargeB or 0.5, sp.runesRechargeA or 1)
+                            rr, rg, rb, ra = sp.runesRechargeR or 0.5, sp.runesRechargeG or 0.5,
+                                sp.runesRechargeB or 0.5, sp.runesRechargeA or 1
                         elseif runeUseThresh then
-                            rf._rechargeBar:SetStatusBarColor(tr * 0.75, tg * 0.75, tb * 0.75, a)
+                            rr, rg, rb, ra = tr * 0.75, tg * 0.75, tb * 0.75, a
                         else
-                            rf._rechargeBar:SetStatusBarColor(r * 0.75, g * 0.75, b * 0.75, a)
+                            rr, rg, rb, ra = r * 0.75, g * 0.75, b * 0.75, a
                         end
-                        rf._rechargeBar:Show()
+
+                        if rf._continuousTexture then
+                            EnsurePipContinuousPartialTexture(rf)
+                            if rf._rechargeBar then rf._rechargeBar:Hide() end
+                            rf._continuousRechargeFill:SetVertexColor(rr, rg, rb, ra)
+                            if UpdatePipContinuousPartial(rf, rf._continuousRechargeFill, frac, pipOri) then
+                                rf._continuousRechargeFill:Show()
+                            end
+                        else
+                            if rf._continuousRechargeFill then rf._continuousRechargeFill:Hide() end
+                            -- The normal mode keeps the native StatusBar recharge renderer.
+                            if not rf._rechargeBar then
+                                local sb = CreateFrame("StatusBar", nil, rf)
+                                sb:SetAllPoints(rf)
+                                sb:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
+                                sb:SetFrameLevel(rf:GetFrameLevel())
+                                sb:SetMinMaxValues(0, 1)
+                                if rf._texKey then
+                                    local path = EllesmereUI.ResolveTexturePath(_G._ERB_BarTextures, rf._texKey, nil)
+                                    if path then sb:SetStatusBarTexture(path) end
+                                end
+                                rf._rechargeBar = sb
+                            end
+                            if rf._rechargeOri ~= pipOri then
+                                local vertPip = pipOri ~= "HORIZONTAL"
+                                rf._rechargeBar:SetOrientation(vertPip and "VERTICAL" or "HORIZONTAL")
+                                rf._rechargeBar:SetRotatesTexture(vertPip)
+                                rf._rechargeBar:SetReverseFill(
+                                    pipOri == "VERTICAL_DOWN" or pipOri == "VERTICAL")
+                                rf._rechargeOri = pipOri
+                            end
+                            rf._rechargeBar:SetValue(frac)
+                            rf._rechargeBar:SetStatusBarColor(rr, rg, rb, ra)
+                            rf._rechargeBar:Show()
+                        end
 
                         -- Show duration text if Resource Text is enabled (DK runes use it for cooldown)
                         if rf._cdText then
@@ -5910,30 +5970,13 @@ local function UpdateSecondaryResource()
                 end
                 -- Hide any leftover partial-fill overlay on non-fractional pips
                 if pips[i]._rechargeBar then pips[i]._rechargeBar:Hide() end
+                if pips[i]._continuousRechargeFill then pips[i]._continuousRechargeFill:Hide() end
             end
         end
 
-        -- Partial pip fill for fractional resources (reuses DK rune recharge pattern)
+        -- Partial pip fill for fractional resources
         if frac > 0 and cur < maxPts and pips[cur + 1] and pips[cur + 1]:IsShown() then
             local nextPip = pips[cur + 1]
-            if not nextPip._rechargeBar then
-                local sb = CreateFrame("StatusBar", nil, nextPip)
-                sb:SetAllPoints(nextPip)
-                sb:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
-                sb:SetFrameLevel(nextPip:GetFrameLevel())
-                sb:SetMinMaxValues(0, 1)
-                if nextPip._texKey then
-                    local path = EllesmereUI.ResolveTexturePath(_G._ERB_BarTextures, nextPip._texKey, nil)
-                    if path then
-                        sb:SetStatusBarTexture(path)
-                        if nextPip._continuousTexture then
-                            ns.ApplyPipContinuousTexCoord(nextPip, sb:GetStatusBarTexture())
-                        end
-                    end
-                end
-                nextPip._rechargeBar = sb
-            end
-            nextPip._rechargeBar:SetValue(frac)
             -- Partial generator (Evoker/Lock): color the filling pip like the full
             -- ones -- the threshold/band color when it applies to this slot (index
             -- cur+1), else the base color. Optionally dimmed so it still reads
@@ -5944,8 +5987,32 @@ local function UpdateSecondaryResource()
                 fr, fg, fb = tr, tg, tb
             end
             local shade = sp.darkenPartialPips == false and 1 or 0.75
-            nextPip._rechargeBar:SetStatusBarColor(fr * shade, fg * shade, fb * shade, a)
-            nextPip._rechargeBar:Show()
+            if nextPip._continuousTexture then
+                EnsurePipContinuousPartialTexture(nextPip)
+                if nextPip._rechargeBar then nextPip._rechargeBar:Hide() end
+                nextPip._continuousRechargeFill:SetVertexColor(fr * shade, fg * shade, fb * shade, a)
+                if UpdatePipContinuousPartial(nextPip, nextPip._continuousRechargeFill, frac,
+                    sp.pipOrientation or "HORIZONTAL") then
+                    nextPip._continuousRechargeFill:Show()
+                end
+            else
+                if nextPip._continuousRechargeFill then nextPip._continuousRechargeFill:Hide() end
+                if not nextPip._rechargeBar then
+                    local sb = CreateFrame("StatusBar", nil, nextPip)
+                    sb:SetAllPoints(nextPip)
+                    sb:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
+                    sb:SetFrameLevel(nextPip:GetFrameLevel())
+                    sb:SetMinMaxValues(0, 1)
+                    if nextPip._texKey then
+                        local path = EllesmereUI.ResolveTexturePath(_G._ERB_BarTextures, nextPip._texKey, nil)
+                        if path then sb:SetStatusBarTexture(path) end
+                    end
+                    nextPip._rechargeBar = sb
+                end
+                nextPip._rechargeBar:SetValue(frac)
+                nextPip._rechargeBar:SetStatusBarColor(fr * shade, fg * shade, fb * shade, a)
+                nextPip._rechargeBar:Show()
+            end
         end
 
         if sp.showText and secondaryFrame._countText then
