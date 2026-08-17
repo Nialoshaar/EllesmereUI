@@ -261,6 +261,14 @@ local function PabShapedSize(rawSize, shape)
     return rawSize
 end
 
+-- Match Cooldown Manager's non-matched cropped-height path: round the 0.80
+-- coordinate-space height first, then round that result to a physical pixel.
+local function PabCroppedHeight(rawSize)
+    local onePx = EllesmereUI.PP.mult
+    local coordHeight = math.floor(rawSize * 0.80 + 0.5)
+    return math.floor(coordHeight / onePx + 0.5) * onePx
+end
+
 local function PAB_ApplyDmFx(button, d, style)
     local cat = d.dmCat
     local e = style.fxList and PAB_FxBlockFor(style.fxList, cat) or nil
@@ -856,9 +864,11 @@ local function BuildStyle(isBuff, cfg)
     -- math at any UIParent scale.
     local PP = EllesmereUI.PP
     local rawIconSize = cfg.iconSize or 32
-    local iconSize = PP.Scale(PabShapedSize(rawIconSize, cfg.iconShape))
+    local shapedIconSize = PabShapedSize(rawIconSize, cfg.iconShape)
+    local iconSize = cfg.iconShape == "cropped"
+        and PP.Snap(shapedIconSize) or PP.Scale(shapedIconSize)
     local iconHeight = cfg.iconShape == "cropped"
-        and PP.Scale(rawIconSize * 0.70) or iconSize
+        and PabCroppedHeight(rawIconSize) or iconSize
 
     local style = {
         width = iconSize,
@@ -1118,8 +1128,9 @@ local function EnsurePabSizedStyle(baseKey, size, shape)
     -- iconSize -- base already carries iconShape/shapeMaskPath/etc via the shallow
     -- copy above, only width/height need recomputing for this variant's own size.
     local PP = EllesmereUI.PP
-    v.width = PP.Scale(PabShapedSize(size, shape))
-    v.height = shape == "cropped" and PP.Scale(size * 0.70) or v.width
+    local shapedSize = PabShapedSize(size, shape)
+    v.width = shape == "cropped" and PP.Snap(shapedSize) or PP.Scale(shapedSize)
+    v.height = shape == "cropped" and PabCroppedHeight(size) or v.width
     AK.styles[variantKey] = v
     AK.RestyleSoon(variantKey)
     return variantKey
@@ -1129,12 +1140,13 @@ local function BuildGroupLayout(cfg, gap, rowGap, size)
     local PP = EllesmereUI.PP
     rowGap = rowGap or gap
     local rawSize = size or cfg.iconSize or 32
-    size = PP.Scale(PabShapedSize(rawSize, cfg.iconShape))
+    local shapedSize = PabShapedSize(rawSize, cfg.iconShape)
+    size = cfg.iconShape == "cropped" and PP.Snap(shapedSize) or PP.Scale(shapedSize)
     gap = PP.Scale(gap)
     rowGap = PP.Scale(rowGap)
     return {
         elementWidth = size,
-        elementHeight = cfg.iconShape == "cropped" and PP.Scale(rawSize * 0.70) or size,
+        elementHeight = cfg.iconShape == "cropped" and PabCroppedHeight(rawSize) or size,
         elementSpacing = gap,
         lineSpacing = rowGap,
         groupSpacing = gap,
@@ -1299,13 +1311,16 @@ local function MaxIconSizeFor(isBuff, cfg)
     -- (ComputeGrid) at a non-pixel-perfect UIParent scale. Shape-expand applied last so
     -- the bar frame's footprint (ComputeGrid) always matches the buttons' real size.
     local PP = EllesmereUI.PP
-    return PP.Scale(PabShapedSize(size, cfg.iconShape))
+    local shapedSize = PabShapedSize(size, cfg.iconShape)
+    local snappedSize = cfg.iconShape == "cropped"
+        and PP.Snap(shapedSize) or PP.Scale(shapedSize)
+    return snappedSize, size
 end
 
 local function ComputeGrid(isBuff, cfg)
-    local iconSize = MaxIconSizeFor(isBuff, cfg)
+    local iconSize, rawIconSize = MaxIconSizeFor(isBuff, cfg)
     local iconHeight = cfg.iconShape == "cropped"
-        and EllesmereUI.PP.Scale(iconSize * 0.70) or iconSize
+        and PabCroppedHeight(rawIconSize) or iconSize
     local pad = cfg.padding or 5
     local rowGap = cfg.rowSpacing or 12
     local layoutPad = EllesmereUI.PP.Scale(pad)
@@ -1918,9 +1933,11 @@ local function ApplyContainerAnchorAndGrowth(container, parent, cfg, grid)
     containerDirections[container] = direction
     if directionChanged then container:Hide() end
 
-    local size = EllesmereUI.PP.Scale(cfg.iconSize or 32)
+    local rawSize = cfg.iconSize or 32
+    local size = cfg.iconShape == "cropped"
+        and EllesmereUI.PP.Snap(rawSize) or EllesmereUI.PP.Scale(rawSize)
     local height = cfg.iconShape == "cropped"
-        and EllesmereUI.PP.Scale((cfg.iconSize or 32) * 0.70) or size
+        and PabCroppedHeight(rawSize) or size
     container:ClearAllPoints()
     container:SetSize(size, height)
     container:SetPoint(containerAnchor, parent, containerAnchor, 0, 0)
@@ -4785,7 +4802,7 @@ local function RenderPreviewIcons(box, icons, isBuff, cfg, fontPath, pool)
         local sz = e and tonumber(e.size)
         slotSize[i] = PabShapedSize((sz and sz > 0) and sz or iconSize, cfg.iconShape)
         slotHeight[i] = cfg.iconShape == "cropped"
-            and math.floor(slotSize[i] * 0.70 + 0.5) or slotSize[i]
+            and math.floor(slotSize[i] * 0.80 + 0.5) or slotSize[i]
     end
 
     local rowWidth, rowHeight, colOffset, rowYOffset = {}, {}, {}, {}
@@ -4909,7 +4926,7 @@ local function RenderPreviewIcons(box, icons, isBuff, cfg, fontPath, pool)
                 end
                 local z = style.iconZoom or 0.055
                 if style.iconShape == "cropped" then
-                    btn.icon:SetTexCoord(z, 1 - z, z + 0.15, 1 - z - 0.15)
+                    btn.icon:SetTexCoord(z, 1 - z, z + 0.10, 1 - z - 0.10)
                 else
                     btn.icon:SetTexCoord(z, 1 - z, z, 1 - z)
                 end

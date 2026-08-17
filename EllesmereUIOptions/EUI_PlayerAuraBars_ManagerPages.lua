@@ -105,7 +105,7 @@ local SHAPE_VALUES = {
     csquare = "Curved Square", diamond = "Diamond", hexagon = "Hexagon",
     portrait = "Portrait", shield = "Shield",
 }
-local SHAPE_ORDER = { "none", "cropped", "square", "circle", "csquare", "diamond", "hexagon", "portrait", "shield" }
+local SHAPE_ORDER = { "none", "cropped", "---", "square", "circle", "csquare", "diamond", "hexagon", "portrait", "shield" }
 
 -- Levels map 1:1 to Action Bars' ns.BORDER_THICKNESS regular values (thin=1, normal=2,
 -- heavy=3, strong=4), so cfg.borderSize stays the same plain 0-4 number used elsewhere
