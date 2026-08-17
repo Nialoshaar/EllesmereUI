@@ -685,6 +685,23 @@ do
     function ERB.ResolveSecondaryResourceColor(powerKey)
         local rk = RKEY[powerKey]
         if rk and EllesmereUI.GetClassResourceColor then
+            if powerKey == PT.RUNES then
+                local specID = EllesmereUI._specID
+                local specKey = specID == 250 and "RunesBlood"
+                    or specID == 251 and "RunesFrost"
+                    or specID == 252 and "RunesUnholy"
+                if specKey and EllesmereUI.GetClassResourceColor(specKey) then
+                    rk = specKey
+                end
+            elseif powerKey == "SOUL_FRAGMENTS_VENGEANCE" then
+                if EllesmereUI.GetClassResourceColor("SoulFragmentsVengeance") then
+                    rk = "SoulFragmentsVengeance"
+                end
+            elseif powerKey == "SOUL_FRAGMENTS_DEVOURER" then
+                if EllesmereUI.GetClassResourceColor("SoulFragmentsDevourer") then
+                    rk = "SoulFragmentsDevourer"
+                end
+            end
             local c = EllesmereUI.GetClassResourceColor(rk)
             if c then return c.r, c.g, c.b end
         end
