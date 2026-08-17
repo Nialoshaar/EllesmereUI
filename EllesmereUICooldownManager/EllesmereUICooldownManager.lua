@@ -424,9 +424,10 @@ ns.BUFF_BAR_PRESETS = BUFF_BAR_PRESETS
 -- Item presets for CD/utility bars (potions that track cooldowns). displayOrder is a
 -- dynamic-display priority list, newest tier first: the icon resolves to the FIRST id
 -- with a bag count (that variant's icon/count/tooltip); rank 2 before rank 1, Fleeting
--- before regular at equal rank (cheap pots burn first). swapWith names the partner preset
--- whose displayOrder gets appended when "Swap Light/Reckless Pots When Missing" is on and
--- this family is fully out of bags.
+-- before regular at equal rank (cheap pots burn first). swapWith is an ORDERED list of
+-- partner preset keys whose displayOrders get appended in order when "Swap Combat
+-- Potions When Missing" is on and this family is fully out of bags (Liquid Luster is
+-- the deliberate final fallback for the other two).
 local CDM_ITEM_PRESETS = {
     {
         key      = "lights_potential",
@@ -440,7 +441,7 @@ local CDM_ITEM_PRESETS = {
             245897,  -- Fleeting Light's Potential r1
             241309,  -- Light's Potential r1
         },
-        swapWith = "potion_recklessness",
+        swapWith = { "potion_recklessness", "liquid_luster" },
     },
     {
         key      = "potion_recklessness",
@@ -454,21 +455,40 @@ local CDM_ITEM_PRESETS = {
             245903,  -- Fleeting Potion of Recklessness r1
             241289,  -- Potion of Recklessness r1
         },
-        swapWith = "lights_potential",
+        swapWith = { "lights_potential", "liquid_luster" },
+    },
+    {
+        key      = "liquid_luster",
+        name     = "Liquid Luster",
+        -- Picker art runtime-resolved (fileID not known statically at authoring
+        -- time); question-mark fallback is theoretical -- icon lookups are
+        -- client-DB-local.
+        icon     = (C_Item and C_Item.GetItemIconByID and C_Item.GetItemIconByID(271887)) or 134400,
+        itemID   = 271887,
+        altItemIDs = { 274764, 274763, 271886 },
+        displayOrder = {
+            274764,  -- Fleeting Liquid Luster r2
+            271887,  -- Liquid Luster r2
+            274763,  -- Fleeting Liquid Luster r1
+            271886,  -- Liquid Luster r1
+        },
+        swapWith = { "potion_recklessness", "lights_potential" },
     },
     {
         key      = "silvermoon_health",
-        name     = "Silvermoon Health Potion",
-        -- icon must stay itemID's art: PotSwap.Ensure only paints preset.icon when the
-        -- resolved variant IS the primary (others paint via C_Item.GetItemIconByID);
-        -- newer-tier art here would incorrectly show over the primary's bag count.
-        icon     = 7548909,
+        name     = "Concentrated Health Potion",
+        -- Picker-only art (current-tier pot): PotSwap.Ensure paints every resolved
+        -- variant from its own item id, so this never overrides a counted variant's
+        -- icon. Runtime-resolved because the fileID isn't item-DB-stable across
+        -- builds; the old Silvermoon art is the fallback.
+        icon     = (C_Item and C_Item.GetItemIconByID and C_Item.GetItemIconByID(271884)) or 7548909,
         itemID   = 241304,
-        altItemIDs = { 241305, 271884 },
-        -- Newest tier leads, then the Silvermoon pair (r2 before r1). itemID must stay
+        altItemIDs = { 241305, 271884, 271883 },
+        -- Newest tier leads (r2 before r1), then the Silvermoon pair. itemID must stay
         -- 241304: identity anchor for saved frames + PotSwap.Ensure's primary check, so it can't follow the new tier.
         displayOrder = {
-            271884,  -- current-tier health potion
+            271884,  -- Concentrated Silvermoon Health Potion r2
+            271883,  -- Concentrated Silvermoon Health Potion r1
             241304,  -- Silvermoon Health Potion r2
             241305,  -- Silvermoon Health Potion r1
         },

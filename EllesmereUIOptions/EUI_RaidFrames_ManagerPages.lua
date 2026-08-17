@@ -24,8 +24,9 @@ local GROW_VALUES = EllesmereUI.GROW_DIR_VALUES_FULL
 local GROW_ORDER = EllesmereUI.GROW_DIR_ORDER_FULL
 
 local CAT_VALUES = { boss = "Boss", role = "Role", priority = "Important",
-    cc = "Crowd Control", raid = "Raid", raidcombat = "Raid In Combat", dispel = "Dispellable" }
-local CAT_ORDER = { "priority", "boss", "role", "cc", "raid", "raidcombat", "dispel" }
+    cc = "Crowd Control", raid = "Raid", raidcombat = "Raid In Combat", dispel = "Dispellable",
+    nonplayer = "Non-Player" }
+local CAT_ORDER = { "nonplayer", "priority", "boss", "role", "cc", "raid", "raidcombat", "dispel" }
 
 local TYPE_NAMES = { icons = "Icon", glow = "Frame Glow", square = "Square",
     healthcolor = "Health Bar Color", bar = "Duration Bar" }
@@ -613,8 +614,10 @@ end
 -------------------------------------------------------------------------------
 
 local function TileSubtitle(t)
-    -- Every tile type routes via the checked filter set now.
+    -- Every tile type routes via the catch-all flavor plus the checked filter set.
     local names = {}
+    if t.all == true then names[#names + 1] = L("All Debuffs") end
+    if t.hasDuration == true then names[#names + 1] = L("Has Duration") end
     if t.claim then
         for _, cat in ipairs(CAT_ORDER) do
             if t.claim[cat] then names[#names + 1] = L(CAT_VALUES[cat]) end
@@ -631,6 +634,8 @@ end
 -- fxOwner = the PERSISTED table carrying .fxGlow (the dm table for the
 -- base pane, the tile table for grid tiles).
 local TILE_FILTER_ITEMS = {
+    { key = "nonplayer", label = "Non-Player Auras",
+      tooltip = "Debuffs not caused by any player or player pet (this is what shows most pve debuffs)." },
     { key = "priority", label = "Important",
       tooltip = "Debuffs Blizzard flags as priority for raid frames." },
     { key = "cc", label = "Crowd Control",
@@ -648,10 +653,10 @@ local TILE_FILTER_ITEMS = {
     { key = "dispel_typed", label = "Dispels",
       tooltip = "Any debuff with a dispel type (Magic, Curse, Disease, Poison, Bleed), even if you cannot remove it." },
 }
--- Shared filter checkbox dropdown: `claim` is one claim-shaped set table
--- (tile claims and per-filter ICON EFFECTS blocks share the shape). The
--- two dispel entries are mutually exclusive and steer dm.dispelMode --
--- every filter dropdown in the manager must present the same list.
+-- Single-lane filter checkbox dropdown for per-filter ICON EFFECTS blocks
+-- (`claim` is the effect entry's claim-shaped target set). The two dispel
+-- entries are mutually exclusive and steer dm.dispelMode. Tile dropdowns use
+-- the full two-lane build below instead.
 local function BuildFilterCBDropdown(rgn, claim, dm)
     local PP = EllesmereUI.PP or EllesmereUI.PanelPP
     if rgn._control then rgn._control:Hide() end
@@ -685,9 +690,121 @@ local function BuildFilterCBDropdown(rgn, claim, dm)
     rgn._control = cbDD
     rgn._lastInline = nil
 end
+-- Tile filter dropdown: full two-lane parity with the base Filters dropdown
+-- (user directive 2026-08-16) plus All Debuffs and the Has Duration
+-- AND-modifier. Checked claims also steer ROUTING (a claimed category renders
+-- in the tile instead of the base grid), so the show lane stays live even
+-- while All Debuffs is checked -- no lane locks here.
+local TILE_CA_ALL = "__caAll"
+local TILE_CA_DUR = "__caDur"
+local TILE_LANE_ITEMS = {
+    { key = TILE_CA_ALL, label = "All Debuffs",
+      tooltip = "Show every debuff in this indicator. Use the Hide lane below to remove specific filters." },
+    { key = TILE_CA_DUR, label = "Has Duration",
+      tooltip = "Only show debuffs that have a duration, excluding permanent ones. Combines with the filters below; checked alone it shows every timed debuff." },
+    { isHeader = true, label = "Show", rightLabel = "Hide" },
+    { key = "nonplayer", label = "Non-Player Auras", dual = true,
+      tooltip = "Debuffs not caused by any player or player pet (this is what shows most pve debuffs)." },
+    { key = "priority", label = "Important", dual = true,
+      tooltip = "Debuffs Blizzard flags as priority for raid frames." },
+    { key = "cc", label = "Crowd Control", dual = true,
+      tooltip = "Loss-of-control debuffs." },
+    { key = "boss", label = "Boss Debuffs", dual = true,
+      tooltip = "Debuffs applied by boss encounters." },
+    { key = "role", label = "Role Debuffs", dual = true,
+      tooltip = "Debuffs flagged as relevant to your role." },
+    { key = "raid", label = "Raid", dual = true,
+      tooltip = "Blizzard's curated raid-frame debuff set." },
+    { key = "raidcombat", label = "Raid In Combat", dual = true,
+      tooltip = "The stricter in-combat subset of the raid set." },
+    { key = "dispel_you", label = "Dispellable By You", dual = true,
+      tooltip = "Debuffs you can dispel." },
+    { key = "dispel_typed", label = "Dispels", dual = true,
+      tooltip = "Any debuff with a dispel type (Magic, Curse, Disease, Poison, Bleed), even if you cannot remove it." },
+}
 local function BuildTileFiltersDD(rgn, t, dm)
+    local PP = EllesmereUI.PP or EllesmereUI.PanelPP
+    if rgn._control then rgn._control:Hide() end
     if not t.claim then t.claim = {} end
-    BuildFilterCBDropdown(rgn, t.claim, dm)
+    local claim = t.claim
+    local function NegHas(cat) return t.neg ~= nil and t.neg[cat] == true end
+    local function SetNeg(cat, v)
+        if v then
+            t.neg = t.neg or {}
+            t.neg[cat] = true
+        elseif t.neg then
+            t.neg[cat] = nil
+            if not next(t.neg) then t.neg = nil end
+        end
+    end
+    local cbDD = EllesmereUI.BuildVisOptsCBDropdown(
+        rgn, 190, rgn:GetFrameLevel() + 2,
+        TILE_LANE_ITEMS,
+        function(k, neg)
+            if k == TILE_CA_ALL then return t.all == true end
+            if k == TILE_CA_DUR then return t.hasDuration == true end
+            if k == "dispel_you" then
+                if neg then return NegHas("dispel") and dm.dispelMode ~= "typed" end
+                return (claim.dispel and true or false) and dm.dispelMode ~= "typed"
+            elseif k == "dispel_typed" then
+                if neg then return NegHas("dispel") and dm.dispelMode == "typed" end
+                return (claim.dispel and true or false) and dm.dispelMode == "typed"
+            end
+            if neg then return NegHas(k) end
+            return claim[k] and true or false
+        end,
+        function(k, v, neg)
+            if k == TILE_CA_ALL or k == TILE_CA_DUR then
+                -- Independent bits: All Debuffs = catch-all, Has Duration =
+                -- AND-modifier (combinable with All or any claims).
+                if k == TILE_CA_ALL then
+                    t.all = v and true or nil
+                else
+                    t.hasDuration = v and true or nil
+                end
+                DmApply()
+                EllesmereUI:RefreshPage()
+                return
+            end
+            if k == "dispel_you" or k == "dispel_typed" then
+                -- ONE dispel category, one global flavor (shared with the base
+                -- grid): any checked lane owns both the lane and dm.dispelMode;
+                -- checking one lane/flavor clears the other.
+                if neg then
+                    SetNeg("dispel", v and true or false)
+                    if v then
+                        claim.dispel = nil
+                        dm.dispelMode = (k == "dispel_typed") and "typed" or "you"
+                    end
+                else
+                    claim.dispel = v and true or nil
+                    if v then
+                        SetNeg("dispel", false)
+                        dm.dispelMode = (k == "dispel_typed") and "typed" or "you"
+                    end
+                end
+                DmApply()
+                EllesmereUI:RefreshPage()
+                return
+            end
+            -- Two-lane category write: checking one lane clears the other.
+            if neg then
+                SetNeg(k, v and true or false)
+                if v then claim[k] = nil end
+            else
+                claim[k] = v and true or nil
+                if v then SetNeg(k, false) end
+            end
+            DmApply()
+            -- Non-force: re-evaluates the base dropdown's empty-selection
+            -- warning (tile claims count as grid content) without closing
+            -- the menu.
+            EllesmereUI:RefreshPage()
+        end,
+        nil, 12)
+    PP.Point(cbDD, "RIGHT", rgn, "RIGHT", -20, 0)
+    rgn._control = cbDD
+    rgn._lastInline = nil
 end
 local function BuildFxEffects(frame, sy, fxOwner)
     local W = EllesmereUI.Widgets
@@ -937,10 +1054,13 @@ local function BuildBaseDetailDM(frame, fontPath)
         local rgn = safRow._leftRegion
         if rgn._control then rgn._control:Hide() end
         local DM_ALL_KEY = "__all"
+        local DM_DUR_KEY = "__hasDuration"
         local function AllOn() return dm.all ~= false end
         local FILTER_ITEMS = {
             { key = DM_ALL_KEY, label = "All Debuffs",
               tooltip = "Show every debuff. Use the Hide lane below to remove specific filters." },
+            { key = DM_DUR_KEY, label = "Has Duration",
+              tooltip = "Only show debuffs that have a duration, excluding permanent ones. Combines with the filters below; checked alone it shows every timed debuff." },
             { isHeader = true, label = "Show", rightLabel = "Hide" },
             { key = "nonplayer", label = "Non-Player Auras", dual = true, showLockedFn = AllOn,
               tooltip = "Debuffs not caused by any player or player pet (this is what shows most pve debuffs)." },
@@ -964,6 +1084,17 @@ local function BuildBaseDetailDM(frame, fontPath)
             { key = "dispel_typed", label = "Dispels", dual = true, showLockedFn = AllOn,
               tooltip = "Any debuff with a dispel type (Magic, Curse, Disease, Poison, Bleed), even if you cannot remove it." },
         }
+        -- Hovering a dimmed Show box explains the dim (the lane is inert
+        -- while All Debuffs already shows everything). Has Duration is an
+        -- AND-modifier, not a mode: it never locks the lane.
+        do
+            local lockedTip = L("All Debuffs is selected, so every debuff already shows. Use the red Hide box to exclude these instead.")
+            for i = 1, #FILTER_ITEMS do
+                if FILTER_ITEMS[i].dual then
+                    FILTER_ITEMS[i].showLockedTooltip = lockedTip
+                end
+            end
+        end
         local function NegHas(cat)
             return dm.neg ~= nil and dm.neg[cat] == true
         end
@@ -994,14 +1125,17 @@ local function BuildBaseDetailDM(frame, fontPath)
         -- warn -- the same rule that keeps fx-forced PAB bars silent.
         local warnClosed
         local function DmHasContent()
-            if AllOn() or AnyShowCat() then return true end
+            if AllOn() or dm.hasDuration == true or AnyShowCat() then return true end
             local tiles = ns.DM_ActiveTiles and ns.DM_ActiveTiles()
             if tiles then
                 for i = 1, #tiles do
                     local t = tiles[i]
-                    if t.enabled and t.claim then
-                        for _, on in pairs(t.claim) do
-                            if on then return true end
+                    if t.enabled then
+                        if t.all == true or t.hasDuration == true then return true end
+                        if t.claim then
+                            for _, on in pairs(t.claim) do
+                                if on then return true end
+                            end
                         end
                     end
                 end
@@ -1013,6 +1147,7 @@ local function BuildBaseDetailDM(frame, fontPath)
             FILTER_ITEMS,
             function(k, neg)
                 if k == DM_ALL_KEY then return AllOn() end
+                if k == DM_DUR_KEY then return dm.hasDuration == true end
                 if k == "dispel_you" then
                     if neg then return NegHas("dispel") and dm.dispelMode ~= "typed" end
                     return dm.dispel == true and dm.dispelMode ~= "typed"
@@ -1028,6 +1163,14 @@ local function BuildBaseDetailDM(frame, fontPath)
                     -- Lanes persist across mode flips (the hide lane subtracts in
                     -- both modes; the show lane goes dormant while All is on).
                     dm.all = v and true or false
+                    DmApply()
+                    EllesmereUI:RefreshPage()
+                    return
+                end
+                if k == DM_DUR_KEY then
+                    -- AND-modifier: combines with All Debuffs or any show-lane
+                    -- selection; checked alone it acts as the timed catch-all.
+                    dm.hasDuration = v or nil
                     DmApply()
                     EllesmereUI:RefreshPage()
                     return
@@ -2005,8 +2148,9 @@ function ns.DMP_RefreshPreview()
             -- an icon for center-x points, a full icon for right-x corners), so CENTER
             -- runs anchor icons by an explicit
             -- self-point instead: x = symmetric icon-center offsets, y =
-            -- the caller's vertical seat (cfg.vAlign -- tiles center on
-            -- the point, base rows hang off it in the wrap direction).
+            -- the caller's vertical seat (cfg.vAlign -- tiles sit flush
+            -- with the anchored edge, base rows hang off the point in the
+            -- wrap direction).
             selfPoint = cfg.vAlign or "CENTER"
             local lineN = cfg.count
             if per > 0 and per < lineN then lineN = per end
@@ -2106,7 +2250,11 @@ function ns.DMP_RefreshPreview()
                         p.debuffStacksOffsetX or -1, p.debuffStacksOffsetY or 2)
                     fr._count:SetText("3")
                 else
-                    fr._count:SetText("")
+                    -- Only the stacks-on branch ever fonts this FontString: a
+                    -- bare SetText on a fontless one spams "Font not set"
+                    -- (field report 2026-08-16, 122x with stacks disabled).
+                    -- Fonted = a previous stacks-on render left text to clear.
+                    if fr._count:GetFont() then fr._count:SetText("") end
                 end
             end
             fr:Show()
@@ -2125,7 +2273,8 @@ function ns.DMP_RefreshPreview()
             grow = p.debuffGrowDirection or "LEFT",
             -- CENTER-growth vertical seat: live pins the container's TOP or
             -- BOTTOM edge midpoint at the corner per wrap direction, so the
-            -- first row hangs off the point (unlike tiles, which center).
+            -- first row hangs off the point (tiles sit flush with their
+            -- anchored edge instead).
             vAlign = (p.debuffWrapDirection == "DOWN") and "TOP" or "BOTTOM",
             -- Base wrap: rows follow the stored debuffWrapDirection (the
             -- runtime's cross-axis source); vertical growth wraps columns
@@ -2156,6 +2305,12 @@ function ns.DMP_RefreshPreview()
                     spacing = t.spacing or 1,
                     pos = t.position or "top",
                     grow = t.growDirection or "CENTER",
+                    -- CENTER growth: vertical seat flush with the anchored
+                    -- edge (AnchorTileContainer parity -- only the growth
+                    -- axis centers on the position point).
+                    vAlign = (string.find(t.position or "top", "top", 1, true) and "TOP")
+                        or (string.find(t.position or "top", "bottom", 1, true) and "BOTTOM")
+                        or "CENTER",
                     -- Tile wrap: away from the anchored edge (position rule,
                     -- matching AnchorTileContainer).
                     perRow = t.iconsPerRow or 0,
@@ -2664,8 +2819,8 @@ function ns.DMP_BuildPage(pageName, parent, yOffset)
                 local ddW = POPUP_W - POPUP_PAD * 2
 
                 -- Filters label + checkbox dropdown (identical items to the
-                -- Base Icons pane's Base Filters dropdown; picks become the
-                -- new tile's routed filters at Create)
+                -- tile Filters dropdown; picks become the new tile's routed
+                -- filters at Create)
                 local fltLbl = popup:CreateFontString(nil, "OVERLAY")
                 fltLbl:SetFont(fontPath, 11, "")
                 fltLbl:SetPoint("TOPLEFT", popup, "TOPLEFT", POPUP_PAD, py)
@@ -2673,37 +2828,41 @@ function ns.DMP_BuildPage(pageName, parent, yOffset)
                 fltLbl:SetTextColor(1, 1, 1, 0.6)
                 py = py - LABEL_H - LBL_GAP
 
-                local FILTER_ITEMS = {
-                    { key = "priority", label = "Important",
-                      tooltip = "Debuffs Blizzard flags as priority for raid frames." },
-                    { key = "cc", label = "Crowd Control",
-                      tooltip = "Loss-of-control debuffs." },
-                    { key = "boss", label = "Boss Debuffs",
-                      tooltip = "Debuffs applied by boss encounters." },
-                    { key = "role", label = "Role Debuffs",
-                      tooltip = "Debuffs flagged as relevant to your role." },
-                    { key = "raid", label = "Raid",
-                      tooltip = "Blizzard's curated raid-frame debuff set." },
-                    { key = "raidcombat", label = "Raid In Combat",
-                      tooltip = "The stricter in-combat subset of the raid set." },
-                    -- Two flavors of ONE dispel category (mutually exclusive)
-                    { key = "dispel_you", label = "Dispellable By You",
-                      tooltip = "Debuffs you can dispel." },
-                    { key = "dispel_typed", label = "Dispels",
-                      tooltip = "Any debuff with a dispel type (Magic, Curse, Disease, Poison, Bleed), even if you cannot remove it." },
-                }
+                -- Same two-lane item list as the tile Filters dropdown; picks
+                -- pend in popup._dmFilters (show keys plain, hide keys with a
+                -- "neg_" prefix; the pinned All/Has Duration keys ride the
+                -- plain lane) and become the new tile's claim/neg/all/
+                -- hasDuration at Create.
                 local pend = popup._dmFilters
                 local fltDD, fltDDRefresh = EllesmereUI.BuildVisOptsCBDropdown(
                     popup, ddW, popup:GetFrameLevel() + 2,
-                    FILTER_ITEMS,
-                    function(k) return pend[k] and true or false end,
-                    function(k, v)
-                        if k == "dispel_you" or k == "dispel_typed" then
-                            pend.dispel_you, pend.dispel_typed = nil, nil
-                            if v then pend[k] = true end
+                    TILE_LANE_ITEMS,
+                    function(k, neg)
+                        if neg then return pend["neg_" .. k] and true or false end
+                        return pend[k] and true or false
+                    end,
+                    function(k, v, neg)
+                        if k == TILE_CA_ALL or k == TILE_CA_DUR then
+                            -- Independent bits (All Debuffs / Has Duration modifier).
+                            pend[k] = v and true or nil
                             return
                         end
-                        pend[k] = v and true or nil
+                        if k == "dispel_you" or k == "dispel_typed" then
+                            -- ONE dispel category (flavors mutually exclusive
+                            -- across rows AND lanes, base-dropdown parity).
+                            pend.dispel_you, pend.dispel_typed = nil, nil
+                            pend.neg_dispel_you, pend.neg_dispel_typed = nil, nil
+                            if v then pend[(neg and "neg_" or "") .. k] = true end
+                            return
+                        end
+                        -- Two-lane pend write: checking one lane clears the other.
+                        if neg then
+                            pend["neg_" .. k] = v and true or nil
+                            if v then pend[k] = nil end
+                        else
+                            pend[k] = v and true or nil
+                            if v then pend["neg_" .. k] = nil end
+                        end
                     end,
                     nil, 12)
                 fltDD:SetSize(ddW, ROW_H2)
@@ -2745,12 +2904,26 @@ function ns.DMP_BuildPage(pageName, parent, yOffset)
                 cBtn:SetScript("OnLeave", function() cBg:SetColorTexture(accentColor.r, accentColor.g, accentColor.b, 0.8) end)
                 cBtn:SetScript("OnClick", function()
                     -- Snapshot picks BEFORE Hide (hide wipes the pending set)
-                    local picked = {}
+                    local picked, negPicked = {}, nil
+                    local caAll = popup._dmFilters[TILE_CA_ALL] and true or false
+                    local caDur = popup._dmFilters[TILE_CA_DUR] and true or false
                     local mode
                     for k in pairs(popup._dmFilters) do
-                        if k == "dispel_you" then picked.dispel = true; mode = "you"
-                        elseif k == "dispel_typed" then picked.dispel = true; mode = "typed"
-                        else picked[k] = true end
+                        if k ~= TILE_CA_ALL and k ~= TILE_CA_DUR then
+                            local cat, isNeg = k, false
+                            if cat:sub(1, 4) == "neg_" then
+                                cat = cat:sub(5)
+                                isNeg = true
+                            end
+                            if cat == "dispel_you" then cat = "dispel"; mode = "you"
+                            elseif cat == "dispel_typed" then cat = "dispel"; mode = "typed" end
+                            if isNeg then
+                                negPicked = negPicked or {}
+                                negPicked[cat] = true
+                            else
+                                picked[cat] = true
+                            end
+                        end
                     end
                     local t = ns.DM_AddTile and ns.DM_AddTile(dmSelType, dmSpecSel)
                     popup:Hide()
@@ -2763,6 +2936,9 @@ function ns.DMP_BuildPage(pageName, parent, yOffset)
                         -- (effect tiles run one slot per category).
                         if not t.claim then t.claim = {} end
                         for cat in pairs(picked) do t.claim[cat] = true end
+                        if negPicked then t.neg = negPicked end
+                        if caAll then t.all = true end
+                        if caDur then t.hasDuration = true end
                         dmSel = t.id
                         dmInhSel = nil
                         DmApply()

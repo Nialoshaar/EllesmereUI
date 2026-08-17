@@ -1328,6 +1328,12 @@ local function CreateHeader()
         clear:SetShown(text ~= "")
         C_Container.SetItemSearch(text)
         if EUI_Bags:IsVisible() then EUI_Bags:RefreshInventory() end
+        -- SetItemSearch is client-global and the bank reads isFiltered too:
+        -- re-render an open bank so both windows always show the same filter
+        -- state (the bank's box already mirrors this refresh toward bags).
+        if EUI_Bank and EUI_Bank:IsVisible() and EUI_Bank.RefreshBank then
+            EUI_Bank:RefreshBank()
+        end
     end)
 
     local close = CreateFrame("Button", nil, header)

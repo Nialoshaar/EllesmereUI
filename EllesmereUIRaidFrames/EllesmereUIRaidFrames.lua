@@ -1604,7 +1604,8 @@ function ns.GetBgColor(unit, s)
             if cc then return cc.r, cc.g, cc.b, a end
         end
     end
-    local c = s.customBgColor
+    -- Partial/imported profiles can lack the key (field report 2026-08-16).
+    local c = s.customBgColor or defaults.customBgColor
     return c.r, c.g, c.b, a
 end
 
@@ -3077,7 +3078,7 @@ local function StyleButton(button)
     -- Background (visible behind the health bar where HP is missing)
     local bg = button:CreateTexture(nil, "BACKGROUND")
     bg:SetAllPoints()
-    local bgc = s.customBgColor
+    local bgc = s.customBgColor or defaults.customBgColor
     bg:SetColorTexture(bgc.r, bgc.g, bgc.b, (s.bgDarkness or 50) / 100)
     if PP then PP.DisablePixelSnap(bg) end
     d.bg = bg
@@ -5584,7 +5585,10 @@ XF.Layout = function()
     local aw = PixelSnap(ns._activeSizeW or s.frameWidth or 72)
     local ah = PixelSnap(ns._activeSizeH or s.frameHeight or 46)
     local ratio = 1
-    if aw > 0 and ah > 0 then
+    -- Auto Resize Indicators cog toggle (nil = ON, additive key): off keeps
+    -- indicators/auras/BM at the real frames' base scale regardless of the
+    -- extra frames' custom size.
+    if aw > 0 and ah > 0 and (not set or set.autoResizeIndicators ~= false) then
         ratio = math.max(math.min(math.min(w / aw, h / ah), 1.3), 0.7)
     end
     ns._xfExtraRatio = ratio
@@ -9433,6 +9437,15 @@ local function RegisterWithUnlockMode()
             group = "Raid Frames",
             order = 502,
             noResize = true,
+            -- Disabled feature = no mover. Gates on the SETTING (mode none),
+            -- not on the group-type activity gate: an enabled display should
+            -- stay positionable while solo. The options mode setter
+            -- re-registers via ns._RFRegisterUnlock so an open unlock session
+            -- gains or loses the mover live in both directions.
+            isHidden = function()
+                local hm = ns._HMSet and ns._HMSet()
+                return not hm or (hm.mode or "none") == "none"
+            end,
             getFrame = function()
                 return ns._hmContainer or (ns._HMEnsureContainer and ns._HMEnsureContainer())
             end,
@@ -9463,6 +9476,10 @@ local function RegisterWithUnlockMode()
         }),
     })
 end
+-- Options-side re-registration seam (the function above is a file-scope local
+-- the options file cannot reach): setting changes that flip an element's
+-- isHidden verdict re-register so an open unlock session updates live.
+ns._RFRegisterUnlock = RegisterWithUnlockMode
 
 -------------------------------------------------------------------------------
 --  Healer Mana Text Display (Extras): one text row per group healer, riding
@@ -10778,7 +10795,7 @@ local function CreatePreviewFrame(index)
     f:Hide()
 
     -- Background
-    local bgc = s.customBgColor
+    local bgc = s.customBgColor or defaults.customBgColor
     local bg = f:CreateTexture(nil, "BACKGROUND")
     bg:SetAllPoints()
     bg:SetColorTexture(bgc.r, bgc.g, bgc.b, (s.bgDarkness or 50) / 100)
@@ -11647,7 +11664,7 @@ local function ApplyPreviewData(f, index)
             if cc then
                 f._bg:SetColorTexture(cc.r, cc.g, cc.b, bgA)
             else
-                local bgc = s.customBgColor
+                local bgc = s.customBgColor or defaults.customBgColor
                 f._bg:SetColorTexture(bgc.r, bgc.g, bgc.b, bgA)
             end
         end

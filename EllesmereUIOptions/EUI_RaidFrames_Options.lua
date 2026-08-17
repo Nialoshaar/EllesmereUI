@@ -3946,6 +3946,36 @@ initFrame:SetScript("OnEvent", function(self)
                           ns.XF_SetMoverShown(true)
                       end
                   end }); y = y - h
+            -- Inline cog on Extra Width: Auto Resize Indicators (default on;
+            -- off keeps indicators/auras at the real frames' base scale
+            -- regardless of the extra frames' custom size).
+            do
+                local rgn = row._leftRegion
+                local _, cogShow = EllesmereUI.BuildCogPopup({
+                    title = "Extra Frame Size",
+                    rows = {
+                        { type="toggle", label="Auto Resize Indicators",
+                          get=function() return XFSet().autoResizeIndicators ~= false end,
+                          set=function(v)
+                              -- nil = on (additive key, zero migration); false = off.
+                              XFSet().autoResizeIndicators = v and nil or false
+                              if ns.XF_Apply then ns.XF_Apply() end
+                          end },
+                    },
+                })
+                local cogBtn = CreateFrame("Button", nil, rgn)
+                cogBtn:SetSize(26, 26)
+                cogBtn:SetPoint("RIGHT", rgn._lastInline or rgn._control, "LEFT", -8, 0)
+                rgn._lastInline = cogBtn
+                cogBtn:SetFrameLevel(rgn:GetFrameLevel() + 5)
+                cogBtn:SetAlpha(0.4)
+                local cogTex = cogBtn:CreateTexture(nil, "OVERLAY")
+                cogTex:SetAllPoints()
+                cogTex:SetTexture(EllesmereUI.COGS_ICON)
+                cogBtn:SetScript("OnEnter", function(self) self:SetAlpha(0.7) end)
+                cogBtn:SetScript("OnLeave", function(self) self:SetAlpha(0.4) end)
+                cogBtn:SetScript("OnClick", function(self) cogShow(self) end)
+            end
             end   -- close Extra Frames hidden-while-unconfigured gate
 
             if onSection then onSection("extraFrames", _secY, y) end; _secY = y
@@ -4043,6 +4073,10 @@ initFrame:SetScript("OnEvent", function(self)
                   HMS().mode = v
                   -- Re-syncs healer power-event registrations and rebuilds.
                   if ns.UpdatePowerEventRegistration then ns.UpdatePowerEventRegistration() end
+                  -- Re-register unlock elements: the mover's isHidden verdict
+                  -- just changed, and re-registration applies it live to an
+                  -- open unlock session (both directions).
+                  if ns._RFRegisterUnlock then ns._RFRegisterUnlock() end
               end },
             { type="multiSwatch", text="Healer Mana Text Color",
               swatches = {

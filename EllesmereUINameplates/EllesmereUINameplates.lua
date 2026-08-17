@@ -1272,6 +1272,33 @@ function ns.GetTargetHighlightAlpha()
     if a == nil then return defaults.targetHighlightAlpha end
     return a
 end
+-- Hover Effect (mirrors the Target Effect model, user-directed 2026-08-16).
+-- Highlight is the ONLY default-on channel and reuses the legacy
+-- hoverColor/hoverAlpha keys as its color/opacity, so every existing AND new
+-- profile renders EXACTLY the old flat hover highlight (including the alpha
+-- 0 = invisible case) until other channels are opted in. New-channel colors
+-- start from the target effect's defaults.
+function ns.GetHoverGlowEllesmereUI() return (p and p.hoverGlowEllesmereUI) == true end
+function ns.GetHoverGlowBorderColor() return (p and p.hoverGlowBorderColor) == true end
+function ns.GetHoverGlowHighlight()
+    if p and p.hoverGlowHighlight ~= nil then return p.hoverGlowHighlight == true end
+    return true
+end
+function ns.GetHoverGlowBorderSize() return (p and p.hoverGlowBorderSize) == true end
+-- nil until the effect's first enable snapshots the user's current border
+-- size (options side); nil = applies nothing.
+function ns.GetHoverBorderSizeValue() return p and p.hoverBorderSizeValue end
+function ns.GetHoverBorderColor()
+    return (p and p.hoverBorderColor) or defaults.targetBorderColor
+end
+function ns.GetHoverGlowColor()
+    return (p and p.hoverGlowColor) or defaults.targetGlowColor
+end
+function ns.GetHoverGlowAlpha()
+    local a = p and p.hoverGlowAlpha
+    if a == nil then return defaults.targetGlowAlpha end
+    return a
+end
 local function GetShowTargetGlow()
     return ns.GetTargetGlowEllesmereUI() or ns.GetTargetGlowBorderColor() or ns.GetTargetGlowHighlight()
 end
@@ -3332,6 +3359,13 @@ end
 
 function ns.ShowHoverEffect(plate)
     if not plate or not plate.health then return end
+    -- Highlight channel gate (the Hover Effect dropdown's Highlight box): off
+    -- = both the flat wash and the Hover Texture overlay stay hidden; the
+    -- extra channels render independently via ns.ApplyHoverExtras.
+    if not ns.GetHoverGlowHighlight() then
+        ns.HideHoverEffect(plate)
+        return
+    end
     local db2 = p or defaults
     local hoverTex = db2.hoverOverlayTexture or defaults.hoverOverlayTexture
     local hc = db2.hoverColor or defaults.hoverColor
@@ -3383,8 +3417,10 @@ function ns.RefreshHoverEffect()
         end
         if plate == ns._currentMouseoverPlate then
             ns.ShowHoverEffect(plate)
+            ns.ApplyHoverExtras(plate)
         else
             ns.HideHoverEffect(plate)
+            ns.ClearHoverExtras(plate)
         end
     end
     for _, plate in pairs(ns.friendlyPlates or {}) do
@@ -3393,8 +3429,10 @@ function ns.RefreshHoverEffect()
         end
         if plate == ns._currentMouseoverPlate then
             ns.ShowHoverEffect(plate)
+            ns.ApplyHoverExtras(plate)
         else
             ns.HideHoverEffect(plate)
+            ns.ClearHoverExtras(plate)
         end
     end
 end
@@ -6976,11 +7014,80 @@ function NameplateFrame:ApplyMouseover()
     if not self.unit then return end
     if UnitExists("mouseover") and UnitIsUnit(self.unit, "mouseover") then
         ns.ShowHoverEffect(self)
+        ns.ApplyHoverExtras(self)
         ns._currentMouseoverPlate = self
         if ns._EnsureMouseoverTicker then ns._EnsureMouseoverTicker() end
     else
         ns.HideHoverEffect(self)
+        ns.ClearHoverExtras(self)
     end
+end
+
+-- Hover Effect extra channels (EUI Glow / Border Color / Border Size --
+-- mirrors ApplyTarget's branches; the Highlight channel lives inside
+-- ShowHoverEffect). TARGET PRECEDENCE per shared visual: while this plate is
+-- the target and the TARGET effect drives the same channel, hover leaves it
+-- alone -- and ApplyTarget runs after every target change, so the target
+-- state always reasserts over a stale hover write.
+function ns.ApplyHoverExtras(plate)
+    if not plate or not plate.unit or not plate.health then return end
+    local isTarget = plate._isTarget
+    local any = false
+    -- EUI Glow (shared self.glow visual).
+    if ns.GetHoverGlowEllesmereUI() and not (isTarget and ns.GetTargetGlowEllesmereUI()) then
+        EnsureGlow(plate)
+        if plate.glowTextures then
+            local gc = ns.GetHoverGlowColor()
+            local ga = ns.GetHoverGlowAlpha()
+            for _, t in ipairs(plate.glowTextures) do t:SetVertexColor(gc.r, gc.g, gc.b, ga) end
+        end
+        plate.glow:Show()
+        any = true
+    end
+    -- Border Size (a target-sized border wins; restore is ClearHoverExtras').
+    if ns.GetHoverGlowBorderSize() and not plate._targetBorderSized then
+        local hbsz = ns.GetHoverBorderSizeValue()
+        if hbsz then
+            if ns.IsCustomBorderEnabled() then
+                ns.ApplyCustomBorderStyle(plate, hbsz)
+            elseif PP and IsBorderEnabled() then
+                PP.SetBorderSize(plate.health, hbsz)
+            end
+            plate._hoverBorderSized = true
+            any = true
+        end
+    end
+    -- Border Color (the target color wins).
+    if ns.GetHoverGlowBorderColor() and not (isTarget and ns.GetTargetGlowBorderColor()) then
+        if PP then
+            local bc = ns.GetHoverBorderColor()
+            if ns.IsCustomBorderEnabled() then
+                if not plate._customBorder then ns.ApplyCustomBorderStyle(plate) end
+                if plate._customBorder and EllesmereUI.SetBorderStyleColor then
+                    EllesmereUI.SetBorderStyleColor(plate._customBorder, bc.r, bc.g, bc.b, 1)
+                end
+            else
+                PP.SetBorderColor(plate.health, bc.r, bc.g, bc.b, 1)
+            end
+            any = true
+        end
+        if plate._wrapActive then plate:UpdateBorderWrap() end
+    end
+    if any then plate._hoverFxOn = true end
+end
+
+-- One-shot restore of every shared channel to the target/base state: the
+-- hover-sized border resets explicitly (ApplyTarget only restores its OWN
+-- sizing flag), then ApplyTarget's else-branches reset glow/border color.
+-- Early-out keeps the no-extras case (the shipped default) zero-cost.
+function ns.ClearHoverExtras(plate)
+    if not plate or not plate._hoverFxOn then return end
+    plate._hoverFxOn = nil
+    if plate._hoverBorderSized then
+        plate._hoverBorderSized = nil
+        plate:ApplyBorder()
+    end
+    plate:ApplyTarget()
 end
 function NameplateFrame:UpdateImportantCastGlow(spellID)
     local cfg = p or defaults
@@ -8017,12 +8124,17 @@ function ns._ClearMouseoverPlate(plate)
         ns._currentMouseoverPlate = nil
         if ns._mouseoverTicker then ns._mouseoverTicker:Cancel(); ns._mouseoverTicker = nil end
     end
+    -- Pooled frames recycle: drop the hover-extras flags without a restore
+    -- pass (the reuse path re-runs ApplyBorder/ApplyTarget anyway).
+    plate._hoverFxOn = nil
+    plate._hoverBorderSized = nil
 end
 
 function ns._UpdateMouseover()
     local cur = ns._currentMouseoverPlate
     if cur then
         ns.HideHoverEffect(cur)
+        ns.ClearHoverExtras(cur)
         ns._currentMouseoverPlate = nil
     end
     if not UnitExists("mouseover") then return end
@@ -8037,6 +8149,7 @@ function ns._UpdateMouseover()
     end
     if found then
         ns.ShowHoverEffect(found)
+        ns.ApplyHoverExtras(found)
         ns._currentMouseoverPlate = found
     end
     ns._EnsureMouseoverTicker()

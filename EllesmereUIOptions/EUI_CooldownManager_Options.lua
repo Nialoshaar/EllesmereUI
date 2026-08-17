@@ -17262,42 +17262,6 @@ initFrame:SetScript("OnEvent", function(self)
                       ns.BuildAllCDMBars(); Refresh(); UpdateCDMPreviewAndResize()
                   end });  y = y - h
 
-            -- Inline cog on Icon Scale: Minimum Bar Size (growth-axis icon-slot
-            -- reservation; lives here rather than as its own Bar Layout row,
-            -- user-directed). The popup slider stays always-editable -- the
-            -- runtime skips the reservation while the growth axis is
-            -- width/height matched, so no MatchGuard lock is needed and an
-            -- existing value can always be lowered or cleared. Orientation
-            -- resolves at build time; the page rebuilds on orientation flips.
-            if not isFocusKick then
-                local minVert = BD().verticalOrientation == true
-                local _, minCogShow = EllesmereUI.BuildCogPopup({
-                    title = minVert and "Minimum Height" or "Minimum Width",
-                    rows = {
-                        { type="slider",
-                          label=minVert and "Icon Slots Tall (0 = Off)" or "Icon Slots Wide (0 = Off)",
-                          min=0, max=20, step=1,
-                          get=function() return BD().minSizeIcons or 0 end,
-                          set=function(v)
-                              if v == 0 then v = nil end
-                              local bd = BD()
-                              bd.minSizeIcons = v
-                              -- Growth-axis extent changed: cached match dims stale.
-                              bd._matchIconPhys = nil
-                              bd._matchExtraPixels = nil
-                              bd._matchStride = nil
-                              bd._matchExtraPixelsH = nil
-                              bd._matchStrideH = nil
-                              ns.BuildAllCDMBars(); Refresh(); UpdateCDMPreviewAndResize()
-                          end },
-                    },
-                })
-                if not EllesmereUI._prebuilding then
-                    local rgn = scaleAnimRow._rightRegion
-                    MakeCogBtn(rgn, minCogShow, nil, EllesmereUI.RESIZE_ICON)
-                end
-            end
-
             -- Inline cog on Always Show Buffs toggle (per-bar; native buff bars)
             if isBuffBar then
                 local _, asbCogShow = EllesmereUI.BuildCogPopup({
@@ -17822,6 +17786,47 @@ initFrame:SetScript("OnEvent", function(self)
         })
         end
         end -- isBuffBar else
+
+        -- Inline cog on Icon Scale: Minimum Bar Size (growth-axis icon-slot
+        -- reservation; lives here rather than as its own Bar Layout row,
+        -- user-directed). Placed AFTER the isBuffGlowBar branch because each
+        -- side builds its own scaleAnimRow -- and Icon Scale sits in a
+        -- different slot on each: buff-family rows put Always Show Buffs on the
+        -- left and Icon Scale on the right, every other bar type has Icon Scale
+        -- on the left (Icon Spacing on the right).
+        -- The popup slider stays always-editable -- the runtime skips the
+        -- reservation while the growth axis is width/height matched, so no
+        -- MatchGuard lock is needed and an existing value can always be lowered
+        -- or cleared. Orientation resolves at build time; the page rebuilds on
+        -- orientation flips. FocusKick is excluded: it is nameplate-anchored, so nothing matches or anchors to its edges.
+        if not isFocusKick then
+            local minVert = BD().verticalOrientation == true
+            local _, minCogShow = EllesmereUI.BuildCogPopup({
+                title = minVert and "Minimum Height" or "Minimum Width",
+                rows = {
+                    { type="slider",
+                      label=minVert and "Icon Slots Tall (0 = Off)" or "Icon Slots Wide (0 = Off)",
+                      min=0, max=20, step=1,
+                      get=function() return BD().minSizeIcons or 0 end,
+                      set=function(v)
+                          if v == 0 then v = nil end
+                          local bd = BD()
+                          bd.minSizeIcons = v
+                          -- Growth-axis extent changed: cached match dims stale.
+                          bd._matchIconPhys = nil
+                          bd._matchExtraPixels = nil
+                          bd._matchStride = nil
+                          bd._matchExtraPixelsH = nil
+                          bd._matchStrideH = nil
+                          ns.BuildAllCDMBars(); Refresh(); UpdateCDMPreviewAndResize()
+                      end },
+                },
+            })
+            if not EllesmereUI._prebuilding then
+                local rgn = isBuffGlowBar and scaleAnimRow._rightRegion or scaleAnimRow._leftRegion
+                MakeCogBtn(rgn, minCogShow, nil, EllesmereUI.RESIZE_ICON)
+            end
+        end
 
         -- Border Style dropdown (CD/utility and non-buff bars only)
         if not isBuffGlowBar then
@@ -18806,12 +18811,13 @@ initFrame:SetScript("OnEvent", function(self)
                   BD().barStrata = v
                   ns.BuildAllCDMBars(); Refresh()
               end },
-            -- Profile-wide (one switch covers the Light's Potential and
-            -- Recklessness presets on every CD/utility bar): a pot preset whose
-            -- own family is fully out of bags swaps its icon/count/cooldown to
-            -- the best pot of the other family instead of sitting greyed.
-            { type = "toggle", text = "Swap Light/Reckless Pots When Missing",
-              tooltip = "When your bags have none of one potion type, its icon swaps to track the other type.",
+            -- Profile-wide (one switch covers the Light's Potential, Recklessness
+            -- and Liquid Luster presets on every CD/utility bar): a pot preset
+            -- whose own family is fully out of bags swaps its icon/count/cooldown
+            -- to the best pot of the partner families instead of sitting greyed
+            -- (Liquid Luster is the final fallback for the other two).
+            { type = "toggle", text = "Swap Combat Potions When Missing",
+              tooltip = "When your bags have none of one combat potion type, its icon swaps to track the next type you own.",
               getValue = function()
                   local p = DB(); return p and p.cdmBars and p.cdmBars.swapPotionsWhenMissing == true
               end,
