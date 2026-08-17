@@ -450,6 +450,13 @@ initFrame:SetScript("OnEvent", function(self)
                     else
                         pip._fill:SetTexture("Interface\\Buttons\\WHITE8x8")
                     end
+                    if sp.useContinuousTexture then
+                        local texStart = pipX[i] / totalW
+                        local texEnd = (pipX[i] + pipW[i]) / totalW
+                        pip._fill:SetTexCoord(texStart, texEnd, 0, 1)
+                    else
+                        pip._fill:SetTexCoord(0, 1, 0, 1)
+                    end
                     UnsnapTex(pip._fill)
 
                     if pip._border then pip._border:SetShown(false) end
@@ -7452,6 +7459,16 @@ initFrame:SetScript("OnEvent", function(self)
                                   confirmText = "Okay",
                               })
                           end
+                      end },
+                    { type = "toggle", label = "Continuous Texture for Pip Resources",
+                      tooltip = "Pip-style class resources (Runes, Holy Power, Arcane Charges, etc.) use one continuous texture across the full resource bar instead of restarting the texture on every pip. This is useful for gradient textures.",
+                      get = function()
+                          local p = DB(); return (p and p.secondary.useContinuousTexture) or false
+                      end,
+                      set = function(v)
+                          local p = DB(); if not p then return end
+                          p.secondary.useContinuousTexture = v
+                          RebuildClass()
                       end },
                 },
             })

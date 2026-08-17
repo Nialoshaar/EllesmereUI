@@ -1199,6 +1199,7 @@ local DEFAULTS = {
             borderTexture = "solid",
             darkTheme   = false,
             useBlizzardAtlas = false,  -- bar-style class resources use Blizzard's player-frame power atlas as the fill
+            useContinuousTexture = false,  -- pip-style resources use a continuous texture
             classColored = true,
             resourceColored = false,  -- "Class Resource Color" fill mode (per-spec resource/power color); takes precedence over classColored when on
             fillR       = 0.95, fillG = 0.90, fillB = 0.60, fillA = 1,
@@ -1840,6 +1841,140 @@ local function CreateStatusBar(parent, name, w, h, borderSize, borderR, borderG,
     return bar
 end
 
+function ns.ApplyPipContinuousTexCoord(pip, tex)
+    if not tex then return end
+    if pip._continuousTexture then
+        if pip._continuousVertical then
+            tex:SetTexCoord(0, 1, pip._continuousStart, pip._continuousEnd)
+        else
+            tex:SetTexCoord(pip._continuousStart, pip._continuousEnd, 0, 1)
+        end
+    else
+        tex:SetTexCoord(0, 1, 0, 1)
+    end
+end
+
+local function UpdatePipContinuousPartial(pip, tex, frac, orientation)
+    if not tex then return end
+    if frac <= 0 then
+        tex:Hide()
+        return false
+    end
+    local startCoord = pip._continuousStart
+    local endCoord = pip._continuousEnd
+    local coordRange = endCoord - startCoord
+    tex:ClearAllPoints()
+    if orientation == "VERTICAL_UP" then
+        tex:SetPoint("BOTTOMLEFT", pip, "BOTTOMLEFT")
+        tex:SetSize(pip:GetWidth(), pip:GetHeight() * frac)
+        tex:SetTexCoord(0, 1, endCoord - coordRange * frac, endCoord)
+    elseif orientation == "VERTICAL_DOWN" or orientation == "VERTICAL" then
+        tex:SetPoint("TOPLEFT", pip, "TOPLEFT")
+        tex:SetSize(pip:GetWidth(), pip:GetHeight() * frac)
+        tex:SetTexCoord(0, 1, startCoord, startCoord + coordRange * frac)
+    else
+        tex:SetPoint("TOPLEFT", pip, "TOPLEFT")
+        tex:SetSize(pip:GetWidth() * frac, pip:GetHeight())
+        tex:SetTexCoord(startCoord, startCoord + coordRange * frac, 0, 1)
+    end
+    return true
+end
+
+local function EnsurePipContinuousPartialTexture(pip)
+    if pip._continuousRechargeFill then return pip._continuousRechargeFill end
+    local tex = pip:CreateTexture(nil, "ARTWORK", nil, 1)
+    local path = EllesmereUI.ResolveTexturePath(
+        _G._ERB_BarTextures, pip._texKey, "Interface\\Buttons\\WHITE8x8")
+    tex:SetTexture(path)
+    if tex.SetSnapToPixelGrid then
+        tex:SetSnapToPixelGrid(false)
+        tex:SetTexelSnappingBias(0)
+    end
+    pip._continuousRechargeFill = tex
+    return tex
+end
+
+local function HidePipPartialFill(pip)
+    if pip._rechargeBar then pip._rechargeBar:Hide() end
+    if pip._continuousRechargeFill then pip._continuousRechargeFill:Hide() end
+end
+
+local function UpdatePipPartialFill(pip, frac, orientation, r, g, b, a, configureNativeOrientation)
+    if pip._continuousTexture then
+        local tex = EnsurePipContinuousPartialTexture(pip)
+        if pip._rechargeBar then pip._rechargeBar:Hide() end
+        tex:SetVertexColor(r, g, b, a)
+        if UpdatePipContinuousPartial(pip, tex, frac, orientation) then tex:Show() end
+        return
+    end
+
+    if pip._continuousRechargeFill then pip._continuousRechargeFill:Hide() end
+    if not pip._rechargeBar then
+        local bar = CreateFrame("StatusBar", nil, pip)
+        bar:SetAllPoints(pip)
+        bar:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
+        bar:SetFrameLevel(pip:GetFrameLevel())
+        bar:SetMinMaxValues(0, 1)
+        if pip._texKey then
+            local path = EllesmereUI.ResolveTexturePath(_G._ERB_BarTextures, pip._texKey, nil)
+            if path then bar:SetStatusBarTexture(path) end
+        end
+        pip._rechargeBar = bar
+    end
+    if configureNativeOrientation and pip._rechargeOri ~= orientation then
+        local vertical = orientation ~= "HORIZONTAL"
+        pip._rechargeBar:SetOrientation(vertical and "VERTICAL" or "HORIZONTAL")
+        pip._rechargeBar:SetRotatesTexture(vertical)
+        pip._rechargeBar:SetReverseFill(orientation == "VERTICAL_DOWN" or orientation == "VERTICAL")
+        pip._rechargeOri = orientation
+    end
+    pip._rechargeBar:SetValue(frac)
+    pip._rechargeBar:SetStatusBarColor(r, g, b, a)
+    pip._rechargeBar:Show()
+end
+
+local function UpdatePipContinuousSecretFill(pip, bar, texPath, r, g, b, a)
+    local fill = bar:GetStatusBarTexture()
+    if not fill then return end
+    if not pip._continuousTexture then
+        if bar._continuousFill then bar._continuousFill:Hide() end
+        fill:SetAlpha(pip._fillOp or 1)
+        return
+    end
+    if not bar._continuousFill then
+        local tex = bar:CreateTexture(nil, "ARTWORK", nil, 1)
+        if tex.SetSnapToPixelGrid then
+            tex:SetSnapToPixelGrid(false)
+            tex:SetTexelSnappingBias(0)
+        end
+        bar._continuousFill = tex
+    end
+    local tex = bar._continuousFill
+    if tex._texPath ~= texPath then
+        tex:SetTexture(texPath)
+        tex._texPath = texPath
+    end
+    tex:ClearAllPoints()
+    tex:SetPoint("TOPLEFT", pip._fill, "TOPLEFT")
+    tex:SetPoint("BOTTOMRIGHT", fill, "BOTTOMRIGHT")
+    ns.ApplyPipContinuousTexCoord(pip, tex)
+    tex:SetVertexColor(r, g, b, a)
+    tex:SetAlpha(pip._fillOp or 1)
+    tex:Show()
+    fill:SetAlpha(0)
+end
+
+local function SetPipSecretFillAlpha(bar, alpha, continuous)
+    local fill = bar and bar:GetStatusBarTexture()
+    if not fill then return end
+    if continuous and bar._continuousFill then
+        fill:SetAlpha(0)
+        bar._continuousFill:SetAlpha(alpha)
+    else
+        fill:SetAlpha(alpha)
+    end
+end
+
 -- Create a single pip (for combo points, holy power, etc.)
 local function CreatePip(parent, w, h, idx, borderSize, borderR, borderG, borderB, borderA)
     local pip = CreateFrame("Frame", nil, parent)
@@ -1864,12 +1999,45 @@ local function CreatePip(parent, w, h, idx, borderSize, borderR, borderG, border
         self._border:ApplyStyle(sz, r, g, b, a, textureKey, texOffset, texOffsetY, shiftX, shiftY, addonKey, sizeKey)
     end
 
-    function pip:ApplyTexture(texKey)
+    function pip:ApplyTexture(texKey, continuousStart, continuousEnd, continuousVertical)
+        local hadContinuous = self._continuousTexture
+        self._continuousTexture = continuousStart and true or nil
+        self._continuousStart = continuousStart
+        self._continuousEnd = continuousEnd
+        self._continuousVertical = continuousVertical or nil
+        self._continuousPosition = nil
+        self._continuousOrientation = nil
         self._texKey = texKey
         local path = EllesmereUI.ResolveTexturePath(_G._ERB_BarTextures, texKey, "Interface\\Buttons\\WHITE8x8")
         self._fill:SetTexture(path)
+        if self._continuousRechargeFill then
+            self._continuousRechargeFill:SetTexture(path)
+            if not self._continuousTexture then
+                self._continuousRechargeFill:Hide()
+            end
+        end
         if self._rechargeBar then
             self._rechargeBar:SetStatusBarTexture(path)
+        end
+        if self._continuousTexture or hadContinuous then
+            ns.ApplyPipContinuousTexCoord(self, self._fill)
+            if self._rechargeBar then
+                ns.ApplyPipContinuousTexCoord(self, self._rechargeBar:GetStatusBarTexture())
+            end
+            if self._secretBar then
+                ns.ApplyPipContinuousTexCoord(self, self._secretBar:GetStatusBarTexture())
+            end
+            if self._secretThreshBar then
+                ns.ApplyPipContinuousTexCoord(self, self._secretThreshBar:GetStatusBarTexture())
+            end
+            if self._bandResetBar then
+                ns.ApplyPipContinuousTexCoord(self, self._bandResetBar:GetStatusBarTexture())
+            end
+            if self._bandBars then
+                for i = 1, #self._bandBars do
+                    ns.ApplyPipContinuousTexCoord(self, self._bandBars[i]:GetStatusBarTexture())
+                end
+            end
         end
     end
 
@@ -3594,7 +3762,11 @@ local function BuildBars()
                 rf["_barAnim_ph"] = pipH
                 ApplyRunePos()
                 runeFrames[i]:ApplyBorder(0, 0, 0, 0, 0)
-                runeFrames[i]:ApplyTexture(g.barTexture or "none")
+                if sp.useContinuousTexture then
+                    runeFrames[i]:ApplyTexture(g.barTexture or "none", x0 / widthSnapped, x1 / widthSnapped, isVertical)
+                else
+                    runeFrames[i]:ApplyTexture(g.barTexture or "none")
+                end
                 runeFrames[i]._bg:SetColorTexture(ERB.PipBgColor(sp))
                 -- Fill Opacity: same stamp as regular pips (consumed by
                 -- SetActive in the rune update). Inert at 100 unless restoring.
@@ -3662,7 +3834,11 @@ local function BuildBars()
                 else
                     pips[i]:ApplyBorder(0, 0, 0, 0, 0)
                 end
-                pips[i]:ApplyTexture(g.barTexture or "none")
+                if sp.useContinuousTexture then
+                    pips[i]:ApplyTexture(g.barTexture or "none", x0 / widthSnapped, x1 / widthSnapped, isVertical)
+                else
+                    pips[i]:ApplyTexture(g.barTexture or "none")
+                end
                 pips[i]._bg:SetColorTexture(ERB.PipBgColor(sp))
                 -- Fill Opacity: stamp the per-pip factor (consumed by SetActive
                 -- and the secret renderer). Inert at 100 unless restoring.
@@ -4893,7 +5069,7 @@ local function UpdateSecondaryResource()
                     else
                         rf:SetActive(active, r, g, b, a)
                     end
-                    if rf._rechargeBar then rf._rechargeBar:Hide() end
+                    HidePipPartialFill(rf)
                     if rf._cdText then rf._cdText:SetText("") end
                 end
             end
@@ -4934,7 +5110,7 @@ local function UpdateSecondaryResource()
             local numPips = 6
             local totalW = sp.pipWidth or 214
             local pipSp = sp.pipSpacing or 1
-            local slots = CalcPipGeometry(totalW, numPips, pipSp, secondaryFrame)
+            local slots, _, _, widthSnapped = CalcPipGeometry(totalW, numPips, pipSp, secondaryFrame)
 
             for pos = 1, totalRunes do
                 local runeIdx = _runeOrder[pos]
@@ -4956,6 +5132,16 @@ local function UpdateSecondaryResource()
                         rf:SetWidth(w)
                     end
 
+                    if rf._continuousTexture
+                        and (rf._continuousPosition ~= pos or rf._continuousOrientation ~= pipOri) then
+                        rf._continuousStart = x0 / widthSnapped
+                        rf._continuousEnd = slot.x1 / widthSnapped
+                        rf._continuousVertical = pipOri ~= "HORIZONTAL"
+                        rf._continuousPosition = pos
+                        rf._continuousOrientation = pipOri
+                        ns.ApplyPipContinuousTexCoord(rf, rf._fill)
+                    end
+
                     if _runeReady[runeIdx] then
                         -- Ready rune: full brightness + restore background, hide recharge overlay
                         rf._bg:SetAlpha(1)
@@ -4968,7 +5154,7 @@ local function UpdateSecondaryResource()
                         else
                             rf:SetActive(true, r, g, b, a)
                         end
-                        if rf._rechargeBar then rf._rechargeBar:Hide() end
+                        HidePipPartialFill(rf)
                         if rf._cdText then rf._cdText:SetText("") end
                     else
                         -- Cooling-down rune: hide normal fill, show recharge bar.
@@ -4984,36 +5170,6 @@ local function UpdateSecondaryResource()
                         rf:SetActive(false, r, g, b, a)
                         if not rf._fillOp then rf._bg:SetAlpha(0) end
 
-                        -- Lazily create a StatusBar overlay for recharge progress
-                        if not rf._rechargeBar then
-                            local sb = CreateFrame("StatusBar", nil, rf)
-                            sb:SetAllPoints(rf)
-                            sb:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
-                            sb:SetFrameLevel(rf:GetFrameLevel())
-                            sb:SetMinMaxValues(0, 1)
-                            -- Apply the same bar texture if one is set
-                            if rf._texKey then
-                                local path = EllesmereUI.ResolveTexturePath(_G._ERB_BarTextures, rf._texKey, nil)
-                                if path then sb:SetStatusBarTexture(path) end
-                            end
-                            rf._rechargeBar = sb
-                        end
-
-                        -- Recharge fill follows the pip orientation: a lazily
-                        -- created StatusBar defaults to HORIZONTAL and persists
-                        -- across orientation swaps. Same direction convention
-                        -- as ApplyBarOrientation (VERTICAL_DOWN = reverse =
-                        -- fills from the top). Change-guarded on the full
-                        -- orientation token (up/down differ only in reverse).
-                        if rf._rechargeOri ~= pipOri then
-                            local vertPip = pipOri ~= "HORIZONTAL"
-                            rf._rechargeBar:SetOrientation(vertPip and "VERTICAL" or "HORIZONTAL")
-                            rf._rechargeBar:SetRotatesTexture(vertPip)
-                            rf._rechargeBar:SetReverseFill(
-                                pipOri == "VERTICAL_DOWN" or pipOri == "VERTICAL")
-                            rf._rechargeOri = pipOri
-                        end
-
                         -- Compute recharge fraction (0 = just started, 1 = almost ready)
                         local frac = 0
                         local rStart, rDur = _runeStart[runeIdx], _runeDuration[runeIdx]
@@ -5021,17 +5177,19 @@ local function UpdateSecondaryResource()
                             local elapsed = now - rStart
                             frac = max(0, min(1, elapsed / rDur))
                         end
-                        rf._rechargeBar:SetValue(frac)
                         -- Recharge color: custom color when enabled, otherwise 75%
                         -- brightness (subtle dim), matching threshold color when active
+                        local rr, rg, rb, ra
                         if sp.runesCustomRecharge then
-                            rf._rechargeBar:SetStatusBarColor(sp.runesRechargeR or 0.5, sp.runesRechargeG or 0.5, sp.runesRechargeB or 0.5, sp.runesRechargeA or 1)
+                            rr, rg, rb, ra = sp.runesRechargeR or 0.5, sp.runesRechargeG or 0.5,
+                                sp.runesRechargeB or 0.5, sp.runesRechargeA or 1
                         elseif runeUseThresh then
-                            rf._rechargeBar:SetStatusBarColor(tr * 0.75, tg * 0.75, tb * 0.75, a)
+                            rr, rg, rb, ra = tr * 0.75, tg * 0.75, tb * 0.75, a
                         else
-                            rf._rechargeBar:SetStatusBarColor(r * 0.75, g * 0.75, b * 0.75, a)
+                            rr, rg, rb, ra = r * 0.75, g * 0.75, b * 0.75, a
                         end
-                        rf._rechargeBar:Show()
+
+                        UpdatePipPartialFill(rf, frac, pipOri, rr, rg, rb, ra, true)
 
                         -- Show duration text if Resource Text is enabled (DK runes use it for cooldown)
                         if rf._cdText then
@@ -5481,6 +5639,9 @@ local function UpdateSecondaryResource()
                         local sb = CreateFrame("StatusBar", nil, pip)
                         sb:SetAllPoints(pip._fill)
                         sb:SetStatusBarTexture(texPath)
+                        if pip._continuousTexture then
+                            ns.ApplyPipContinuousTexCoord(pip, sb:GetStatusBarTexture())
+                        end
                         sb._texPath = texPath
                         sb:SetStatusBarColor(r, g, b, a)
                         sb:SetFrameLevel(pip:GetFrameLevel())
@@ -5489,12 +5650,18 @@ local function UpdateSecondaryResource()
                         -- A path swap mints a brand-new inner texture and runs the
                         -- parent's pixel-snap hook: NEVER re-set the current path.
                         pip._secretBar:SetStatusBarTexture(texPath)
+                        if pip._continuousTexture then
+                            ns.ApplyPipContinuousTexCoord(pip, pip._secretBar:GetStatusBarTexture())
+                        end
                         pip._secretBar._texPath = texPath
                     end
                     pip._secretBar:SetMinMaxValues(i - 1, i)
                     pip._secretBar:SetValue(cur)
                     pip._secretBar:SetStatusBarColor(r, g, b, a)
                     pip._secretBar:Show()
+                    if pip._continuousTexture or pip._secretBar._continuousFill then
+                        UpdatePipContinuousSecretFill(pip, pip._secretBar, texPath, r, g, b, a)
+                    end
 
                     if _tsBandOn and _bandStarts then
                         -- Multi-band overlays: one StatusBar per band, higher bands
@@ -5512,6 +5679,9 @@ local function UpdateSecondaryResource()
                             -- loop fires pips x bands redundant calls.
                             if bb._texPath ~= texPath then
                                 bb:SetStatusBarTexture(texPath); bb._texPath = texPath
+                                if pip._continuousTexture then
+                                    ns.ApplyPipContinuousTexCoord(pip, bb:GetStatusBarTexture())
+                                end
                             end
                             local _lvl = pip:GetFrameLevel() + k
                             if bb._lvl ~= _lvl then
@@ -5523,6 +5693,10 @@ local function UpdateSecondaryResource()
                             local band = _tsBands[k]
                             bb:SetStatusBarColor(band.r or 1, band.g or 1, band.b or 1, a)
                             bb:Show()
+                            if pip._continuousTexture or bb._continuousFill then
+                                UpdatePipContinuousSecretFill(
+                                    pip, bb, texPath, band.r or 1, band.g or 1, band.b or 1, a)
+                            end
                         end
                         for k = #_tsBands + 1, #pip._bandBars do pip._bandBars[k]:Hide() end
                         if not _tsBandReverse then
@@ -5536,6 +5710,9 @@ local function UpdateSecondaryResource()
                             end
                             if pip._bandResetBar._texPath ~= texPath then
                                 pip._bandResetBar:SetStatusBarTexture(texPath)
+                                if pip._continuousTexture then
+                                    ns.ApplyPipContinuousTexCoord(pip, pip._bandResetBar:GetStatusBarTexture())
+                                end
                                 pip._bandResetBar._texPath = texPath
                             end
                             pip._bandResetBar:SetFrameLevel(pip:GetFrameLevel() + #_tsBands + 1)
@@ -5544,6 +5721,10 @@ local function UpdateSecondaryResource()
                             pip._bandResetBar:SetValue(cur)
                             pip._bandResetBar:SetStatusBarColor(r, g, b, a)
                             pip._bandResetBar:Show()
+                            if pip._continuousTexture or pip._bandResetBar._continuousFill then
+                                UpdatePipContinuousSecretFill(
+                                    pip, pip._bandResetBar, texPath, r, g, b, a)
+                            end
                         elseif pip._bandResetBar then
                             -- "From" semantics: base fill below the first boundary is
                             -- handled by the base _secretBar; no reset overlay needed.
@@ -5563,11 +5744,17 @@ local function UpdateSecondaryResource()
                                 local tb = CreateFrame("StatusBar", nil, pip)
                                 tb:SetAllPoints(pip._fill)
                                 tb:SetStatusBarTexture(texPath)
+                                if pip._continuousTexture then
+                                    ns.ApplyPipContinuousTexCoord(pip, tb:GetStatusBarTexture())
+                                end
                                 tb._texPath = texPath
                                 tb:SetFrameLevel(pip:GetFrameLevel() + 1)
                                 pip._secretThreshBar = tb
                             elseif pip._secretThreshBar._texPath ~= texPath then
                                 pip._secretThreshBar:SetStatusBarTexture(texPath)
+                                if pip._continuousTexture then
+                                    ns.ApplyPipContinuousTexCoord(pip, pip._secretThreshBar:GetStatusBarTexture())
+                                end
                                 pip._secretThreshBar._texPath = texPath
                             end
                             -- Fills only when cur >= max(i, threshCount): the pip is
@@ -5577,6 +5764,10 @@ local function UpdateSecondaryResource()
                             pip._secretThreshBar:SetValue(cur)
                             pip._secretThreshBar:SetStatusBarColor(_tsR or 1, _tsG or 0.2, _tsB or 0.2, a)
                             pip._secretThreshBar:Show()
+                            if pip._continuousTexture or pip._secretThreshBar._continuousFill then
+                                UpdatePipContinuousSecretFill(pip, pip._secretThreshBar, texPath,
+                                    _tsR or 1, _tsG or 0.2, _tsB or 0.2, a)
+                            end
                         elseif pip._secretThreshBar then
                             pip._secretThreshBar:Hide()
                         end
@@ -5592,7 +5783,7 @@ local function UpdateSecondaryResource()
                     if pip._fillOp then
                         local _sft = pip._secretBar:GetStatusBarTexture()
                         if _sft then
-                            _sft:SetAlpha(pip._fillOp)
+                            SetPipSecretFillAlpha(pip._secretBar, pip._fillOp, pip._continuousTexture)
                             if not pip._sbgAnchored then
                                 pip._sbgAnchored = true
                                 pip._bg:ClearAllPoints()
@@ -5603,20 +5794,17 @@ local function UpdateSecondaryResource()
                         end
                         local _stb = pip._secretThreshBar
                         if _stb and _stb:IsShown() then
-                            local t = _stb:GetStatusBarTexture()
-                            if t then t:SetAlpha(pip._fillOp) end
+                            SetPipSecretFillAlpha(_stb, pip._fillOp, pip._continuousTexture)
                         end
                         local _srb = pip._bandResetBar
                         if _srb and _srb:IsShown() then
-                            local t = _srb:GetStatusBarTexture()
-                            if t then t:SetAlpha(pip._fillOp) end
+                            SetPipSecretFillAlpha(_srb, pip._fillOp, pip._continuousTexture)
                         end
                         if pip._bandBars then
                             for k = 1, #pip._bandBars do
                                 local bb = pip._bandBars[k]
                                 if bb:IsShown() then
-                                    local t = bb:GetStatusBarTexture()
-                                    if t then t:SetAlpha(pip._fillOp) end
+                                    SetPipSecretFillAlpha(bb, pip._fillOp, pip._continuousTexture)
                                 end
                             end
                         end
@@ -5839,26 +6027,13 @@ local function UpdateSecondaryResource()
                     pips[i]:SetActive(active, r, g, b, a)
                 end
                 -- Hide any leftover partial-fill overlay on non-fractional pips
-                if pips[i]._rechargeBar then pips[i]._rechargeBar:Hide() end
+                HidePipPartialFill(pips[i])
             end
         end
 
-        -- Partial pip fill for fractional resources (reuses DK rune recharge pattern)
+        -- Partial pip fill for fractional resources
         if frac > 0 and cur < maxPts and pips[cur + 1] and pips[cur + 1]:IsShown() then
             local nextPip = pips[cur + 1]
-            if not nextPip._rechargeBar then
-                local sb = CreateFrame("StatusBar", nil, nextPip)
-                sb:SetAllPoints(nextPip)
-                sb:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
-                sb:SetFrameLevel(nextPip:GetFrameLevel())
-                sb:SetMinMaxValues(0, 1)
-                if nextPip._texKey then
-                    local path = EllesmereUI.ResolveTexturePath(_G._ERB_BarTextures, nextPip._texKey, nil)
-                    if path then sb:SetStatusBarTexture(path) end
-                end
-                nextPip._rechargeBar = sb
-            end
-            nextPip._rechargeBar:SetValue(frac)
             -- Partial generator (Evoker/Lock): color the filling pip like the full
             -- ones -- the threshold/band color when it applies to this slot (index
             -- cur+1), else the base color. Optionally dimmed so it still reads
@@ -5869,8 +6044,8 @@ local function UpdateSecondaryResource()
                 fr, fg, fb = tr, tg, tb
             end
             local shade = sp.darkenPartialPips == false and 1 or 0.75
-            nextPip._rechargeBar:SetStatusBarColor(fr * shade, fg * shade, fb * shade, a)
-            nextPip._rechargeBar:Show()
+            UpdatePipPartialFill(nextPip, frac, sp.pipOrientation or "HORIZONTAL",
+                fr * shade, fg * shade, fb * shade, a, false)
         end
 
         if sp.showText and secondaryFrame._countText then
