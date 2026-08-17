@@ -213,7 +213,7 @@ local function ApplyStyleToRegions(button, style)
         elseif style.iconCrop then
             local z = style.iconZoom or 0.07
             if style.iconShape == "cropped" then
-                d.icon:SetTexCoord(z, 1 - z, z + 0.10, 1 - z - 0.10)
+                d.icon:SetTexCoord(z, 1 - z, z + 0.15, 1 - z - 0.15)
             else
                 d.icon:SetTexCoord(z, 1 - z, z, 1 - z)
             end

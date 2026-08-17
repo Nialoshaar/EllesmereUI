@@ -261,11 +261,11 @@ local function PabShapedSize(rawSize, shape)
     return rawSize
 end
 
--- Match Cooldown Manager's non-matched cropped-height path: round the 0.80
+-- Match Cooldown Manager's non-matched cropped-height path: round the 0.70
 -- coordinate-space height first, then round that result to a physical pixel.
 local function PabCroppedHeight(rawSize)
     local onePx = EllesmereUI.PP.mult
-    local coordHeight = math.floor(rawSize * 0.80 + 0.5)
+    local coordHeight = math.floor(rawSize * 0.70 + 0.5)
     return math.floor(coordHeight / onePx + 0.5) * onePx
 end
 
@@ -4865,7 +4865,7 @@ local function RenderPreviewIcons(box, icons, isBuff, cfg, fontPath, pool)
         local sz = e and tonumber(e.size)
         slotSize[i] = PabShapedSize((sz and sz > 0) and sz or iconSize, cfg.iconShape)
         slotHeight[i] = cfg.iconShape == "cropped"
-            and math.floor(slotSize[i] * 0.80 + 0.5) or slotSize[i]
+            and math.floor(slotSize[i] * 0.70 + 0.5) or slotSize[i]
     end
 
     local rowWidth, rowHeight, colOffset, rowYOffset = {}, {}, {}, {}
@@ -4989,7 +4989,7 @@ local function RenderPreviewIcons(box, icons, isBuff, cfg, fontPath, pool)
                 end
                 local z = style.iconZoom or 0.055
                 if style.iconShape == "cropped" then
-                    btn.icon:SetTexCoord(z, 1 - z, z + 0.10, 1 - z - 0.10)
+                    btn.icon:SetTexCoord(z, 1 - z, z + 0.15, 1 - z - 0.15)
                 else
                     btn.icon:SetTexCoord(z, 1 - z, z, 1 - z)
                 end
