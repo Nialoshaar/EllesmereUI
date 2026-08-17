@@ -149,6 +149,7 @@ local function GetOrCreateIcon(index)
     SetTRFont(text, GetFontPath(), 11)
     text:SetTextColor(1, 1, 1, 1)
     btn._text = text
+    if _G._EABR_ApplyIconShape then _G._EABR_ApplyIconShape(btn) end
     talentIconPool[index] = btn
     return btn
 end
@@ -175,15 +176,24 @@ local function ShowIcon(iconIdx, entry)
     talentActiveIcons[#talentActiveIcons + 1] = btn
 end
 
+_G._EABR_TR_ApplyIconShapes = function(shape)
+    if not _G._EABR_ApplyIconShape then return end
+    for _, btn in pairs(talentIconPool) do
+        _G._EABR_ApplyIconShape(btn, shape)
+    end
+end
+
 local function LayoutIcons()
     local count = #talentActiveIcons
     if count == 0 then return end
     local spacing = 40
     local sz = ICON_SIZE
+    local display = db and db.profile and db.profile.display
+    local iconH = (display and display.iconShape == "cropped") and floor(sz * 0.70 + 0.5) or sz
     local totalW = (count * sz) + ((count - 1) * spacing)
     local startX = -totalW / 2
     for i, btn in ipairs(talentActiveIcons) do
-        btn:SetSize(sz, sz)
+        btn:SetSize(sz, iconH)
         btn:SetAlpha(1)
         btn:ClearAllPoints()
         btn:SetPoint("TOPLEFT", talentIconAnchor, "TOP", startX + (i - 1) * (sz + spacing), 0)
