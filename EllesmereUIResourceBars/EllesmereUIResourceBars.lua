@@ -1933,6 +1933,48 @@ local function UpdatePipPartialFill(pip, frac, orientation, r, g, b, a, configur
     pip._rechargeBar:Show()
 end
 
+local function UpdatePipContinuousSecretFill(pip, bar, texPath, r, g, b, a)
+    local fill = bar:GetStatusBarTexture()
+    if not fill then return end
+    if not pip._continuousTexture then
+        if bar._continuousFill then bar._continuousFill:Hide() end
+        fill:SetAlpha(pip._fillOp or 1)
+        return
+    end
+    if not bar._continuousFill then
+        local tex = bar:CreateTexture(nil, "ARTWORK", nil, 1)
+        if tex.SetSnapToPixelGrid then
+            tex:SetSnapToPixelGrid(false)
+            tex:SetTexelSnappingBias(0)
+        end
+        bar._continuousFill = tex
+    end
+    local tex = bar._continuousFill
+    if tex._texPath ~= texPath then
+        tex:SetTexture(texPath)
+        tex._texPath = texPath
+    end
+    tex:ClearAllPoints()
+    tex:SetPoint("TOPLEFT", pip._fill, "TOPLEFT")
+    tex:SetPoint("BOTTOMRIGHT", fill, "BOTTOMRIGHT")
+    ns.ApplyPipContinuousTexCoord(pip, tex)
+    tex:SetVertexColor(r, g, b, a)
+    tex:SetAlpha(pip._fillOp or 1)
+    tex:Show()
+    fill:SetAlpha(0)
+end
+
+local function SetPipSecretFillAlpha(bar, alpha, continuous)
+    local fill = bar and bar:GetStatusBarTexture()
+    if not fill then return end
+    if continuous and bar._continuousFill then
+        fill:SetAlpha(0)
+        bar._continuousFill:SetAlpha(alpha)
+    else
+        fill:SetAlpha(alpha)
+    end
+end
+
 -- Create a single pip (for combo points, holy power, etc.)
 local function CreatePip(parent, w, h, idx, borderSize, borderR, borderG, borderB, borderA)
     local pip = CreateFrame("Frame", nil, parent)
@@ -5617,6 +5659,9 @@ local function UpdateSecondaryResource()
                     pip._secretBar:SetValue(cur)
                     pip._secretBar:SetStatusBarColor(r, g, b, a)
                     pip._secretBar:Show()
+                    if pip._continuousTexture or pip._secretBar._continuousFill then
+                        UpdatePipContinuousSecretFill(pip, pip._secretBar, texPath, r, g, b, a)
+                    end
 
                     if _tsBandOn and _bandStarts then
                         -- Multi-band overlays: one StatusBar per band, higher bands
@@ -5648,6 +5693,10 @@ local function UpdateSecondaryResource()
                             local band = _tsBands[k]
                             bb:SetStatusBarColor(band.r or 1, band.g or 1, band.b or 1, a)
                             bb:Show()
+                            if pip._continuousTexture or bb._continuousFill then
+                                UpdatePipContinuousSecretFill(
+                                    pip, bb, texPath, band.r or 1, band.g or 1, band.b or 1, a)
+                            end
                         end
                         for k = #_tsBands + 1, #pip._bandBars do pip._bandBars[k]:Hide() end
                         if not _tsBandReverse then
@@ -5672,6 +5721,10 @@ local function UpdateSecondaryResource()
                             pip._bandResetBar:SetValue(cur)
                             pip._bandResetBar:SetStatusBarColor(r, g, b, a)
                             pip._bandResetBar:Show()
+                            if pip._continuousTexture or pip._bandResetBar._continuousFill then
+                                UpdatePipContinuousSecretFill(
+                                    pip, pip._bandResetBar, texPath, r, g, b, a)
+                            end
                         elseif pip._bandResetBar then
                             -- "From" semantics: base fill below the first boundary is
                             -- handled by the base _secretBar; no reset overlay needed.
@@ -5711,6 +5764,10 @@ local function UpdateSecondaryResource()
                             pip._secretThreshBar:SetValue(cur)
                             pip._secretThreshBar:SetStatusBarColor(_tsR or 1, _tsG or 0.2, _tsB or 0.2, a)
                             pip._secretThreshBar:Show()
+                            if pip._continuousTexture or pip._secretThreshBar._continuousFill then
+                                UpdatePipContinuousSecretFill(pip, pip._secretThreshBar, texPath,
+                                    _tsR or 1, _tsG or 0.2, _tsB or 0.2, a)
+                            end
                         elseif pip._secretThreshBar then
                             pip._secretThreshBar:Hide()
                         end
@@ -5726,7 +5783,7 @@ local function UpdateSecondaryResource()
                     if pip._fillOp then
                         local _sft = pip._secretBar:GetStatusBarTexture()
                         if _sft then
-                            _sft:SetAlpha(pip._fillOp)
+                            SetPipSecretFillAlpha(pip._secretBar, pip._fillOp, pip._continuousTexture)
                             if not pip._sbgAnchored then
                                 pip._sbgAnchored = true
                                 pip._bg:ClearAllPoints()
@@ -5737,20 +5794,17 @@ local function UpdateSecondaryResource()
                         end
                         local _stb = pip._secretThreshBar
                         if _stb and _stb:IsShown() then
-                            local t = _stb:GetStatusBarTexture()
-                            if t then t:SetAlpha(pip._fillOp) end
+                            SetPipSecretFillAlpha(_stb, pip._fillOp, pip._continuousTexture)
                         end
                         local _srb = pip._bandResetBar
                         if _srb and _srb:IsShown() then
-                            local t = _srb:GetStatusBarTexture()
-                            if t then t:SetAlpha(pip._fillOp) end
+                            SetPipSecretFillAlpha(_srb, pip._fillOp, pip._continuousTexture)
                         end
                         if pip._bandBars then
                             for k = 1, #pip._bandBars do
                                 local bb = pip._bandBars[k]
                                 if bb:IsShown() then
-                                    local t = bb:GetStatusBarTexture()
-                                    if t then t:SetAlpha(pip._fillOp) end
+                                    SetPipSecretFillAlpha(bb, pip._fillOp, pip._continuousTexture)
                                 end
                             end
                         end
