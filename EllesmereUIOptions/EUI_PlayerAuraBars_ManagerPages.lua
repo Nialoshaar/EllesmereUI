@@ -98,15 +98,14 @@ local GROW_DIR_ORDER = { "LEFT", "RIGHT", "CENTER_HORIZONTAL", "CENTER_VERTICAL"
 local ICON_WRAP_VALUES = { LEFT = "Left", RIGHT = "Right", UP = "Up", DOWN = "Down" }
 local ICON_WRAP_ORDER = { "LEFT", "RIGHT", "UP", "DOWN" }
 
--- Same shape vocabulary and media set as Action Bars' Custom Button Shape
--- (EUI_ActionBars_Options.lua), minus "cropped" -- PAB has no equivalent
--- "cropped square" concept.
+-- Same shape vocabulary and media set as Action Bars' Custom Button Shape.
+-- Cropped is the rectangular, non-masked variant used by Cooldown Manager.
 local SHAPE_VALUES = {
-    none = "None", square = "Square", circle = "Circle",
+    none = "None", cropped = "Cropped", square = "Square", circle = "Circle",
     csquare = "Curved Square", diamond = "Diamond", hexagon = "Hexagon",
     portrait = "Portrait", shield = "Shield",
 }
-local SHAPE_ORDER = { "none", "square", "circle", "csquare", "diamond", "hexagon", "portrait", "shield" }
+local SHAPE_ORDER = { "none", "cropped", "---", "square", "circle", "csquare", "diamond", "hexagon", "portrait", "shield" }
 
 -- Levels map 1:1 to Action Bars' ns.BORDER_THICKNESS regular values (thin=1, normal=2,
 -- heavy=3, strong=4), so cfg.borderSize stays the same plain 0-4 number used elsewhere
@@ -1085,7 +1084,8 @@ local function BuildDisplayFields(frame, fontPath, sy, cfg, apply, isBuff)
             values = BORDER_SIZE_VALUES, order = BORDER_SIZE_LEVELS,
             itemDisabled = function(v)
                 local shape = cfg.iconShape
-                return shape and shape ~= "none" and BORDER_SIZE_SHAPE_DISABLED[v] or false
+                return shape and shape ~= "none" and shape ~= "cropped"
+                    and BORDER_SIZE_SHAPE_DISABLED[v] or false
             end,
             itemDisabledTooltip = function()
                 return "This option requires a non-custom shape to be selected"
@@ -1130,6 +1130,7 @@ local function BuildDisplayFields(frame, fontPath, sy, cfg, apply, isBuff)
             -- could never pick, silently losing its border and dispel ring.
             local sz = entry.cfg.borderSize or 1
             if entry.cfg.iconShape and entry.cfg.iconShape ~= "none"
+                and entry.cfg.iconShape ~= "cropped"
                 and sz >= 1 and sz <= 3 then
                 entry.cfg.borderSize = BORDER_SIZE_NUM[BORDER_SIZE_DEFAULT_SHAPE]
             end
@@ -1240,7 +1241,7 @@ local function BuildDisplayFields(frame, fontPath, sy, cfg, apply, isBuff)
                 -- snap to the shape default, same as Action Bars' own shape dropdown
                 -- resetting border thickness on every shape change.
                 local curKey = BORDER_SIZE_KEY[cfg.borderSize or 1] or "thin"
-                if v ~= "none" and BORDER_SIZE_SHAPE_DISABLED[curKey] then
+                if v ~= "none" and v ~= "cropped" and BORDER_SIZE_SHAPE_DISABLED[curKey] then
                     cfg.borderSize = BORDER_SIZE_NUM[BORDER_SIZE_DEFAULT_SHAPE]
                 end
                 apply()
@@ -1269,7 +1270,7 @@ local function BuildDisplayFields(frame, fontPath, sy, cfg, apply, isBuff)
             local shape = cfg.iconShape
             entry.cfg.iconShape = shape
             local sz = entry.cfg.borderSize or 1
-            if shape and shape ~= "none" and sz >= 1 and sz <= 3 then
+            if shape and shape ~= "none" and shape ~= "cropped" and sz >= 1 and sz <= 3 then
                 entry.cfg.borderSize = BORDER_SIZE_NUM[BORDER_SIZE_DEFAULT_SHAPE]
             end
             PabApplyBarEntry(entry)
@@ -1568,7 +1569,8 @@ local function BuildFxEffects(frame, sy, cfg, apply)
               values = BORDER_SIZE_VALUES, order = BORDER_SIZE_LEVELS,
               itemDisabled = function(v)
                   local shape = cfg.iconShape
-                  return shape and shape ~= "none" and BORDER_SIZE_SHAPE_DISABLED[v] or false
+                  return shape and shape ~= "none" and shape ~= "cropped"
+                      and BORDER_SIZE_SHAPE_DISABLED[v] or false
               end,
               itemDisabledTooltip = function()
                   return "This option requires a non-custom shape to be selected"
