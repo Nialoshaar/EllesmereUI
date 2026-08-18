@@ -1879,7 +1879,11 @@ function ns.ApplyPipContinuousTexCoord(pip, tex)
     end
 end
 
-local function UpdatePipContinuousPartial(pip, tex, frac, orientation)
+-- Keep continuous pip helpers on one table to preserve main-chunk local headroom.
+-- Do not split these into separate local functions; Lua 5.1 limits a function to 200 locals.
+local PipTextureHelpers = {}
+
+function PipTextureHelpers.UpdateContinuousPartial(pip, tex, frac, orientation)
     if not tex then return end
     if frac <= 0 then
         tex:Hide()
@@ -1905,7 +1909,7 @@ local function UpdatePipContinuousPartial(pip, tex, frac, orientation)
     return true
 end
 
-local function EnsurePipContinuousPartialTexture(pip)
+function PipTextureHelpers.EnsureContinuousPartialTexture(pip)
     if pip._continuousRechargeFill then return pip._continuousRechargeFill end
     local tex = pip:CreateTexture(nil, "ARTWORK", nil, 1)
     local path = EllesmereUI.ResolveTexturePath(
@@ -1919,17 +1923,17 @@ local function EnsurePipContinuousPartialTexture(pip)
     return tex
 end
 
-local function HidePipPartialFill(pip)
+function PipTextureHelpers.HidePartialFill(pip)
     if pip._rechargeBar then pip._rechargeBar:Hide() end
     if pip._continuousRechargeFill then pip._continuousRechargeFill:Hide() end
 end
 
-local function UpdatePipPartialFill(pip, frac, orientation, r, g, b, a, configureNativeOrientation)
+function PipTextureHelpers.UpdatePartialFill(pip, frac, orientation, r, g, b, a, configureNativeOrientation)
     if pip._continuousTexture then
-        local tex = EnsurePipContinuousPartialTexture(pip)
+        local tex = PipTextureHelpers.EnsureContinuousPartialTexture(pip)
         if pip._rechargeBar then pip._rechargeBar:Hide() end
         tex:SetVertexColor(r, g, b, a)
-        if UpdatePipContinuousPartial(pip, tex, frac, orientation) then tex:Show() end
+        if PipTextureHelpers.UpdateContinuousPartial(pip, tex, frac, orientation) then tex:Show() end
         return
     end
 
@@ -1958,7 +1962,7 @@ local function UpdatePipPartialFill(pip, frac, orientation, r, g, b, a, configur
     pip._rechargeBar:Show()
 end
 
-local function UpdatePipContinuousSecretFill(pip, bar, texPath, r, g, b, a)
+function PipTextureHelpers.UpdateContinuousSecretFill(pip, bar, texPath, r, g, b, a)
     local fill = bar:GetStatusBarTexture()
     if not fill then return end
     if not pip._continuousTexture then
@@ -1989,7 +1993,7 @@ local function UpdatePipContinuousSecretFill(pip, bar, texPath, r, g, b, a)
     fill:SetAlpha(0)
 end
 
-local function SetPipSecretFillAlpha(bar, alpha, continuous)
+function PipTextureHelpers.SetSecretFillAlpha(bar, alpha, continuous)
     local fill = bar and bar:GetStatusBarTexture()
     if not fill then return end
     if continuous and bar._continuousFill then
@@ -5094,7 +5098,7 @@ local function UpdateSecondaryResource()
                     else
                         rf:SetActive(active, r, g, b, a)
                     end
-                    HidePipPartialFill(rf)
+                    PipTextureHelpers.HidePartialFill(rf)
                     if rf._cdText then rf._cdText:SetText("") end
                 end
             end
@@ -5179,7 +5183,7 @@ local function UpdateSecondaryResource()
                         else
                             rf:SetActive(true, r, g, b, a)
                         end
-                        HidePipPartialFill(rf)
+                        PipTextureHelpers.HidePartialFill(rf)
                         if rf._cdText then rf._cdText:SetText("") end
                     else
                         -- Cooling-down rune: hide normal fill, show recharge bar.
@@ -5214,7 +5218,7 @@ local function UpdateSecondaryResource()
                             rr, rg, rb, ra = r * 0.75, g * 0.75, b * 0.75, a
                         end
 
-                        UpdatePipPartialFill(rf, frac, pipOri, rr, rg, rb, ra, true)
+                        PipTextureHelpers.UpdatePartialFill(rf, frac, pipOri, rr, rg, rb, ra, true)
 
                         -- Show duration text if Resource Text is enabled (DK runes use it for cooldown)
                         if rf._cdText then
@@ -5685,7 +5689,8 @@ local function UpdateSecondaryResource()
                     pip._secretBar:SetStatusBarColor(r, g, b, a)
                     pip._secretBar:Show()
                     if pip._continuousTexture or pip._secretBar._continuousFill then
-                        UpdatePipContinuousSecretFill(pip, pip._secretBar, texPath, r, g, b, a)
+                        PipTextureHelpers.UpdateContinuousSecretFill(
+                            pip, pip._secretBar, texPath, r, g, b, a)
                     end
 
                     if _tsBandOn and _bandStarts then
@@ -5719,7 +5724,7 @@ local function UpdateSecondaryResource()
                             bb:SetStatusBarColor(band.r or 1, band.g or 1, band.b or 1, a)
                             bb:Show()
                             if pip._continuousTexture or bb._continuousFill then
-                                UpdatePipContinuousSecretFill(
+                                PipTextureHelpers.UpdateContinuousSecretFill(
                                     pip, bb, texPath, band.r or 1, band.g or 1, band.b or 1, a)
                             end
                         end
@@ -5747,7 +5752,7 @@ local function UpdateSecondaryResource()
                             pip._bandResetBar:SetStatusBarColor(r, g, b, a)
                             pip._bandResetBar:Show()
                             if pip._continuousTexture or pip._bandResetBar._continuousFill then
-                                UpdatePipContinuousSecretFill(
+                                PipTextureHelpers.UpdateContinuousSecretFill(
                                     pip, pip._bandResetBar, texPath, r, g, b, a)
                             end
                         elseif pip._bandResetBar then
@@ -5790,7 +5795,8 @@ local function UpdateSecondaryResource()
                             pip._secretThreshBar:SetStatusBarColor(_tsR or 1, _tsG or 0.2, _tsB or 0.2, a)
                             pip._secretThreshBar:Show()
                             if pip._continuousTexture or pip._secretThreshBar._continuousFill then
-                                UpdatePipContinuousSecretFill(pip, pip._secretThreshBar, texPath,
+                                PipTextureHelpers.UpdateContinuousSecretFill(
+                                    pip, pip._secretThreshBar, texPath,
                                     _tsR or 1, _tsG or 0.2, _tsB or 0.2, a)
                             end
                         elseif pip._secretThreshBar then
@@ -5808,7 +5814,8 @@ local function UpdateSecondaryResource()
                     if pip._fillOp then
                         local _sft = pip._secretBar:GetStatusBarTexture()
                         if _sft then
-                            SetPipSecretFillAlpha(pip._secretBar, pip._fillOp, pip._continuousTexture)
+                            PipTextureHelpers.SetSecretFillAlpha(
+                                pip._secretBar, pip._fillOp, pip._continuousTexture)
                             if not pip._sbgAnchored then
                                 pip._sbgAnchored = true
                                 pip._bg:ClearAllPoints()
@@ -5819,17 +5826,20 @@ local function UpdateSecondaryResource()
                         end
                         local _stb = pip._secretThreshBar
                         if _stb and _stb:IsShown() then
-                            SetPipSecretFillAlpha(_stb, pip._fillOp, pip._continuousTexture)
+                            PipTextureHelpers.SetSecretFillAlpha(
+                                _stb, pip._fillOp, pip._continuousTexture)
                         end
                         local _srb = pip._bandResetBar
                         if _srb and _srb:IsShown() then
-                            SetPipSecretFillAlpha(_srb, pip._fillOp, pip._continuousTexture)
+                            PipTextureHelpers.SetSecretFillAlpha(
+                                _srb, pip._fillOp, pip._continuousTexture)
                         end
                         if pip._bandBars then
                             for k = 1, #pip._bandBars do
                                 local bb = pip._bandBars[k]
                                 if bb:IsShown() then
-                                    SetPipSecretFillAlpha(bb, pip._fillOp, pip._continuousTexture)
+                                    PipTextureHelpers.SetSecretFillAlpha(
+                                        bb, pip._fillOp, pip._continuousTexture)
                                 end
                             end
                         end
@@ -6052,7 +6062,7 @@ local function UpdateSecondaryResource()
                     pips[i]:SetActive(active, r, g, b, a)
                 end
                 -- Hide any leftover partial-fill overlay on non-fractional pips
-                HidePipPartialFill(pips[i])
+                PipTextureHelpers.HidePartialFill(pips[i])
             end
         end
 
@@ -6069,7 +6079,7 @@ local function UpdateSecondaryResource()
                 fr, fg, fb = tr, tg, tb
             end
             local shade = sp.darkenPartialPips == false and 1 or 0.75
-            UpdatePipPartialFill(nextPip, frac, sp.pipOrientation or "HORIZONTAL",
+            PipTextureHelpers.UpdatePartialFill(nextPip, frac, sp.pipOrientation or "HORIZONTAL",
                 fr * shade, fg * shade, fb * shade, a, false)
         end
 
