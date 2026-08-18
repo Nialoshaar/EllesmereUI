@@ -955,6 +955,15 @@ end
 -------------------------------------------------------------------------------
 EllesmereUI._WHATSNEW_PATCHES = {
     {
+        version = "8.9.3",
+        mini = true,
+        fixes = {
+            { module = "Aura Buff Reminders", text = "The Tidecaller's Guard imbue reminder now shows for Restoration Shamans; it and Thunderstrike Ward only remind while a shield is equipped." },
+            { module = "Cooldown Manager", text = "Sacred Weapon / Holy Bulwark no longer disappears from the live bar while still listed in your bar settings." },
+            { module = "Raid Frames", text = "Absorb shields no longer draw doubled over missing health on units below full health (8.9.2 regression)." },
+        },
+    },
+    {
         version = "8.9.2",
         heroes = {},
         features = {

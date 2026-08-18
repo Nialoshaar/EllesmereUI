@@ -2037,9 +2037,12 @@ local function CreateAbsorbBar(button, healthBar)
     -- bar rendered), which is why the overshield vanished whenever a
     -- dispellable debuff -- restricted content's signature -- was up. The mask
     -- tracks curClip through every ReanchorAbsorbToFill re-anchor for free.
+    -- CLAMPTOBLACKADDITIVE is what makes the mask a BOUND: the default wrap
+    -- extends the white edge pixels past the mask's rect, so the backfill
+    -- rendered unmasked over missing health (doubled onto the forward bar).
     local curMask = healthBar:CreateMaskTexture()
     curMask:SetAllPoints(curClip)
-    curMask:SetTexture("Interface\\Buttons\\WHITE8X8")
+    curMask:SetTexture("Interface\\Buttons\\WHITE8X8", "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
 
     -- Backfill bar (overflow): grows into filled health from the right edge.
     -- Child of the HEALTH BAR, not curClip -- the filled-region bound rides
