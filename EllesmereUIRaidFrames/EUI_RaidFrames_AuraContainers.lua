@@ -568,6 +568,12 @@ local function ApplyRFDispelSlot(button, dd, style)
 
     -- Overlay texture (fill / full / gradient). Sublevel 2+def.level (3..7)
     -- gives higher-priority types the higher sublevel at the shared level.
+    -- The fill mode's carrier is a plain texture ANCHORED to the health bar's
+    -- fill texture: anchor-derived geometry is the one health-tracking route
+    -- that stays legal on aura-slot subtrees (DenyTaintedAccessWhenAurasAreSecret
+    -- refuses every tainted WRITE to slot-owned objects while auras are secret
+    -- -- a value-fed StatusBar here threw 37x in the field, and OnShow/OnHide
+    -- scripts on slot-children never dispatch).
     if not dd.overlay then
         dd.overlay = button:CreateTexture(nil, "ARTWORK", nil, 2 + def.level)
     end
@@ -1243,7 +1249,7 @@ local function BuildBmIconStyle(ind, iscale, size)
         width = size,
         height = size,
         iconCrop = true,
-        iconZoom = 0.08,
+        iconZoom = (ns.db and ns.db.profile and ns.db.profile.bmIconZoom) or 0.08,
         hideIcon = hideIcon,
         border = (not hideIcon and (ind.indBorderSize or 1) > 0)
             and { br, bg, bb, 1, size = ind.indBorderSize or 1 } or nil,
@@ -1931,7 +1937,8 @@ local function BmVisualKey(kind, ind, size, font, spellID)
     -- BmTipsOff joins every interactive kind's key so the "Hide Buff
     -- Tooltips" toggle restyles (the fingerprint guards skip otherwise).
     if kind == "icon" then
-        return FP(font, size, ind.iconOpacity, ind.hideIcon, ind.indBorderSize, CK(ind.indBorderColor),
+        return FP(font, size, (ns.db and ns.db.profile and ns.db.profile.bmIconZoom) or 0.08,
+            ind.iconOpacity, ind.hideIcon, ind.indBorderSize, CK(ind.indBorderColor),
             ind.showDuration, ind.showDurationText, ind.durationTextSize, CK(ind.durationTextColor),
             ind.durationTextOffsetX, ind.durationTextOffsetY, ind.thresholdEnabled, ind.threshold,
             CK(ind.thresholdColor), ind.showStacks, ind.stacksTextSize, CK(ind.stacksTextColor),

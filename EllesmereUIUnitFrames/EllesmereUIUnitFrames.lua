@@ -1881,12 +1881,12 @@ local function ApplyDarkTheme(health, unit)
             end
             if self.bg then
                 AnchorHealthBg(self)
-                local bgClassR, bgClassG, bgClassB
+                local bgClassOk, bgClassR, bgClassG, bgClassB
                 if bgClassColored then
                     local classUnit = ClassColorSourceUnit(uKey, unit or self.unit or uKey)
-                    bgClassR, bgClassG, bgClassB = ns.ResolveBgClassColor(classUnit)
+                    bgClassOk, bgClassR, bgClassG, bgClassB = ns.ResolveBgClassColor(classUnit)
                 end
-                if bgClassR then
+                if bgClassOk then
                     -- Full class color; opacity comes from customBgAlpha (SetAlpha).
                     self.bg:SetColorTexture(bgClassR, bgClassG, bgClassB, 1)
                 elseif cBg then
@@ -1913,12 +1913,12 @@ local function ApplyDarkTheme(health, unit)
             -- PostUpdateColor re-applies this so it survives texture swaps.
             AnchorHealthBg(health)
             local bgClassColored = unitSettings and unitSettings.bgClassColored
-            local bgClassR, bgClassG, bgClassB
+            local bgClassOk, bgClassR, bgClassG, bgClassB
             if bgClassColored then
                 local classUnit = ClassColorSourceUnit(unitKey, unitKey or (health.__owner and health.__owner.unit))
-                bgClassR, bgClassG, bgClassB = ns.ResolveBgClassColor(classUnit)
+                bgClassOk, bgClassR, bgClassG, bgClassB = ns.ResolveBgClassColor(classUnit)
             end
-            if bgClassR then
+            if bgClassOk then
                 -- Full class color; PostUpdateColor keeps it correct on updates.
                 health.bg:SetColorTexture(bgClassR, bgClassG, bgClassB, 1)
             elseif customBg then
@@ -2221,6 +2221,43 @@ end
 -- Balance Druid showing Mana instead of Astral Power).
 _G._EUI_ResolvedPowerType = _G._EUI_ResolvedPowerType or {}
 
+local PLAYER_POWER_DEFAULT = {
+    PRIEST = { [3] = 0 },   -- Shadow: default to Mana
+}
+local PLAYER_POWER_ALT = {
+    DRUID  = { [1] = 0, [2] = 0, [3] = 0 },  -- Balance/Feral/Guardian -> Mana
+    PRIEST = { [3] = nil },                     -- Shadow alt -> Insanity (UnitPowerType)
+    SHAMAN = { [1] = 0 },                       -- Elemental -> Mana
+}
+
+-- Forced display power type for the player (number = Enum.PowerType, nil =
+-- UnitPowerType decides). Shared by the bar's GetDisplayPower, the color
+-- resolver and the options preview so all three agree.
+function EllesmereUI.GetPlayerPowerOverride()
+    if not (db and db.profile) then return nil end
+    local _, classFile = UnitClass("player")
+    local classDef = PLAYER_POWER_DEFAULT[classFile]
+    local classAlt = PLAYER_POWER_ALT[classFile]
+    if not (classDef or classAlt) then return nil end
+    local spec = GetSpecialization and GetSpecialization()
+    if not spec then return nil end
+    -- powerTypeOverride is keyed by SPEC ID, never the GetSpecialization() index:
+    -- the set is profile-wide, so an index key collides across classes (slot 3 is
+    -- Guardian, Shadow AND Augmentation). classAlt/classDef stay index-keyed --
+    -- they are nested per class already, so they cannot collide. Resource Bars may
+    -- be disabled, hence the direct fallback.
+    local sid = (_G._ERB_ResolveSpecIDCached and _G._ERB_ResolveSpecIDCached())
+        or (C_SpecializationInfo and C_SpecializationInfo.GetSpecializationInfo(spec))
+        or nil
+    local ov = db.profile.player and db.profile.player.powerTypeOverride
+    if sid and ov and ov[sid] and classAlt then
+        return classAlt[spec]
+    elseif classDef and classDef[spec] ~= nil then
+        return classDef[spec]
+    end
+    return nil
+end
+
 -- (The perpp/curpp/absorb piece functions live in the zone-formatter block
 -- below; they read the _EUI_ globals above.)
 
@@ -2269,22 +2306,42 @@ ns.ResolveUnitNameColor = function(unit)
     return nil
 end
 
+-- Shared secret-class-color recovery for identity-restricted units (ToT, focus-target):
+-- the user's custom color for a matching group member, else Blizzard's shade. Used by
+-- ResolveBgClassColor and ApplyClassColor; ResolveUnitNameColor does NOT use this, since
+-- its result also feeds the [eui-tgtcol] hex-escape tag, which cannot accept a secret.
+-- Returns ok, r, g, b -- ok is a PLAIN boolean, r/g/b may be SECRET, only safe as setter args.
+local function ResolveRestrictedClassColor(unit, class)
+    local ok, r, g, b = EllesmereUI.GetClassColorForRestrictedUnit(unit, class)
+    if ok then return true, r, g, b end
+    if C_ClassColor and C_ClassColor.GetClassColor then
+        local c = C_ClassColor.GetClassColor(class)
+        if c then return true, c.r, c.g, c.b end
+    end
+    return false
+end
+
 -- Background class-color source, enemy-aware. UnitClass() reports WARRIOR for NPCs
 -- rather than nil, so a bare lookup paints every mob Warrior tan. Players (and AI
 -- party members) keep EllesmereUI.GetClassColor (custom colors + Class Color Darken
 -- baked in); NPCs fall through to the reaction color, matching the unit name, the
 -- border and the custom Enemy Colors override. On ns for the local cap.
+-- Returns ok, r, g, b -- ok is a PLAIN boolean, r/g/b may be SECRET numbers on an
+-- identity-restricted unit (ToT/focus-target): callers must branch on ok, never on
+-- the truthiness of r, and may only ever hand r/g/b to a setter like SetColorTexture.
 ns.ResolveBgClassColor = function(classUnit)
-    if not classUnit then return nil end
+    if not classUnit then return false end
     if UnitIsPlayer(classUnit) or (UnitInPartyIsAI and UnitInPartyIsAI(classUnit)) then
         local _, ct = UnitClass(classUnit)
-        -- ct can be secret (out-of-range/uninspectable units).
-        -- issecretvalue FIRST: truthiness-testing a secret errors.
-        local cc = not issecretvalue(ct) and ct and EllesmereUI.GetClassColor(ct)
-        if cc then return cc.r, cc.g, cc.b end
-        return nil
+        if issecretvalue(ct) then
+            return ResolveRestrictedClassColor(classUnit, ct)
+        end
+        local cc = ct and EllesmereUI.GetClassColor(ct)
+        if cc then return true, cc.r, cc.g, cc.b end
+        return false
     end
-    return ns.ResolveUnitNameColor(classUnit)
+    local r, g, b = ns.ResolveUnitNameColor(classUnit)
+    return r ~= nil, r, g, b
 end
 
 -- External nickname providers key us by this addon name. Suite = "EllesmereUI" (the
@@ -3122,6 +3179,18 @@ local function ApplyClassColor(fs, unit, useClassColor, customR, customG, custom
         -- with the eui-tgtname tag via ns.ResolveUnitNameColor.
         local r, g, b = ns.ResolveUnitNameColor(unit)
         if r then fs:SetTextColor(r, g, b); return end
+        -- ResolveUnitNameColor returns nil for a SECRET class token (identity-restricted
+        -- units: focus-target, ToT) since it can't be used as a table key or formatted by
+        -- the [eui-tgtcol] hex-escape tag it also feeds. SetTextColor accepts secrets
+        -- directly, so recover the real color here the same way the health bar does:
+        -- the user's custom color when the unit matches a group member, else Blizzard's.
+        if UnitIsPlayer(unit) or (UnitInPartyIsAI and UnitInPartyIsAI(unit)) then
+            local _, class = UnitClass(unit)
+            if issecretvalue(class) then
+                local ok, sr, sg, sb = ResolveRestrictedClassColor(unit, class)
+                if ok then fs:SetTextColor(sr, sg, sb); return end
+            end
+        end
     end
     fs:SetTextColor(customR or 1, customG or 1, customB or 1)
 end
@@ -5709,32 +5778,10 @@ local function CreatePowerBar(frame, unit, settings)
     -- other specs default to UnitPowerType.
     if unit == "player" then
         local _, classFile = UnitClass("player")
-        -- Specs whose addon default differs from UnitPowerType (forced value).
-        local SPEC_DEFAULT_POWER = {
-            PRIEST = { [3] = 0 },   -- Shadow: default to Mana
-        }
-        -- Specs with an alternative choice; value = powerType to force
-        -- (nil = remove the override and let UnitPowerType decide).
-        local SPEC_ALT_POWER = {
-            DRUID  = { [1] = 0, [2] = 0, [3] = 0 },  -- Balance/Feral/Guardian -> Mana
-            PRIEST = { [3] = nil },                     -- Shadow alt -> Insanity (UnitPowerType)
-            SHAMAN = { [1] = 0 },                       -- Elemental -> Mana
-        }
-        local classDef = SPEC_DEFAULT_POWER[classFile]
-        local classAlt = SPEC_ALT_POWER[classFile]
-        if classDef or classAlt then
+        if PLAYER_POWER_DEFAULT[classFile] or PLAYER_POWER_ALT[classFile] then
             power.displayAltPower = true
             power.GetDisplayPower = function(self, u)
-                local spec = GetSpecialization and GetSpecialization()
-                if not spec then return nil end
-                local resolved
-                local ps = GetSettingsForUnit("player")
-                local ov = ps and ps.powerTypeOverride
-                if ov and ov[spec] and classAlt then
-                    resolved = classAlt[spec]  -- nil = UnitPowerType, number = forced
-                elseif classDef and classDef[spec] ~= nil then
-                    resolved = classDef[spec]
-                end
+                local resolved = EllesmereUI.GetPlayerPowerOverride()
                 -- Publish for tags so the text matches the bar.
                 _G._EUI_ResolvedPowerType[u or "player"] = resolved
                 return resolved

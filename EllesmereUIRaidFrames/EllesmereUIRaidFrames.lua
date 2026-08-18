@@ -1192,7 +1192,7 @@ end
 -------------------------------------------------------------------------------
 --  Raid size tier resolution: width/height for a group size from the defined
 --  overrides, cascading toward 20-man (the base) when a tier is undefined.
---  Tiers: 10, 15, 20(base), 25, 30
+--  Tiers: 10, 15, 20(base), 25, 30, 40
 -------------------------------------------------------------------------------
 ns._GetRaidSizeFrameDimensions = function(groupSize)
     local s = db.profile
@@ -1622,7 +1622,7 @@ local function GetNameColor(unit, s)
         return c.r, c.g, c.b
     else -- "class"
         local _, classToken = UnitClass(unit)
-        if classToken then
+        if classToken and not issecretvalue(classToken) then
             local cc = EllesmereUI.GetClassColor(classToken)
             if cc then return cc.r, cc.g, cc.b end
         end
@@ -1638,7 +1638,7 @@ local function GetTopNameBarColor(unit, s)
         return c.r, c.g, c.b
     end
     local _, classToken = UnitClass(unit)
-    if classToken then
+    if classToken and not issecretvalue(classToken) then
         local cc = EllesmereUI.GetClassColor(classToken)
         if cc then return cc.r, cc.g, cc.b end
     end
@@ -1724,7 +1724,7 @@ local function GetHealthTextColor(unit, s)
         return 1, 1, 1
     elseif mode == "class" then
         local _, classToken = UnitClass(unit)
-        if classToken then
+        if classToken and not issecretvalue(classToken) then
             local cc = EllesmereUI.GetClassColor(classToken)
             if cc then return cc.r, cc.g, cc.b end
         end
@@ -1746,7 +1746,7 @@ function ns.GetHealAbsorbTextColor(unit, s)
         return 1, 0.3, 0.3
     elseif mode == "class" then
         local _, classToken = UnitClass(unit)
-        if classToken then
+        if classToken and not issecretvalue(classToken) then
             local cc = EllesmereUI.GetClassColor(classToken)
             if cc then return cc.r, cc.g, cc.b end
         end
@@ -2030,16 +2030,33 @@ local function CreateAbsorbBar(button, healthBar)
     local missClip = CreateFrame("Frame", nil, healthBar)
     missClip:SetClipsChildren(true)
 
-    -- Backfill bar (overflow): grows into filled health from the right edge
-    local backfillBar = CreateFrame("StatusBar", nil, curClip)
+    -- Filled-region bound for the backfill, as a MASK shadowing curClip's rect
+    -- instead of scissor clipping: in restricted content the clip frame's
+    -- secret-anchored scissor stops rendering its children entirely (bisect
+    -- strips: a plain bar under curClip died while a masked twin on the health
+    -- bar rendered), which is why the overshield vanished whenever a
+    -- dispellable debuff -- restricted content's signature -- was up. The mask
+    -- tracks curClip through every ReanchorAbsorbToFill re-anchor for free.
+    -- CLAMPTOBLACKADDITIVE is what makes the mask a BOUND: the default wrap
+    -- extends the white edge pixels past the mask's rect, so the backfill
+    -- rendered unmasked over missing health (doubled onto the forward bar).
+    local curMask = healthBar:CreateMaskTexture()
+    curMask:SetAllPoints(curClip)
+    curMask:SetTexture("Interface\\Buttons\\WHITE8X8", "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+
+    -- Backfill bar (overflow): grows into filled health from the right edge.
+    -- Child of the HEALTH BAR, not curClip -- the filled-region bound rides
+    -- curMask above (the scissor path is dead in restricted content).
+    local backfillBar = CreateFrame("StatusBar", nil, healthBar)
     backfillBar:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
     local bfFill = backfillBar:GetStatusBarTexture()
-    if bfFill then bfFill:SetDrawLayer("ARTWORK", 1); bfFill:AddMaskTexture(absorbMask) end
+    if bfFill then bfFill:SetDrawLayer("ARTWORK", 1); bfFill:AddMaskTexture(absorbMask); bfFill:AddMaskTexture(curMask) end
     -- Compound "Blizzard (Modern)" solid base (c6c8ff): BEHIND the striped fill (ARTWORK sublevel
     -- 0 < fill 1). Masked once here; shown only for that style, re-anchored to the fill each update.
     local bfBase = backfillBar:CreateTexture(nil, "ARTWORK", nil, 0)
     bfBase:SetColorTexture(0.776, 0.784, 1.0, 1)
     if absorbMask then bfBase:AddMaskTexture(absorbMask) end
+    bfBase:AddMaskTexture(curMask)
     bfBase:Hide()
     backfillBar._modernBase = bfBase
     backfillBar:SetStatusBarColor(1, 1, 1, 0.8)
@@ -7203,26 +7220,30 @@ ns._RFResolveTierOverride = function(numMembers)
     -- User-tunable switch boundaries (per-tier cog sliders): the LOWER tiers
     -- store the highest count they COVER (sizeCap), the UPPER tiers the
     -- count they ENGAGE at (sizeMin). Absent keys reproduce the classic
-    -- cascade exactly (10/15/20, 25 engaging at 21, 30 at 26), so profiles
-    -- that never touch the sliders resolve byte-identically.
-    local o10, o15, o25, o30 = overrides[10], overrides[15], overrides[25], overrides[30]
+    -- cascade exactly (10/15/20, 25 engaging at 21, 30 at 26, 40 at 31), so
+    -- profiles that never touch the sliders resolve byte-identically.
+    local o10, o15, o25, o30, o40 = overrides[10], overrides[15], overrides[25], overrides[30], overrides[40]
     local b10 = (o10 and o10.sizeCap) or 10
     local b15 = (o15 and o15.sizeCap) or 15
     local b25 = (o25 and o25.sizeMin) or 21
     local b30 = (o30 and o30.sizeMin) or 26
+    local b40 = (o40 and o40.sizeMin) or 31
     local tier
     if numMembers <= b10 then    tier = 10
     elseif numMembers <= b15 then tier = 15
     elseif numMembers < b25 then tier = 20
     elseif numMembers < b30 then tier = 25
-    else                         tier = 30
+    elseif numMembers < b40 then tier = 30
+    else                         tier = 40
     end
     if tier == 20 then return 20, nil end
     local ov
     if tier < 20 then
         ov = overrides[tier] or (tier == 10 and overrides[15]) or nil
     else
-        ov = overrides[tier] or (tier == 30 and overrides[25]) or nil
+        ov = overrides[tier]
+        if not ov and tier == 30 then ov = overrides[25] end
+        if not ov and tier == 40 then ov = overrides[30] or overrides[25] end
     end
     return tier, ov or nil
 end
@@ -7409,100 +7430,6 @@ ns._ApplyTierOffset = function()
     -- corruption). While shown, LayoutGroups owns the size as before.
     if not containerFrame:IsShown() then
         containerFrame:SetSize(tw, th)
-    end
-end
-
--- TEMP DEBUG (read-only, prints only): diagnose the vertical-group-growth
--- stacking bug. Reproduce (25/30-man, group growth DOWN/UP), then run:
---   /run EllesmereUI._RF_DumpLayout()
--- It reports each visible group header's anchor + on-screen top-left and the first two
--- units' on-screen positions, so we can tell whether the GROUPS overlap or the UNITS
--- within a group stack, and at what coordinates. Remove once the root cause is found.
-function EllesmereUI._RF_DumpLayout()
-    local s = db.profile
-    local function r(v) if v then return floor(v + 0.5) else return "nil" end end
-    print("|cff66ccffEUI RF Layout Dump|r")
-    print(("  members=%s activeSize=%sx%s group=%s unit=%s tierOv=%s merge=%s"):format(
-        tostring(GetNumGroupMembers()), tostring(ns._activeSizeW), tostring(ns._activeSizeH),
-        tostring(s.groupGrowth), tostring(s.unitGrowth),
-        ns._activeTierOverride and "yes" or "no", s.mergeGroups and "yes" or "no"))
-    if containerFrame then
-        print(("  container LT=(%s,%s) size=%sx%s"):format(
-            r(containerFrame:GetLeft()), r(containerFrame:GetTop()),
-            r(containerFrame:GetWidth()), r(containerFrame:GetHeight())))
-    end
-    for g = 1, 8 do
-        local hdr = separatedHdrs[g]
-        if hdr and hdr:IsShown() then
-            local pt, _, _, hx, hy = hdr:GetPoint(1)
-            print(("  G%d pt=%s off=(%s,%s) hdrLT=(%s,%s)"):format(
-                g, tostring(pt), r(hx), r(hy), r(hdr:GetLeft()), r(hdr:GetTop())))
-            local b1, b2 = hdr[1], hdr[2]
-            if b1 then print(("     u1=%s LT=(%s,%s)"):format(tostring(b1:GetAttribute("unit")), r(b1:GetLeft()), r(b1:GetTop()))) end
-            if b2 then print(("     u2 LT=(%s,%s)"):format(r(b2:GetLeft()), r(b2:GetTop()))) end
-        end
-    end
-end
-
--- TEMP DEBUG: diagnose per-tier offset application. /run EllesmereUI._RF_DumpOffset()
-function EllesmereUI._RF_DumpOffset()
-    local s = db.profile
-    local r = function(v) if v then return floor(v + 0.5) else return "nil" end end
-    print("|cff66ccffEUI RF Offset Dump|r")
-    print(("  unlockPos: %s"):format(s.unlockPos and ("%s/%s x=%s y=%s"):format(
-        s.unlockPos.point, s.unlockPos.relPoint, r(s.unlockPos.x), r(s.unlockPos.y)) or "|cffff6666nil|r"))
-    local eff = ns._GetEffectiveRaidSize()
-    local tier, ov = ns._RFResolveTierOverride(eff)
-    print(("  effectiveSize=%s  resolvedTier=%s  hasOverride=%s"):format(
-        tostring(eff), tostring(tier), ov and "yes" or "no"))
-    if ov then
-        print(("  override: w=%s h=%s offsetX=%s offsetY=%s ug=%s gg=%s"):format(
-            tostring(ov.width), tostring(ov.height), tostring(ov.offsetX), tostring(ov.offsetY),
-            tostring(ov.unitGrowth), tostring(ov.groupGrowth)))
-    end
-    print(("  _activeSizeW=%s _activeSizeH=%s _activeTierOv=%s"):format(
-        tostring(ns._activeSizeW), tostring(ns._activeSizeH),
-        ns._activeTierOverride and "yes" or "no"))
-    local bl, bt, bw, bh = ns._RFBaseTopLeft()
-    print(("  baseTL: l=%s t=%s bw=%s bh=%s"):format(r(bl), r(bt), r(bw), r(bh)))
-    if ov then
-        local cs = PixelSnap(s.cellSpacing or 2)
-        local gs = PixelSnap(s.groupSpacing or 8)
-        local fw = ov.width or s.frameWidth or 72
-        local fh = ov.height or s.frameHeight or 46
-        local ug = ov.unitGrowth or s.unitGrowth or "DOWN"
-        local gg = ov.groupGrowth or s.groupGrowth or "RIGHT"
-        local tw, th = ns._RFFootprint(fw, fh, ug, gg, cs, gs)
-        local kx, ky = ns._RFCornerTerms(tw, th, bw or 0, bh or 0, ug, gg)
-        local x, y = ns._RFTierTopLeft(tw, th, ug, gg, ov.offsetX or 0, ov.offsetY or 0)
-        print(("  tierFootprint: tw=%s th=%s  corner=%s kx=%s ky=%s"):format(
-            r(tw), r(th), ns._RFGrowthCorner(ug, gg), r(kx), r(ky)))
-        print(("  computed TL: x=%s y=%s"):format(r(x), r(y)))
-    end
-    if containerFrame then
-        print(("  container actual: L=%s T=%s W=%s H=%s"):format(
-            r(containerFrame:GetLeft()), r(containerFrame:GetTop()),
-            r(containerFrame:GetWidth()), r(containerFrame:GetHeight())))
-        local anchored = EllesmereUI.IsUnlockAnchored
-            and EllesmereUI.IsUnlockAnchored("RF_RaidFrames")
-        print(("  isAnchored=%s"):format(anchored and "yes" or "no"))
-    end
-    local ovs = s.raidSizeOverrides
-    if ovs then
-        local tiers = {}
-        for k, v in pairs(ovs) do
-            if type(v) == "table" then tiers[#tiers + 1] = k end
-        end
-        table.sort(tiers)
-        for _, t in ipairs(tiers) do
-            local o = ovs[t]
-            print(("  tier[%d]: w=%s h=%s ox=%s oy=%s ug=%s gg=%s"):format(
-                t, tostring(o.width), tostring(o.height),
-                tostring(o.offsetX), tostring(o.offsetY),
-                tostring(o.unitGrowth), tostring(o.groupGrowth)))
-        end
-    else
-        print("  raidSizeOverrides: nil")
     end
 end
 
@@ -13463,7 +13390,7 @@ end
 
 -------------------------------------------------------------------------------
 --  Size preview (simple: just health + power bars at the tier's dimensions)
---  Shows the correct number of frames for the tier (10/15/25/30).
+--  Shows the correct number of frames for the tier (10/15/25/30/40).
 --  Always screen-anchored exactly where the live frames land (shared
 --  growth-corner origin ns._RFTierTopLeft), regardless of preview mode.
 --  No indicators, no randomization.
@@ -14372,11 +14299,13 @@ end
 -- Registers EUI as a frame provider with any installed, supported tracker.
 -- Inert when none is present. Called once from OnEnable.
 ns._RegisterTrackerProviders = function()
-    -- MiniCC: stable public global MiniCCApi.v1, created at its file load and so
-    -- present by PLAYER_LOGIN whenever MiniCC is enabled.
-    if MiniCCApi and MiniCCApi.v1 and MiniCCApi.v1.RegisterFrameProvider then
+    -- MiniAuras: stable public global MiniAurasApi.v1, created at its file load and so
+    -- present by PLAYER_LOGIN whenever MiniAuras is enabled. MiniCCApi is the
+    -- pre-rename global (same v1 contract), kept as a fallback for older installs.
+    local api = MiniAurasApi or MiniCCApi
+    if api and api.v1 and api.v1.RegisterFrameProvider then
         pcall(function()
-            MiniCCApi.v1:RegisterFrameProvider({
+            api.v1:RegisterFrameProvider({
                 Name = "EllesmereUI",
                 GetFrames = ns._CollectTrackerFrames,
                 RegisterRefreshFrames = function(cb) ns._trackerRefreshCb = cb end,
@@ -14651,7 +14580,7 @@ function ERF:OnEnable()
 
 
     -- Expose EUI party frames to external trackers that support a provider
-    -- API (e.g. MiniCC). No-op when none is installed.
+    -- API (e.g. MiniAuras). No-op when none is installed.
     ns._RegisterTrackerProviders()
 
     -- Event frame: register global (non-unit) events

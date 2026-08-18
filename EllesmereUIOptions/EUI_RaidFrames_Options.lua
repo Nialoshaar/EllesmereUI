@@ -4290,8 +4290,8 @@ initFrame:SetScript("OnEvent", function(self)
 
         -- One row per defined custom raid size.
         do
-            local CUSTOM_TIERS = { 10, 15, 25, 30 }
-            local TIER_LABELS = { [10] = "10 Man", [15] = "15 Man", [25] = "25 Man", [30] = "30 Man" }
+            local CUSTOM_TIERS = { 10, 15, 25, 30, 40 }
+            local TIER_LABELS = { [10] = "10 Man", [15] = "15 Man", [25] = "25 Man", [30] = "30 Man", [40] = "40 Man" }
             local overrides = db.profile.raidSizeOverrides
             local EYE_VISIBLE   = EllesmereUI.EYE_VISIBLE_ICON
             local EYE_INVISIBLE = EllesmereUI.EYE_INVISIBLE_ICON
@@ -4476,10 +4476,12 @@ initFrame:SetScript("OnEvent", function(self)
                                      tip = "Group size at which this layout takes over from the 20 Man layout." },
                             [30] = { key = "sizeMin", label = "Switch At", def = 26, min = 22, max = 40,
                                      tip = "Group size at which this layout takes over from the 25 Man layout." },
+                            [40] = { key = "sizeMin", label = "Switch At", def = 31, min = 31, max = 40,
+                                     tip = "Group size at which this layout takes over from the 30 Man layout." },
                         }
                         local tb = TIER_BOUNDS[tier]
                         local _, cogShow = EllesmereUI.BuildCogPopup({
-                            title = EllesmereUI.Lf("%1$s Options", tierLabel),
+                            title = EllesmereUI.Lf("%1$s Options", EllesmereUI.L(tierLabel)),
                             rows = {
                                 { type="slider", label=tb.label, min=tb.min, max=tb.max, step=1,
                                   tooltip=tb.tip,

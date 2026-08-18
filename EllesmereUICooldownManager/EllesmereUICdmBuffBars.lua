@@ -23,6 +23,10 @@ local ECME
 local _anyPandemic  = false
 local _anyThreshold = false
 local _anyStacks    = false
+-- True while any bar uses a Visibility mode/option, i.e. a state no tick-side aura or
+-- cooldown edge can reveal. Gates the dispatcher wake below so profiles that never touch
+-- Visibility keep the idle sleeper's original wake set.
+local _anyVisCond   = false
 
 -- Glow helpers (from main CDM file)
 local function StartGlow(...) if ns.StartNativeGlow then return ns.StartNativeGlow(...) end end
@@ -222,6 +226,13 @@ local TBB_DEFAULT_BAR = {
     enabled   = true,
     hideWhenInactive = true,  -- hide the bar unless the tracked aura is active
     onlyInCombat = false,     -- keep the bar hidden entirely while out of combat
+    barVisibility = "always", -- CDM-Bars-style visibility mode (always/in_combat/in_raid/.../multi-select)
+    visOnlyInstances = false,
+    visHideHousing = false,
+    visHideMounted = false,
+    visHideDragonriding = false,
+    visHideNoTarget = false,
+    visHideNoEnemy = false,
     grouped   = true,   -- per-bar "Group Tracking Bars" checkbox; checked bars chain + share width/height
     height    = 24,
     width     = 270,
@@ -332,6 +343,20 @@ function ns.GetTrackedBuffBars()
             end
         end
         tbb._pandemicModeMigrated = true
+    end
+    -- Live migration: standalone onlyInCombat=true folds into the new barVisibility mode
+    -- dropdown (Visibility -> In Combat) so the effective setting is unchanged. Cleared
+    -- after folding in so the Visibility Options checkbox does not show it doubly checked;
+    -- hideWhenInactive needs no migration, it already reads/writes the same field the new
+    -- Visibility Options checkbox uses.
+    if not tbb._visMigrated then
+        for _, b in ipairs(tbb.bars or {}) do
+            if b.onlyInCombat and (not b.barVisibility or b.barVisibility == "always") then
+                b.barVisibility = "in_combat"
+                b.onlyInCombat = false
+            end
+        end
+        tbb._visMigrated = true
     end
     return tbb
 end
@@ -887,6 +912,22 @@ function _tbbWake.OnEvent(_, event)
 end
 _tbbWake:SetScript("OnEvent", _tbbWake.OnEvent)
 ns.WakeTBBTick = _tbbWake.Wake
+
+-- The Visibility edges (mount, shapeshift, gliding, target, group, zone, combat) are exactly
+-- the set the shared dispatcher already owns, so subscribe there instead of re-registering
+-- them on the sleeper. Without this a parked tick never learns that a Visibility condition
+-- flipped: a bar hidden while mounted stays hidden past the dismount until some unrelated
+-- aura or cast happens to wake it, and the dragonriding modes never fire at all because
+-- takeoff/landing is not in the sleeper's wake set.
+if EllesmereUI.RegisterVisibilityUpdater then
+    EllesmereUI.RegisterVisibilityUpdater(function()
+        -- Only a parked tick needs the nudge; an awake one re-evaluates every frame anyway.
+        if _anyVisCond and _tbbWake._enabled
+           and tbbTickFrame and not tbbTickFrame:IsShown() then
+            _tbbWake.Wake()
+        end
+    end)
+end
 
 function ns.GetTBBFrame(idx) return tbbFrames[idx] end
 
@@ -1575,6 +1616,12 @@ local TBB_STYLE_KEYS = {
     "bgR", "bgG", "bgB", "bgA",
     "gradientEnabled", "gradientR", "gradientG", "gradientB", "gradientA", "gradientDir",
     "opacity", "hideWhenInactive", "onlyInCombat",
+    -- Visibility rides along because the onlyInCombat toggle it replaced already did: a new
+    -- bar inheriting a neighbour's style, or one joining a group, kept that gate before.
+    "barVisibility", "visibilityModes",
+    "visOnlyInstances", "visHideHousing", "visOnlyHousing",
+    "visHideMounted", "visOnlyMounted", "visHideDragonriding",
+    "visHideNoTarget", "visHideNoEnemy",
     "showTimer", "timerPosition", "timerSize", "timerX", "timerY",
     "timerTextR", "timerTextG", "timerTextB", "timerTextA",
     "timerDecimals", "timerDecimalThreshold",
@@ -2893,6 +2940,34 @@ local function FrameIsActive(frames, target)
     return false
 end
 
+-- Name FAMILY of a display name: the part before the first colon, lowered
+-- ("Diabolic Ritual: Overlord" -> "diabolic ritual"; a name without a colon
+-- is its own family). Disambiguates collided viewer slots whose aura names
+-- share a canonical spellID but not a prefix. nil for empty/unreadable.
+local function TbbNameFamily(name)
+    if type(name) ~= "string" or name == "" then return nil end
+    local i = name:find(":", 1, true)
+    local fam = i and name:sub(1, i - 1) or name
+    fam = fam:gsub("^%s+", ""):gsub("%s+$", ""):lower()
+    if fam == "" then return nil end
+    return fam
+end
+
+-- Live aura name family of a pool frame; nil when no clean aura read exists
+-- (secret in restricted content, no bound instance) -- callers fall back to
+-- first-match. Aura reads are the ONLY name source: never the frame's label.
+local function TbbFrameNameFamily(frame)
+    local iid = frame.auraInstanceID
+    if not iid or (issecretvalue and issecretvalue(iid)) then return nil end
+    local unit = frame.auraDataUnit
+    if not unit then return nil end
+    local ok, ad = pcall(C_UnitAuras.GetAuraDataByAuraInstanceID, unit, iid)
+    if not ok or not ad then return nil end
+    local nm = ad.name
+    if nm == nil or (issecretvalue and issecretvalue(nm)) then return nil end
+    return TbbNameFamily(nm)
+end
+
 local function AssignFramesToConfigs(bars)
     local assignment = _tbbAssignment
     -- Memo: pairing moves only on composition edges (player aura events, pool
@@ -2939,8 +3014,18 @@ local function AssignFramesToConfigs(bars)
         if bound and not consumed[bound] and FrameIsActive(frames, bound) then
             local sid = _tbbFrameSID[bound]
             if sid then
-                -- Clean read available: keep only if still the right variant.
-                if CfgWantsSID(cfg, sid) then
+                -- Clean read available: keep only if still the right variant AND
+                -- (collided slots) still the right name family -- a crossed
+                -- pairing must release here or pass 2 can never re-pair it.
+                local keep = CfgWantsSID(cfg, sid)
+                if keep then
+                    local want = TbbNameFamily(cfg.name)
+                    if want then
+                        local fam = TbbFrameNameFamily(bound)
+                        if fam and fam ~= want then keep = false end
+                    end
+                end
+                if keep then
                     assignment[cfg]      = bound
                     consumed[bound]      = true
                     _tbbStickyCdID[cfg]  = bound.cooldownID
@@ -2963,21 +3048,38 @@ local function AssignFramesToConfigs(bars)
         end
     end
 
-    -- Pass 2: exact per-frame identity.
+    -- Pass 2: exact per-frame identity. COLLIDED slots (two viewer slots
+    -- sharing one canonical spellID -- Diabolist Demonic Art vs Diabolic
+    -- Ritual, where Blizzard hands the Art slot the Ritual's id) fit two
+    -- configs identically by sid, and a first-match pairing crosses them
+    -- ("Diabolic Ritual" bar bound to the Art frame, faithfully naming
+    -- Overlord). Tie-break by NAME FAMILY: the config keeps the picker's
+    -- display name and the two slots' aura names differ by prefix, so among
+    -- sid-matching frames the one whose live aura name shares the config
+    -- name's prefix wins; unique matches take the fast path unchanged.
     for _, cfg in ipairs(bars) do
         if not assignment[cfg] then
+            local pick
+            local want = TbbNameFamily(cfg.name)
             for i = 1, #frames do
                 local frame = frames[i]
                 if not consumed[frame] then
                     local sid = _tbbFrameSID[frame]
                     if sid and CfgWantsSID(cfg, sid) then
-                        assignment[cfg]      = frame
-                        consumed[frame]      = true
-                        _tbbStickyFrame[cfg] = frame
-                        _tbbStickyCdID[cfg]  = frame.cooldownID
-                        break
+                        if not want then pick = frame; break end
+                        local fam = TbbFrameNameFamily(frame)
+                        if fam == want then pick = frame; break end
+                        -- Family unreadable/other: remember the first, keep looking
+                        -- for a frame that actually names this config's family.
+                        if not pick then pick = frame end
                     end
                 end
+            end
+            if pick then
+                assignment[cfg]      = pick
+                consumed[pick]       = true
+                _tbbStickyFrame[cfg] = pick
+                _tbbStickyCdID[cfg]  = pick.cooldownID
             end
         end
     end
@@ -4604,6 +4706,59 @@ local function HideTBBBarForCombat(bar)
 end
 
 -------------------------------------------------------------------------------
+--  "Visibility" gate (CDM-Bars-style mode + options, TBB-scoped)
+--  Mirrors _CDMApplyVisibility's priority-2/3 checks (EllesmereUICooldownManager.lua),
+--  but folded into TBB's own tick since TBB bars are not native CDM bars.
+--  Zero cost for bars without a condition: the tick consults the gate only
+--  for bars flagged at build (bar._tbbVisCond) and fills the shared state
+--  table ONCE per pass (TBBFillVisState) when any bar carries a condition.
+-------------------------------------------------------------------------------
+local _tbbVisState = {}
+
+local function TBBFillVisState()
+    local inRaid = IsInRaid and IsInRaid() or false
+    _tbbVisState.inCombat = TBBInCombat()
+    _tbbVisState.inRaid = inRaid
+    _tbbVisState.inParty = not inRaid and (IsInGroup and IsInGroup() or false)
+end
+
+local function TBBVisibilityHides(cfg)
+    if EllesmereUI.CheckVisibilityOptions and EllesmereUI.CheckVisibilityOptions(cfg) then
+        return true
+    end
+
+    local vis = cfg.barVisibility or "always"
+    local visExt = EllesmereUI.EvalVisibilityExtended
+        and EllesmereUI.EvalVisibilityExtended(cfg, "barVisibility", _tbbVisState, EllesmereUI.VIS_CAPS_DEFAULT)
+    if visExt ~= nil then return not visExt end
+    if vis == "never" then return true end
+    if vis == "in_combat" then return not _tbbVisState.inCombat end
+    if vis == "out_of_combat" then return _tbbVisState.inCombat end
+    if vis == "in_raid" then return not _tbbVisState.inRaid end
+    if vis == "in_party" then return not _tbbVisState.inParty end
+    if vis == "solo" then return _tbbVisState.inRaid or _tbbVisState.inParty end
+    return false
+end
+
+-- Does this bar rely on a Visibility mode or option? Mirrors what TBBVisibilityHides reads,
+-- minus hideWhenInactive/onlyInCombat, which flip on the aura and combat edges the sleeper
+-- already wakes on. Option keys come from the shared list so a new one is covered here too.
+local function TBBUsesVisCondition(cfg)
+    if not cfg then return false end
+    local vis = cfg.barVisibility
+    if vis and vis ~= "always" then return true end
+    local vm = cfg.visibilityModes
+    if type(vm) == "table" and next(vm) then return true end
+    local items = EllesmereUI.VIS_OPT_ITEMS
+    if items then
+        for i = 1, #items do
+            if cfg[items[i].key] then return true end
+        end
+    end
+    return false
+end
+
+-------------------------------------------------------------------------------
 --  Main Tick: UpdateTrackedBuffBarTimers
 --  Direct reskin of Blizzard's BuffBarCooldownViewer StatusBars: reads
 --  min/max/value from Blizzard's Bar, zero duration computation.
@@ -4645,6 +4800,9 @@ function ns.UpdateTrackedBuffBarTimers()
     -- configs sharing a cooldownInfo (Eclipse Solar+Lunar) cannot both mirror the same frame and show twice.
     local assignment = AssignFramesToConfigs(bars)
 
+    -- Visibility gate inputs, once per pass, only when some bar has a condition.
+    if _anyVisCond then TBBFillVisState() end
+
     for i, cfg in ipairs(bars) do
         local bar = tbbFrames[i]
         if not bar or not bar._tbbReady then
@@ -4654,6 +4812,8 @@ function ns.UpdateTrackedBuffBarTimers()
             if not bar:IsShown() then bar:Show() end
         elseif cfg.enabled == false then
             bar:Hide()
+        elseif bar._tbbVisCond and TBBVisibilityHides(cfg) then
+            HideTBBBarForCombat(bar)
         elseif cfg.onlyInCombat and not TBBInCombat() then
             -- "Only In Combat": out of combat the bar is gone regardless of aura/cooldown state, and regardless of Hide When Inactive.
             HideTBBBarForCombat(bar)
@@ -4789,17 +4949,76 @@ function ns.UpdateTrackedBuffBarTimers()
                         end
                     end
 
-                    -- Name from the bar's own configured spellID -- deterministic, and
-                    -- spell-data APIs stay readable while auras are secret. NEVER from
-                    -- Blizzard's label FontString: their pooled frames recycle fast in
-                    -- combat and the label can lag a tick behind the icon, so scraping
-                    -- it faithfully copied a leftover name from the frame's previous
-                    -- occupant (the in-combat wrong-name field report). Live aura data
-                    -- is the last resort for unloaded spell data, and only when its
-                    -- spellId actually matches this config (instance ids recycle too).
+                    -- Name resolution ladder (Diabolist field probe 2026-08-16,
+                    -- /euitbbdbg: on the ACTIVE ritual frame GetSpellID,
+                    -- GetAuraSpellID AND the aura-instance read are all
+                    -- secret/nil even out of combat -- the variant identity is
+                    -- unreadable to Lua; only Blizzard's own label knows which
+                    -- ritual is up):
+                    --  1. Blizzard's rendered label FontString on the BOUND
+                    --     frame -- the ONLY channel that carries the live
+                    --     variant name (Overlord / Mother of Chaos / Pit Lord)
+                    --     while ids are unreadable. Handed straight to SetText
+                    --     (accepts secrets natively; NEVER compared or stored),
+                    --     and taken only while that frame is SHOWN with a bound
+                    --     aura: the old wrong-name report came from scraping a
+                    --     label whose pooled frame had been recycled under a
+                    --     stale binding -- bindings are cooldownID-anchored now
+                    --     (sticky releases on slot change), and a shown frame's
+                    --     label belongs to its current occupant.
+                    --  2. Live aura data, when readable and provably this bar's
+                    --     family (exact config ids or the bound slot's
+                    --     cooldownInfo override/spellID/linkedSpellIDs).
+                    --  3. The configured spell's name (deterministic).
                     if bar._nameText and bar._nameText:IsShown() then
                         local nameStr
-                        if cfg.spellID and cfg.spellID > 0 then
+                        -- auraInstanceID may itself be SECRET on the active frame
+                        -- (probe-confirmed): type() reads the tag without touching
+                        -- the value -- the taint-safe presence test for secrets.
+                        -- SLOT CHECK (the Wardead class, 2+ bars in one group in
+                        -- combat): the frame's label is right for its CURRENT
+                        -- occupant, so it is wrong only when OUR binding is stale
+                        -- -- a pool re-acquire that moved this frame to another
+                        -- slot before the next re-pair. cooldownID stays a plain
+                        -- readable number in secret windows, so comparing it to
+                        -- the slot we bound under catches that same-tick window
+                        -- (the sticky pass applies the identical test on its own
+                        -- schedule); a mismatch skips the label and falls through.
+                        if blzChild and blzChild:IsShown() and blizzBar
+                           and type(blzChild.auraInstanceID) ~= "nil"
+                           and (_tbbStickyCdID[cfg] == nil
+                                or blzChild.cooldownID == _tbbStickyCdID[cfg]) then
+                            local blizzNameFS = GetBlizzBarFontStrings(blizzBar)
+                            if blizzNameFS then
+                                local ok, txt = pcall(blizzNameFS.GetText, blizzNameFS)
+                                if ok and txt ~= nil
+                                   and ((issecretvalue and issecretvalue(txt)) or txt ~= "") then
+                                    nameStr = txt
+                                end
+                            end
+                        end
+                        if not nameStr and blzChild and blzChild.auraInstanceID and blzChild.auraDataUnit
+                           and not (issecretvalue and issecretvalue(blzChild.auraInstanceID)) then
+                            local ok, ad = pcall(C_UnitAuras.GetAuraDataByAuraInstanceID,
+                                blzChild.auraDataUnit, blzChild.auraInstanceID)
+                            if ok and ad and ad.name and not (issecretvalue and issecretvalue(ad.name)) then
+                                local sid = ad.spellId
+                                if sid ~= nil and not (issecretvalue and issecretvalue(sid)) then
+                                    local mine = CfgWantsSID(cfg, sid)
+                                    if not mine and blzChild.cooldownID
+                                       and not (issecretvalue and issecretvalue(blzChild.cooldownID))
+                                       and C_CooldownViewer and C_CooldownViewer.GetCooldownViewerCooldownInfo then
+                                        local ok2, info = pcall(C_CooldownViewer.GetCooldownViewerCooldownInfo, blzChild.cooldownID)
+                                        if ok2 and info then
+                                            local ok3, m = pcall(MatchesSID, info, sid)
+                                            mine = ok3 and m
+                                        end
+                                    end
+                                    if mine then nameStr = ad.name end
+                                end
+                            end
+                        end
+                        if not nameStr and cfg.spellID and cfg.spellID > 0 then
                             local spInfo = C_Spell.GetSpellInfo(cfg.spellID)
                             if spInfo then
                                 nameStr = spInfo.name
@@ -4810,11 +5029,6 @@ function ns.UpdateTrackedBuffBarTimers()
                         if not nameStr and cfg.baseSpellID and cfg.baseSpellID > 0 then
                             local spInfo = C_Spell.GetSpellInfo(cfg.baseSpellID)
                             if spInfo then nameStr = spInfo.name end
-                        end
-                        if not nameStr and blzChild and blzChild.auraInstanceID and blzChild.auraDataUnit then
-                            local ok, ad = pcall(C_UnitAuras.GetAuraDataByAuraInstanceID,
-                                blzChild.auraDataUnit, blzChild.auraInstanceID)
-                            if ok and ad and ad.name and CfgWantsSID(cfg, ad.spellId) then nameStr = ad.name end
                         end
                         if nameStr then
                             bar._nameText:SetText(nameStr)
@@ -5180,6 +5394,7 @@ function ns.BuildTrackedBuffBars()
     _anyPandemic  = false
     _anyThreshold = false
     _anyStacks    = false
+    _anyVisCond   = false
 
     local anyEnabled = false
     local anyLust = false  -- any enabled bloodlust bar -> needs the Sated listener
@@ -5191,11 +5406,15 @@ function ns.BuildTrackedBuffBars()
         if (cfg.stacksPosition or "center") ~= "none"  then _anyStacks    = true end
         if cfg.stackBasedBar and cfg.trackType ~= "cooldown"
            and cfg.stackThresholdMaxEnabled             then _anyStacks    = true end
+        local visCond = TBBUsesVisCondition(cfg)
+        if visCond                                      then _anyVisCond   = true end
 
         if not tbbFrames[i] then
             tbbFrames[i] = CreateTrackedBuffBarFrame(UIParent, i)
         end
         local bar = tbbFrames[i]
+        -- Per-bar gate flag for the tick (our frame; the tick never re-derives it).
+        bar._tbbVisCond = visCond or nil
 
         if cfg.enabled == false then
             bar:Hide()

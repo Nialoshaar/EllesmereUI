@@ -491,6 +491,16 @@ initFrame:SetScript("OnEvent", function(self)
                     -- the difference between the two can be said.
                     or (slot.kind == "dynamicspec"
                         and "specialization, by position on this character")
+                    -- Checked before the plain profession caption below,
+                    -- since slot.extra would otherwise still match it.
+                    or (slot.kind == "dynamicprofession" and slot.specialization
+                        and "profession specialization ability, by position on this character")
+                    or (slot.kind == "dynamicprofession" and slot.extra
+                        and "profession's second ability, by position on this character")
+                    -- Same icon and same name as a fixed profession entry on
+                    -- the character that made it, just as with dynamicspec.
+                    or (slot.kind == "dynamicprofession"
+                        and "profession, by position on this character")
                     -- The name above is already the spell this character would
                     -- cast, so the caption says what picked it rather than
                     -- repeating it.
@@ -906,6 +916,36 @@ initFrame:SetScript("OnEvent", function(self)
         return out
     end
 
+    -- Profession POSITIONS (DynamicSpecEntries counterpart): the five
+    -- GetProfessions slots as openers, then the same five as second abilities,
+    -- then the two primary slots as gathering specialization abilities.
+    -- Unlearned or inapplicable positions resolve to nothing and go dark under
+    -- Hide Unusable Entries (see Dynamic Profession in EllesmereUIQuickdraw).
+    local function DynamicProfessionEntries()
+        local out = {}
+        if not ns.ProfessionPositionName then return out end
+        for i = 1, 5 do
+            local slot = { kind = "dynamicprofession", index = i }
+            local icon = ns.SlotDisplay(slot)
+            out[#out + 1] = { icon = icon, name = ns.ProfessionPositionName(i), slot = slot }
+        end
+        for i = 1, 5 do
+            local slot = { kind = "dynamicprofession", index = i, extra = true }
+            local icon = ns.SlotDisplay(slot)
+            out[#out + 1] = { icon = icon, name = ns.ProfessionPositionName(i, true), slot = slot }
+        end
+        for i = 1, 2 do
+            local slot = { kind = "dynamicprofession", index = i, specialization = true }
+            local icon = ns.SlotDisplay(slot)
+            out[#out + 1] = {
+                icon = icon,
+                name = ns.ProfessionPositionName(i, false, true),
+                slot = slot,
+            }
+        end
+        return out
+    end
+
     -- The markers need no enumeration at all: the slot kinds carry the icon
     -- and the name, so a candidate slot handed to SlotDisplay IS the entry.
     --
@@ -1013,6 +1053,11 @@ initFrame:SetScript("OnEvent", function(self)
         -- by-position block below the fixed one, which is the whole of how the
         -- two tell themselves apart. noSearch: at most eight rows.
         { key = "spec",      label = "Specializations", build = AllSpecEntries,
+          keepOrder = true, noSearch = true },
+        -- keepOrder: Profession 1, Profession 2, Cooking, Fishing and
+        -- Archaeology in the fixed order the game lists them, then the same
+        -- five positions' second abilities. noSearch: ten rows.
+        { key = "profession", label = "Professions", build = DynamicProfessionEntries,
           keepOrder = true, noSearch = true },
         { key = "macrotext", label = "Custom Macro...", custom = true },
     }
@@ -1866,47 +1911,15 @@ initFrame:SetScript("OnEvent", function(self)
         return out, dropped
     end
 
-    -- Every profession this character has, as the spells the profession book
-    -- itself offers: the window opener, and where a profession has one, its
-    -- second ability -- smelting, prospecting, milling, runeforging. Cooking,
-    -- fishing and archaeology arrive the same way, GetProfessions handing back
-    -- all five slots.
-    --
-    -- Read out of the spellbook rather than from a list of spell IDs. Those IDs
-    -- change with every expansion's skill lines, and a list would go stale
-    -- silently -- the preset would simply stop offering a profession. This is
-    -- the walk Blizzard's own profession book makes
-    -- (Blizzard_ProfessionsBook.lua:387 for the offsets, :313 for the item).
-    --
-    -- Passive entries are skipped: a profession's passive is a rank, not
-    -- something a menu entry can do.
+    -- By position rather than by identity, the same reasoning as SpecSlots
+    -- above and for the same reason: a preset is the palette most likely to
+    -- be copied to an alt, and only a position survives that trip. Ten
+    -- positions against a sixteen-slot menu, so no dropped count either --
+    -- see DynamicProfessionEntries for what each position means.
     local function ProfessionSlots()
-        local out, dropped = {}, 0
-        local function AddProfession(index)
-            if not index then return end
-            local _, _, _, _, numSpells, spellOffset = GetProfessionInfo(index)
-            for i = 1, (numSpells or 0) do
-                local info = C_SpellBook.GetSpellBookItemInfo(
-                    i + (spellOffset or 0), Enum.SpellBookSpellBank.Player)
-                if info and info.spellID and not info.isPassive then
-                    if #out < MAX_SLOTS then
-                        out[#out + 1] = { kind = "spell", id = info.spellID }
-                    else
-                        dropped = dropped + 1
-                    end
-                end
-            end
-        end
-        -- Passed one at a time rather than collected into a table: a character
-        -- missing a profession hands back a nil in the middle of those five
-        -- returns, and a table constructor holding one stops counting there.
-        local prof1, prof2, arch, fish, cook = GetProfessions()
-        AddProfession(prof1)
-        AddProfession(prof2)
-        AddProfession(arch)
-        AddProfession(fish)
-        AddProfession(cook)
-        return out, dropped
+        local slots = {}
+        for _, entry in ipairs(DynamicProfessionEntries()) do slots[#slots + 1] = entry.slot end
+        return slots
     end
 
     local PALETTE_PRESETS = {

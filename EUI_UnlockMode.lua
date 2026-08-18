@@ -4561,6 +4561,15 @@ ApplyCenterPosition = function(barKey, pos)
         end
     end
 
+    -- Registered extra offset (CDM Additional Bar Offset): this centralized pass
+    -- overrides the module's own placement, so it folds the same render-only
+    -- displacement the anchor path folds, PRE-snap. Absent getter = 0,0; the CDM
+    -- getter itself returns 0,0 while unlock mode is active.
+    do
+        local ex, ey = ExtraAnchorOffset(barKey)
+        adjX, adjY = adjX + ex, adjY + ey
+    end
+
     -- Snap the final position to the physical pixel grid, allowing for odd-dimension
     -- frames that need half-pixel centering. adjX/adjY and the dims are UIParent
     -- units, so snap against UIParent's grid, not the frame's own.
@@ -4732,6 +4741,9 @@ local function MigrateAndApplyPosition(barKey, pos, frame)
     -- Save & Exit (CommitPositions) saves, and the edge anchor is correct as stored.
     if frame then
         local px, py = pos.x or 0, pos.y or 0
+        -- Same registered extra offset fold as ApplyCenterPosition (pre-snap).
+        local ex, ey = ExtraAnchorOffset(barKey)
+        px, py = px + ex, py + ey
         local PPa = EllesmereUI and EllesmereUI.PP
         if PPa and PPa.SnapForES then
             local es = frame:GetEffectiveScale()
@@ -5963,6 +5975,13 @@ local function NudgeMover(dx, dy, targetMover, skipCollapse)
                 x = offX + dx, y = offY + dy,
             }
         end
+    end
+    -- Same element follow-up the drag gives after each placement (main chat
+    -- restores its size corner), before the mover and the anchor chain read
+    -- the frame's rect.
+    local elem = registeredElements[m._barKey]
+    if elem and elem.onLiveMove then
+        pcall(elem.onLiveMove, m._barKey)
     end
     hasChanges = true
 
@@ -7781,6 +7800,12 @@ local function CreateMover(barKey)
                 bar0:ClearAllPoints()
                 bar0:SetPoint("TOPLEFT", UIParent, "TOPLEFT", barX0, barY0)
             end)
+            -- Element follow-up to the one-point placement above (an element
+            -- whose rect needs a second anchor -- main chat's size corner --
+            -- restores it here), before the collapsed rect ever renders.
+            if elem and elem.onLiveMove then
+                pcall(elem.onLiveMove, self._barKey)
+            end
             self:ClearAllPoints()
             self:SetPoint("TOPLEFT", bar0, "TOPLEFT", 0, 0)
         else
@@ -7870,6 +7895,15 @@ local function CreateMover(barKey)
                 s:SetPoint("TOPLEFT", UIParent, "TOPLEFT", finalX, finalY)
             end
 
+            -- Element follow-up to the placement above, BEFORE the anchor chain
+            -- reads this frame's rect: an element whose rect needs a second
+            -- anchor (main chat's size corner) restores it here, so dependents
+            -- anchor against the true rect on the same tick.
+            local elem = registeredElements[s._barKey]
+            if elem and elem.onLiveMove then
+                pcall(elem.onLiveMove, s._barKey)
+            end
+
             -- Show live coordinates during drag (only on elements >= 20px tall).
             -- Physical-pixel counts, matching the cog X/Y boxes and the overlay.
             if s._coordFS and s:GetHeight() >= 12 then
@@ -7883,11 +7917,6 @@ local function CreateMover(barKey)
             local anchorDB = GetAnchorDB()
             if anchorDB then
                 PropagateAnchorChain(s._barKey)
-            end
-
-            local elem = registeredElements[s._barKey]
-            if elem and elem.onLiveMove then
-                pcall(elem.onLiveMove, s._barKey)
             end
 
             ShowAlignmentGuides(s._barKey)
