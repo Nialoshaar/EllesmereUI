@@ -12974,12 +12974,25 @@ function EAB:FinishSetup()
 
     DoSetupSecure()
 
-    -- Set override keybindings immediately at load time, before combat
-    -- state is restored. This ensures keybinds work on /reload in combat.
-    UpdateKeybinds()
-
-    -- Re-apply saved "Toggle Action Bar" visibility keybinds.
-    EAB:RebuildVisToggleBindings()
+    -- Override keybinds (custom-paged/flyout click routes) + saved "Toggle
+    -- Action Bar" keys: engine binding-table rebuilds, protected. On a combat
+    -- /reload InCombatLockdown() is already true here and this loading-screen
+    -- execution is the ONLY place the rebuild is legal, so it stays in-window.
+    -- Out of combat there is no window to protect, and the whole suite's
+    -- OnEnable chain shares this one watchdog budget (AB is first in it):
+    -- move the rebuild to its own execution so it neither dies at the tail
+    -- of the bar build nor starves the modules behind it. If a pull starts
+    -- in the one-frame gap, both callees bail and re-arm on regen -- the
+    -- same contract the combat path already lives on.
+    if InCombatLockdown() then
+        UpdateKeybinds()
+        EAB:RebuildVisToggleBindings()
+    else
+        C_Timer_After(0, function()
+            UpdateKeybinds()
+            EAB:RebuildVisToggleBindings()
+        end)
+    end
 
     -- Initialize the showgrid monitor on ActionButton1 so that when
     -- Blizzard changes its showgrid attribute (e.g. during combat spell

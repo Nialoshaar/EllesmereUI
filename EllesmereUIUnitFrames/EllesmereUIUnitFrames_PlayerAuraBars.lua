@@ -5535,6 +5535,19 @@ local function ReapplyAllAfterCinematic()
         -- exists to repair engine-degraded candidate filters, and an active
         -- bucket bar degrades exactly like a legacy one.
         ReloadAllCustomBars()
+        -- Force the re-parse outright. The config re-drive above cannot: a
+        -- live group's candidate payload does not retake (see CandFP), and the
+        -- engine caches membership per aura instance -- UNIT_AURA re-parses only
+        -- what changed, so a spell-ID group parsed while the player was
+        -- non-assistable keeps serving the full buff set until something marks a
+        -- full rebuild. UpdateAllAuras is that lever (the same one the RF assist
+        -- regain, UF player lane and CDM FakeActive use); the vehicle path only
+        -- got it for free through the parents' Hide/Show. Bounded to this
+        -- coalesced edge: one full parse per live container per cinematic edge.
+        if buffsContainer then buffsContainer:UpdateAllAuras() end
+        if debuffsContainer then debuffsContainer:UpdateAllAuras() end
+        for _, c in pairs(customBuffContainers) do c:UpdateAllAuras() end
+        for _, c in pairs(customDebuffContainers) do c:UpdateAllAuras() end
     end)
 end
 

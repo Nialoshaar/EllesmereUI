@@ -955,6 +955,23 @@ end
 -------------------------------------------------------------------------------
 EllesmereUI._WHATSNEW_PATCHES = {
     {
+        version = "8.9.4",
+        mini = true,
+        fixes = {
+            { module = "Action Bars", text = "Fixed a \"script ran too long\" error during keybind setup at login or reload on slower machines." },
+            { module = "Action Bars & Cooldown Manager", text = "Options previews no longer cut the bottom icon row in half when the preview overflows at smaller UI scales." },
+            { module = "Blizz UI Enhanced", text = "Reskin Widget Bars gained a cog to set a minimum size so bars on shrunken nameplates stay readable (off by default)." },
+            { module = "Blizz UI Enhanced", text = "Character and Inspect sheets now flag a missing enchant on off-hand weapons." },
+            { module = "Blizz UI Enhanced", text = "Dungeon Finder and Raid Finder rewards, the Extra Action Button icon and the Mythic+ dungeon icons now match the skin." },
+            { module = "General", text = "M+ Portals (chat and minimap flyouts, /keys teleports and the DataBars travel tooltip) now list the new season's dungeons." },
+            { module = "Localization", text = "German gained ~60 new entries and many rewordings; Brazilian Portuguese ~95, Traditional Chinese 34 and Korean 30 new entries." },
+            { module = "Player Aura Bars", text = "Bars no longer show every buff after a cinematic -- the External Defensives bar was the most visible case." },
+            { module = "Raid Frames", text = "Debuffs with Center growth and a Top position now anchor to the top of the frame and grow downward, fixing them landing mid-frame on raid-sized frames -- re-check your offset if you had compensated for it." },
+            { module = "Unlock Mode", text = "The X/Y boxes and Center on Screen no longer land odd-width bars one pixel off (typing 0 put a bar at -1)." },
+            { module = "Unlock Mode", text = "Exit and Save & Exit no longer overlap the toolbar toggles on languages with longer labels." },
+        },
+    },
+    {
         version = "8.9.3",
         mini = true,
         fixes = {

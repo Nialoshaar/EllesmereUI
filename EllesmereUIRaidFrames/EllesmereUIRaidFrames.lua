@@ -2955,10 +2955,20 @@ function ns.DebuffGridPoint(s, idx0, total, opts)
     else                       gvx = 1   -- RIGHT or CENTER
     end
 
-    -- Row-stack vector (perpendicular). Explicit wrap direction wins; else derive away from the anchored edge.
+    -- Row-stack vector (perpendicular). CENTER growth stacks away from the
+    -- position's own edge (ResolveFlowAnchor parity); wrap has no options
+    -- setter and defaults to "UP", so letting it win here put this preview's
+    -- rows on the opposite side from the live frame. Otherwise the explicit
+    -- wrap direction wins, else derive away from the anchored edge.
     local svx, svy = 0, 0
     local wrap = s.debuffWrapDirection
-    if     wrap == "UP"    then svy = 1
+    local centerSvy
+    if grow == "CENTER" then
+        if pos:find("top", 1, true) then centerSvy = -1
+        elseif pos:find("bottom", 1, true) then centerSvy = 1 end
+    end
+    if     centerSvy       then svy = centerSvy
+    elseif wrap == "UP"    then svy = 1
     elseif wrap == "DOWN"  then svy = -1
     elseif wrap == "RIGHT" then svx = 1
     elseif wrap == "LEFT"  then svx = -1
