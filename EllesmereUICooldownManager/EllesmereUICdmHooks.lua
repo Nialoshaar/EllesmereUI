@@ -83,7 +83,69 @@ function ns.RefreshBuffGlows()
             if fd and fd.buffGlowActive then
                 fd.buffGlowActive = false
             end
+            if fd and fd.maxBuffStacksGlowActive then
+                fd.maxBuffStacksGlowActive = false
+            end
         end
+    end
+end
+
+-- Kept on ns instead of as ticker locals: the buff ticker is already a large
+-- function and Lua 5.1 caps each function at 200 locals. This contract is only
+-- for the max-stack renderer below; callers must pass its existing frame data.
+function ns.ApplyMaxBuffStacksGlow(frame, fd, bd, sid, isActiveBuff)
+    local maxGlowType = fd._maxBgT or 0
+    if maxGlowType > 0 and isActiveBuff and sid then
+        if not fd.maxBuffStacksGlowOverlay then
+            local ov = CreateFrame("Frame", nil, frame)
+            ov:SetAllPoints(frame)
+            ov:EnableMouse(false)
+            fd.maxBuffStacksGlowOverlay = ov
+        end
+        fd.maxBuffStacksGlowOverlay:SetFrameLevel(frame:GetFrameLevel() + 17)
+        if not fd.maxBuffStacksGlowActive then
+            local cr, cg, cb
+            if bd.buffGlowMode == "custom" then
+                cr, cg, cb = bd.buffGlowR, bd.buffGlowG, bd.buffGlowB
+            end
+            local classColor = bd.buffGlowMode == "class"
+            if fd._bgColor == "class" then
+                classColor = true
+            elseif fd._bgColor == "custom" then
+                classColor = false
+                cr, cg, cb = fd._bgR or cr, fd._bgG or cg, fd._bgB or cb
+            end
+            if classColor then
+                local cc = EllesmereUI.GetClassColor(EllesmereUI._playerClass)
+                cr, cg, cb = cc.r, cc.g, cc.b
+            end
+            ns.StartNativeGlow(fd.maxBuffStacksGlowOverlay, maxGlowType, cr, cg, cb, {
+                N      = bd.buffGlowLines or 8,
+                th     = bd.buffGlowThickness or 2,
+                period = bd.buffGlowSpeed or 4,
+                bg     = bd.buffGlowBackground and {
+                    r = bd.buffGlowBackgroundR or 0,
+                    g = bd.buffGlowBackgroundG or 0,
+                    b = bd.buffGlowBackgroundB or 0,
+                } or nil,
+            })
+            fd.maxBuffStacksGlowActive = true
+        end
+        local auraData = frame.auraDataCached
+        local applications = auraData and auraData.applications
+        local auraSpellID = auraData and auraData.spellId
+        local maxSpellID = sid
+        if type(auraSpellID) ~= "nil" then maxSpellID = auraSpellID end
+        local maxApplications = C_Spell.GetSpellMaxCumulativeAuraApplications(maxSpellID)
+        local atMax = false
+        if type(applications) ~= "nil" and type(maxApplications) ~= "nil" then
+            atMax = applications == maxApplications
+        end
+        -- atMax may be secret. Never inspect it; the region API consumes it.
+        fd.maxBuffStacksGlowOverlay:SetAlphaFromBoolean(atMax, 1, 0)
+    elseif fd.maxBuffStacksGlowActive and fd.maxBuffStacksGlowOverlay then
+        ns.StopNativeGlow(fd.maxBuffStacksGlowOverlay)
+        fd.maxBuffStacksGlowActive = false
     end
 end
 
@@ -9517,6 +9579,14 @@ function ns.SetupViewerHooks()
                                 elseif fd and fd.buffGlowActive and fd.buffGlowOverlay then
                                     ns.StopNativeGlow(fd.buffGlowOverlay)
                                     fd.buffGlowActive = false
+                                end
+
+                                -- Max Stack Glow: applications and the spell maximum can both
+                                -- be secret in restricted combat. Their equality result is never
+                                -- tested in Lua; SetAlphaFromBoolean consumes it directly. Reuse
+                                -- this ticker's aura dirtiness instead of registering another event.
+                                if ns._cdmAnyMaxBuffStacksGlow and fd then
+                                    ns.ApplyMaxBuffStacksGlow(frame, fd, bd, sid, isActiveBuff)
                                 end
 
                                 -- Pandemic glow: Blizzard's ShowPandemicStateFrame hook sets

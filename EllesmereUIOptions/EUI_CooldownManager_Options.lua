@@ -8668,6 +8668,7 @@ initFrame:SetScript("OnEvent", function(self)
                         if t.hideCDSwipe then ns._cdmAnyHideCDSwipe = true end
                         if (tonumber(t.thresholdSeconds) or 0) > 0 then ns._cdmAnyThresholdText = true end
                         if t.maxStacksGlow and t.maxStacksGlow > 0 then ns._cdmAnyMaxStacksGlow = true end
+                        if t.maxBuffStacksGlow and t.maxBuffStacksGlow > 0 then ns._cdmAnyMaxBuffStacksGlow = true end
                         if t.desatNotActive then ns._cdmAnyDesatNotActive = true end
                         if t.noDesatOnCD then ns._cdmAnyNoDesatOnCD = true end
                         if t.chargeHideCdText then ns._cdmAnyChargeHideCdText = true end
@@ -10357,6 +10358,22 @@ initFrame:SetScript("OnEvent", function(self)
                             nil,
                             { apply = { keys = { "buffGlow" },
                                         write = function(t, v) t.buffGlow = v end } })
+
+                        -- Max Stack Glow uses the same styles and color controls as Buff Glow,
+                        -- but its alpha is driven by the aura application count in the renderer.
+                        if not isInjectedCustom then
+                            MakeSubnavRow("Max Stack Glow", BUFF_GLOW_ITEMS,
+                                function() return ss.maxBuffStacksGlow end,
+                                function(v)
+                                    EnsureSS()
+                                    SetOwn("maxBuffStacksGlow", v)
+                                    if v and v > 0 then ns._cdmAnyMaxBuffStacksGlow = true end
+                                end,
+                                function() return ss.maxBuffStacksGlow == nil end,
+                                nil,
+                                { apply = { keys = { "maxBuffStacksGlow" },
+                                            write = function(t, v) t.maxBuffStacksGlow = v end } })
+                        end
 
                         local BUFF_GLOW_COLOR_ITEMS = {
                             { val = nil,      label = "Default" },

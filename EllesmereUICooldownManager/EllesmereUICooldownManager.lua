@@ -1272,6 +1272,20 @@ function ns.RescanMaxStacksGlowFlag()
     end)
 end
 
+-- Max buff-stack glow gate. The glow renderer reuses the existing buff aura
+-- refresh path, so enabling this feature never registers another event.
+function ns.RescanMaxBuffStacksGlowFlag()
+    if ns._cdmAnyMaxBuffStacksGlow or ns._maxBuffStacksFlagScanned then return end
+    if not EllesmereUIDB then return end
+    ns._maxBuffStacksFlagScanned = true
+    ns.ForEachSavedSettingsBlock(function(ss)
+        if ss.maxBuffStacksGlow and ss.maxBuffStacksGlow > 0 then
+            ns._cdmAnyMaxBuffStacksGlow = true
+            return true
+        end
+    end)
+end
+
 -- Audio on Buff Gain/Loss gate: set ns._cdmAnyBuffSound once if any saved buff icon (any spec)
 -- has a gain OR loss sound chosen, so DecorateFrame/RefreshCDMIconAppearance skip attaching the
 -- apply-edge sound hook for non-users. Same scanned-once + runtime-enable contract as RescanMaxStacksGlowFlag.
@@ -5415,6 +5429,8 @@ local function RefreshCDMIconAppearance(barKey)
             -- render-equivalent to nil: treat it as inherit, never as a value. Without this fd._bgT would be `false` and the BuffTicker's `effGlowType > 0` compares a boolean with a number and errors.
             if nT == false then nT = nil end
             local nColor = ssb and ssb.buffGlowColor  -- nil / "class" / "custom"
+            local nMaxT = ssb and ssb.maxBuffStacksGlow
+            if nMaxT == false then nMaxT = nil end
             local nR, nG, nB
             if nColor == "custom" and ssb then
                 nR, nG, nB = ssb.buffGlowColorR, ssb.buffGlowColorG, ssb.buffGlowColorB
@@ -5426,6 +5442,17 @@ local function RefreshCDMIconAppearance(barKey)
                     if fd.buffGlowActive and fd.buffGlowOverlay then
                         StopNativeGlow(fd.buffGlowOverlay)
                         fd.buffGlowActive = false
+                    end
+                    if fd.maxBuffStacksGlowActive and fd.maxBuffStacksGlowOverlay then
+                        StopNativeGlow(fd.maxBuffStacksGlowOverlay)
+                        fd.maxBuffStacksGlowActive = false
+                    end
+                end
+                if fd._maxBgT ~= nMaxT then
+                    fd._maxBgT = nMaxT
+                    if fd.maxBuffStacksGlowActive and fd.maxBuffStacksGlowOverlay then
+                        StopNativeGlow(fd.maxBuffStacksGlowOverlay)
+                        fd.maxBuffStacksGlowActive = false
                     end
                 end
                 -- Per-icon Desaturate Inactive override, read by the BuffTicker.
@@ -7444,6 +7471,7 @@ BuildAllCDMBars = function()
     EnsureGhostBars()
     EnsureFocusKickBar()
     ns.RescanMaxStacksGlowFlag()  -- set the Max Stacks Glow gate (once) before refresh
+    ns.RescanMaxBuffStacksGlowFlag() -- set the Max Stack Glow gate (once) before refresh
     ns.RescanChargeCdTextFlag()   -- set the Hide CD Text (Charges) gate (once) before refresh
     ns.RescanHideChargeTextFlag() -- set the Hide Charge Text gate (once) before refresh
     ns.RescanSuppressGcdFlag()    -- set the per-spell Suppress GCD gate (once) before refresh
