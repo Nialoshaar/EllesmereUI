@@ -5466,7 +5466,28 @@ end
 -- state after its reload paths (which Show() the parents as a side effect).
 -- Restoring (hidden = false) honors each bar's OWN enable toggle -- a
 -- vehicle exit must never re-show a disabled bar's fully-populated grid.
+-- Probe-verified self-assist state (the RF AssistProbe self-branch, ported):
+-- the engine's spell-ID filter degradation tracks ASSISTABILITY, not any event's
+-- timing. A clean false = degraded (hide, never render the full-set parse);
+-- unreadable answers fail OPEN (the historical self-exemption -- never
+-- retry-loop against secrecy).
+local pabDegraded = false
+local pabSettleTicker
+local function PabAssistProbe()
+    local probe = UnitUsingVehicle or UnitInVehicle
+    if probe("player") then return false end
+    local ok, canSelf = pcall(UnitCanAssist, "player", "player")
+    if ok and not (issecretvalue and issecretvalue(canSelf)) and canSelf == false then
+        return false
+    end
+    return true
+end
+
 local function ApplyVehicleHidden(hidden)
+    -- One suppression state, two causes: a vehicle ride and a probe-degraded
+    -- window (cinematic / faction flip) hide the same parents -- degraded
+    -- filter output must never render, exactly like the RF assist gate.
+    hidden = hidden or pabDegraded
     local s = PAB()
     -- Regen replay re-derives from the LIVE vehicle state, not the argument.
     local function recompute() ApplyVehicleHidden(vehicleHidden) end
@@ -5528,6 +5549,44 @@ local function ReapplyAllAfterCinematic()
         if vehicleHidden then
             ApplyVehicleHidden(true)
             return
+        end
+        -- Probe before acting (the RF regain model): a re-drive that lands
+        -- while the player is STILL non-assistable re-bakes the degraded
+        -- full-set parse, and if that was the last UNIT_FACTION edge nothing
+        -- ever repairs it (field: full buff set stuck after cinematics).
+        -- Degraded at this tick: hide the parents and wait. No event marks
+        -- "assistability restored" when the restore lags the event, so a
+        -- settle watcher exists ONLY while degraded; it self-cancels on the
+        -- first clean probe (or gives up watching after 15s -- the hide
+        -- stays, and any later trigger edge re-arms it).
+        if not PabAssistProbe() then
+            if not pabDegraded then
+                pabDegraded = true
+                ApplyVehicleHidden(vehicleHidden)
+            end
+            if not pabSettleTicker then
+                local ticks = 0
+                pabSettleTicker = C_Timer.NewTicker(0.25, function()
+                    ticks = ticks + 1
+                    if PabAssistProbe() then
+                        pabSettleTicker:Cancel()
+                        pabSettleTicker = nil
+                        ReapplyAllAfterCinematic()
+                    elseif ticks >= 60 then
+                        pabSettleTicker:Cancel()
+                        pabSettleTicker = nil
+                    end
+                end)
+            end
+            return
+        end
+        if pabSettleTicker then pabSettleTicker:Cancel(); pabSettleTicker = nil end
+        if pabDegraded then
+            -- Verified regain: un-hide first so the re-drives below act on
+            -- shown parents (their Show also retakes engine-side, the same
+            -- free re-parse the vehicle exit always had).
+            pabDegraded = false
+            ApplyVehicleHidden(vehicleHidden)
         end
         ApplyLiveConfig(true)
         ApplyLiveConfig(false)

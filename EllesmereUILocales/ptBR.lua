@@ -5891,7 +5891,6 @@ L["ready check"] = "confirmação de pronto"
 L["Reskin Extra Action Buttons"] = "Aplicar Skin nos Botões de Ação Extra"
 L["Reskins the dungeon and battleground queue accept popups with the EUI dark style, and adds an accept countdown timer bar to the dungeon one."] = "Aplica o skin escuro da EUI aos pop-ups de aceitar fila de masmorra e de campo de batalha, e adiciona uma barra de contagem regressiva de aceitação ao pop-up de masmorra."
 L["Reskin Widget Bars"] = "Aplicar Skin nas Barras de Widget"
-L["Restyles Blizzard's on-screen progress bars (event objectives, nameplate counters) to the EUI look. Requires reload to apply.\n\nThese bars are drawn over rather than modified, so if the game ever reports their contents as protected the original bar is shown instead."] = "Reestiliza as barras de progresso na tela da Blizzard (objetivos de evento, contadores de placa de nome) para o visual da EUI. Requer recarregamento para aplicar.\n\nEssas barras são desenhadas por cima em vez de modificadas, então se o jogo alguma vez reportar seu conteúdo como protegido, a barra original é exibida no lugar."
 L["Robot Blip"] = "Bipe de Robô"
 L["role"] = "função"
 L["role check"] = "confirmação de função"
@@ -6140,3 +6139,22 @@ L["Pick which content these consumable reminders appear in.\nRested areas (citie
 -- == General Options / Profile Import & What's New =============================
 L["This profile string does not carry any global settings."] = "Esta string de perfil não contém nenhuma configuração global."
 L["SPECIAL UPDATE"] = "ATUALIZAÇÃO ESPECIAL"
+
+-- == Blizzard Skin / Widget Bars =================================================
+L["Widget Bar Size"] = "Tamanho da Barra de Widget"
+L["Minimum"] = "Mínimo"
+L["Restyles Blizzard's on-screen progress bars (event objectives, nameplate counters) to the EUI look. Requires reload to apply.\n\nThese bars are drawn over rather than modified, so if the game ever reports their contents as protected the original bar is shown instead.\n\nUse the cog to set a minimum size, so bars on shrunken nameplates stay readable."] = "Reestiliza as barras de progresso na tela da Blizzard (objetivos de evento, contadores de placa de nome) para o visual da EUI. Requer recarregamento para aplicar.\n\nEssas barras são desenhadas por cima em vez de modificadas, então se o jogo alguma vez reportar seu conteúdo como protegido, a barra original é exibida no lugar.\n\nUse a engrenagem para definir um tamanho mínimo, para que as barras em placas de nome encolhidas continuem legíveis."
+L["Smallest on-screen size a reskinned bar is drawn at.\n\nWidget bars on a nameplate inherit that nameplate's scale, so they come out tiny on small units. Below this size the bar is scaled up instead, text and all.\n\nSet to 0 to mirror Blizzard's size exactly."] = "Menor tamanho na tela em que uma barra reestilizada é desenhada.\n\nBarras de widget em uma placa de nome herdam a escala dessa placa, então elas ficam minúsculas em unidades pequenas. Abaixo deste tamanho, a barra é ampliada, incluindo o texto.\n\nDefina como 0 para corresponder exatamente ao tamanho da Blizzard."
+
+-- == Raid Frames / Buff Manager border styles ====================================
+L["Dashed"] = "Tracejada"
+
+-- == M+ Season Portals ===========================================================
+L["BV"] = true
+L["VA"] = true
+L["DoN"] = true
+L["MR"] = true
+L["AoF"] = true
+L["RLP"] = true
+L["ToS"] = true
+L["KR"] = true

@@ -6120,6 +6120,8 @@ L["25 Man Frame Height"] = "25인 프레임 높이"
 L["25 Man Frame Width"] = "25인 프레임 너비"
 L["30 Man Frame Height"] = "30인 프레임 높이"
 L["30 Man Frame Width"] = "30인 프레임 너비"
+L["40 Man Frame Height"] = "40인 프레임 높이"
+L["40 Man Frame Width"] = "40인 프레임 너비"
 L["a Glow Type other than None"] = "없음 외의 발광 유형"
 L["Action Bars Font"] = "행동 단축바 글꼴"
 L["Action Bars Outline"] = "행동 단축바 외곽선"
@@ -7038,14 +7040,14 @@ L["Reset failed - there are still players inside the instance."] = "초기화 �
 -- == M+ keystone dungeon abbreviations (신화+ 던전 약어 -> 한글 단축명) ==
 -- Minimap portal table (spellID -> code) + bag keystone display produce these English codes;
 -- the render hook then shows the short Korean name.
-L["AA"]  = "대학"
-L["MC"]  = "동굴"
-L["MT"]  = "마정"
-L["NPX"] = "제나스"
-L["PoS"] = "사론"
-L["SoT"] = "삼두정"
-L["SR"]  = "하늘탑"
-L["WRS"] = "첨탑"
+L["MR"]  = "골목"
+L["DoN"]  = "날로라크"
+L["VA"]  = "투기장"
+L["BV"] = "골짜기"
+L["AoF"] = "송곳니"
+L["RLP"] = "루비"
+L["ToS"]  = "세스랄"
+L["KR"] = "왕안"
 
 -- Bag keystone dungeon abbreviation overrides (koKR). AbbrevDungeon in
 -- EllesmereUIBags cuts the localized dungeon name to first-letters, which in

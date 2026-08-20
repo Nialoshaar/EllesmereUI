@@ -2968,9 +2968,20 @@ local pendingOOCRefresh = false
 
 local function HideAllIcons()
     if InCombat() then return end  -- cannot hide SecureActionButtons in combat
-    for i = 1, #activeIcons do
-        local btn = activeIcons[i]
-        if btn then RemoveGlow(btn); EABR.ClearEatingVisual(btn); btn._text:SetText(""); btn._icon:SetDesaturated(false); btn:Hide() end
+    -- Sweep the WHOLE pool, never just activeIcons: a combat fade leaves icons
+    -- shown at alpha 0, and any window where the list rebuilds without those
+    -- frames orphans them -- shown, invisible, still hover/tooltip-live (field:
+    -- an invisible stuck Augment Rune). The pool is a dozen frames and this
+    -- runs on OOC edges only, so the sweep costs nothing; alpha resets here so
+    -- a swept frame can never carry a stale fade into its next show.
+    for _, btn in pairs(iconPool) do
+        if btn then
+            RemoveGlow(btn); EABR.ClearEatingVisual(btn)
+            btn._text:SetText(""); btn._text:SetAlpha(1)
+            btn._icon:SetDesaturated(false)
+            btn:SetAlpha(1)
+            btn:Hide()
+        end
     end
     wipe(activeIcons)
 end
@@ -3862,7 +3873,17 @@ local function Refresh()
                     -- cursor instead of the secure button (a cursor-chasing
                     -- icon could never be clicked anyway, and a protected
                     -- frame could not chase the cursor in combat at all).
-                    if m.cat == "raidbuff" and m.mode == "spell" and not useCursor then
+                    -- Peel to the secure button ONLY while it holds its combat
+                    -- slot (visible at pull, or shown earlier this combat). A
+                    -- button that entered combat PARKED sits at -10000 and its
+                    -- SetPoint is lockdown-protected, so a mid-combat first
+                    -- show there is invisible (die -> combat res -> own buff
+                    -- missing was the field case); fall through to a normal
+                    -- pooled icon instead -- visual-only, like every other
+                    -- combat entry. The button resumes ownership at the OOC
+                    -- refresh.
+                    if m.cat == "raidbuff" and m.mode == "spell" and not useCursor
+                       and (EABR._providerCastVisible or EABR._providerCastCombatReserved) then
                         providerEntry = m
                     else
                         local f
@@ -4908,8 +4929,9 @@ mainFrame:SetScript("OnEvent", function(_, e, arg1, arg2, arg3)
         wipe(_dismissedUntilLoad)
         EABR.ScanEatingState()
         if not InCombatLockdown() then EABR.SyncProviderCastSpell() end
-        RequestRefresh()
-        -- Deferred refresh: GetInstanceInfo() can return stale data on the first frame after a loading screen; a second refresh at 0.5s picks up the correct zone.
+        -- GetInstanceInfo() can return stale data on the first frame after a loading screen (e.g. still
+        -- reporting the previous zone on delve entry), which would show a reminder that "Where to Show"
+        -- disables for the new location. Skip the immediate refresh and wait for the corrected one.
         C_Timer.After(0.5, RequestRefresh)
         return
     end

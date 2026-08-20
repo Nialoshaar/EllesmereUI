@@ -2737,7 +2737,11 @@ local function DecorateFrame(frame, barData)
         fd._isProcessingOverride = true
         fd.cooldown:SetSwipeColor(0, 0, 0, barData.swipeAlpha or 0.7)
         fd._isProcessingOverride = false
-        fd.cooldown:SetSwipeTexture("Interface\\Buttons\\WHITE8x8")
+        -- High-res flat white, never WHITE8x8: the wedge cut's anti-aliasing comes
+        -- from texel filtering, so an 8px texture rasterizes the boundary jagged at
+        -- any angle. Own asset over the game's viewer swipe for sharp corners (the
+        -- stock file bakes in corner rounding that mismatches our squared icons).
+        fd.cooldown:SetSwipeTexture("Interface\\AddOns\\EllesmereUI\\media\\white-square.png")
         -- Hook SetSwipeColor on EVERY CD/utility frame: forces our swipe color
         -- (black, or per-spell custom) so Blizzard's active-state color flash
         -- never shows. SetDrawSwipe hooked too, to keep charge swipes visible.
@@ -8547,7 +8551,7 @@ function _AC.ApplyExtra(button, d, style)
                 d.icon:SetAllPoints(d.borderHost)
             end
             if d.cooldown then
-                pcall(d.cooldown.SetSwipeTexture, d.cooldown, "Interface\\Buttons\\WHITE8x8")
+                pcall(d.cooldown.SetSwipeTexture, d.cooldown, "Interface\\AddOns\\EllesmereUI\\media\\white-square.png")
                 if d.cooldown.SetUseCircularEdge then
                     pcall(d.cooldown.SetUseCircularEdge, d.cooldown, false)
                 end
