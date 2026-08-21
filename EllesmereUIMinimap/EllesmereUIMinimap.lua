@@ -4110,7 +4110,9 @@ local function ApplyMinimap()
     -- The addon compartment is placed (or parked) by EBS._ApplyAddonCompartment
     -- at the end of this pass, once the map has its final size and position.
 
-    local isCircle = (p.shape == "circle" or p.shape == "textured_circle")
+    local shape = p.shape or "square"
+    local isCircle = (shape == "circle" or shape == "textured_circle")
+    local isRectangular = (shape == "rectangular")
 
     if GetFFD(minimap).bg then GetFFD(minimap).bg:SetAlpha(0) end
 
@@ -4123,9 +4125,27 @@ local function ApplyMinimap()
         minimap:SetQuestBlobRingScalar(isCircle and 1 or 0)
     end
 
-    if p.shape == "square" then
-        -- Square: shared border-style engine (solid = PP strips, textured = BackdropTemplate)
-        -- on a dedicated host frame -- the engine shows/hides the host freely, so it must never be the Minimap itself.
+    minimap:SetScale(1.0)
+    local mapSize = p.mapSize or 140
+    -- Mask file is 256x256 (WoW requires POT). The visible shape is 4:3, so the
+    -- widget uses that aspect; SetMaskTexture stretches the square file onto it.
+    minimap:SetSize(mapSize, isRectangular and (mapSize * 192 / 256) or mapSize)
+    local maskID = isCircle and 186178
+        or (isRectangular and "Interface\\AddOns\\EllesmereUIMinimap\\Media\\minimap_rectangular-mask.blp")
+        or 130937
+    minimap:SetMaskTexture(maskID)
+    do
+        local blocker = GetFFD(minimap).pingBlocker
+        if blocker then
+            blocker:ClearAllPoints()
+            blocker:SetAllPoints(minimap)
+        end
+    end
+
+    if not isCircle then
+        -- Square / Rectangular: shared border-style engine (solid = PP strips, textured =
+        -- BackdropTemplate) on a dedicated host frame -- the engine shows/hides the host
+        -- freely, so it must never be the Minimap itself.
         local bs = p.borderSize or 1
         local host = GetFFD(minimap).borderHost
         if not host then
@@ -4216,11 +4236,6 @@ local function ApplyMinimap()
         EllesmereUI.RegAccent({ type = "callback", fn = GetFFD(minimap).accentBorderCB })
     end
 
-    minimap:SetScale(1.0)
-    local mapSize = p.mapSize or 140
-    minimap:SetSize(mapSize, mapSize)
-    local maskID = isCircle and 186178 or 130937
-    minimap:SetMaskTexture(maskID)
     -- Custom housing overlay: our own texture behind the minimap showing the housing indoor map when Blizzard hides the real content. No Blizzard frame manipulation.
     if not GetFFD(minimap).housingTex then
         local frame = CreateFrame("Frame", nil, minimap)
@@ -4234,7 +4249,7 @@ local function ApplyMinimap()
         else
             tex:SetAllPoints(frame)
         end
-        if isCircle then
+        if isCircle or isRectangular then
             local mask = frame:CreateMaskTexture()
             mask:SetAllPoints(frame)
             mask:SetTexture(maskID)
@@ -4285,14 +4300,33 @@ local function ApplyMinimap()
             end
         end
     else
-        -- Update existing housing frame on reapply
+        -- Update existing housing frame on reapply (shape/mask can change live).
         local frame = GetFFD(minimap).housingFrame
         if frame then
             frame:SetFrameLevel(minimap:GetFrameLevel() + 1)
-            if frame._mask then
+            frame._isCircle = isCircle
+            if frame._tex then
+                frame._tex:ClearAllPoints()
+                if isCircle then
+                    local inset = -mapSize * 0.10
+                    frame._tex:SetPoint("TOPLEFT", frame, "TOPLEFT", inset, -inset)
+                    frame._tex:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -inset, inset)
+                else
+                    frame._tex:SetAllPoints(frame)
+                end
+            end
+            if isCircle or isRectangular then
+                if not frame._mask then
+                    local mask = frame:CreateMaskTexture()
+                    mask:SetAllPoints(frame)
+                    if frame._tex then frame._tex:AddMaskTexture(mask) end
+                    frame._mask = mask
+                end
                 frame._mask:SetTexture(maskID)
-            elseif not isCircle and frame._mask then
-                -- Switched to square, remove mask
+                frame._mask:Show()
+            elseif frame._mask then
+                if frame._tex then pcall(frame._tex.RemoveMaskTexture, frame._tex, frame._mask) end
+                frame._mask:Hide()
             end
         end
     end
@@ -4551,7 +4585,7 @@ local function ApplyMinimap()
             local mp = EBS.db and EBS.db.profile.minimap
             if not mp or not mp.enabled then return end
             SyncIndicatorVisibility()
-            LayoutIndicatorFrames(minimap, mp, (mp.shape or "square") ~= "square")
+            LayoutIndicatorFrames(minimap, mp, mp.shape == "circle" or mp.shape == "textured_circle")
         end
         hooksecurefunc(mailFrame, "Show", onMailChange)
         hooksecurefunc(mailFrame, "Hide", onMailChange)
@@ -4562,7 +4596,7 @@ local function ApplyMinimap()
             local mp = EBS.db and EBS.db.profile.minimap
             if not mp or not mp.enabled then return end
             SyncIndicatorVisibility()
-            LayoutIndicatorFrames(minimap, mp, (mp.shape or "square") ~= "square")
+            LayoutIndicatorFrames(minimap, mp, mp.shape == "circle" or mp.shape == "textured_circle")
         end
         hooksecurefunc(craftingFrame, "Show", onCraftChange)
         hooksecurefunc(craftingFrame, "Hide", onCraftChange)

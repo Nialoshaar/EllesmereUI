@@ -3795,7 +3795,7 @@ initFrame:SetScript("OnEvent", function(self)
         local powerSizeRow
         powerSizeRow, h = W:DualRow(parent, y,
             { type = "slider", text = "Height",
-              min = 1, max = 30, step = 1,
+              min = 1, max = 100, step = 1,
               disabled = phDis, disabledTooltip = phTip, rawTooltip = phRaw,
               getValue = function() local c = cfg(); return c and c.height or 16 end,
               setValue = function(v)
@@ -8079,6 +8079,33 @@ initFrame:SetScript("OnEvent", function(self)
             if hasIcon then pf.iconFrame:Show() else pf.iconFrame:Hide() end
         end
 
+        -- Icon/bar seam divider preview: mirrors the live cast bar's onePixel
+        -- math (PP.perfect / effective scale), NOT the widget-local Snap()
+        -- helper above -- the border itself already renders through that same
+        -- shared PP system (ApplyBorderStyle -> SnapBorderTextures), so the
+        -- divider has to match it, not the panel's own pixel grid.
+        if pf.iconDivider then
+            if hasIcon and cb.showIconDivider then
+                local PPp = EllesmereUI.PP
+                local des = pf.container:GetEffectiveScale()
+                local onePixel = (PPp and des > 0) and (PPp.perfect / des) or 1
+                local dbs = cb.borderSize or 1
+                pf.iconDivider:ClearAllPoints()
+                pf.iconDivider:SetWidth(math.max(onePixel, math.floor(dbs + 0.5) * onePixel))
+                if iconOnRight then
+                    pf.iconDivider:SetPoint("TOPRIGHT", pf.iconFrame, "TOPLEFT", 0, 0)
+                    pf.iconDivider:SetPoint("BOTTOMRIGHT", pf.iconFrame, "BOTTOMLEFT", 0, 0)
+                else
+                    pf.iconDivider:SetPoint("TOPLEFT", pf.iconFrame, "TOPRIGHT", 0, 0)
+                    pf.iconDivider:SetPoint("BOTTOMLEFT", pf.iconFrame, "BOTTOMRIGHT", 0, 0)
+                end
+                pf.iconDivider:SetColorTexture(cb.borderR or 0, cb.borderG or 0, cb.borderB or 0, cb.borderA or 1)
+                pf.iconDivider:Show()
+            else
+                pf.iconDivider:Hide()
+            end
+        end
+
         -- Cast text side-aware layout (mirrors the live cast bar)
         local cbTimerW   = (cb.timerSize or 11) * 2.2
         local cbDurSide   = cb.timerSide or "right"
@@ -8236,6 +8263,14 @@ initFrame:SetScript("OnEvent", function(self)
         if not hasIcon then iconFrame:Hide() end
         _castBarPreviewFrames.iconFrame = iconFrame
         _castBarPreviewFrames.icon = icon
+
+        -- Icon/bar seam divider (mirrors the live cast bar's "Show Icon
+        -- Divider"): parented to bdrFrame, same reasoning as the live one --
+        -- a texture on container itself would sit below the icon/bar child
+        -- frames regardless of draw layer.
+        local iconDivider = bdrFrame:CreateTexture(nil, "OVERLAY", nil, 7)
+        iconDivider:Hide()
+        _castBarPreviewFrames.iconDivider = iconDivider
 
         -- Timer text
         local timerText = bar:CreateFontString(nil, "OVERLAY")
@@ -8453,6 +8488,13 @@ initFrame:SetScript("OnEvent", function(self)
                       set = function(v)
                           local p = DB(); if not p then return end
                           p.castBar.iconOnRight = v; RefreshCast()
+                      end },
+                    { type = "toggle", label = "Show Icon Divider",
+                      tooltip = "Draw a 1px divider between the spell icon and the cast bar, matching the border color.",
+                      get = function() local p = DB(); return p and p.castBar.showIconDivider end,
+                      set = function(v)
+                          local p = DB(); if not p then return end
+                          p.castBar.showIconDivider = v; RefreshCast()
                       end },
                 },
             })

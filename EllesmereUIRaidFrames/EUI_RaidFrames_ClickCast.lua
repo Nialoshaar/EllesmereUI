@@ -1054,13 +1054,12 @@ local function SetClickAttr(frame, parsed, actionType, spellOrMacro, macrotext, 
     local suffix = tostring(parsed.buttonNum)
     local typeAttr = prefix .. "type" .. suffix
     -- 12.0.7+ gates a raw "togglemenu" on unit buttons (insecure reopen taints
-    -- protected items); route through the secure proxy instead. TRANSPORT: the
-    -- "click" action itself crashes on a Blizzard typo (SecureTemplates.lua:564,
-    -- aspect check on the mouse-button string) -- use a "/click <proxy>" macro.
+    -- protected items); route through the secure proxy instead.
     if actionType == "togglemenu" and EllesmereUI.GetSecureMenuProxy then
         local proxy = EllesmereUI.GetSecureMenuProxy(frame)
-        SetGatedType(frame, typeAttr, "macro", oocOnly)
-        frame:SetAttribute(prefix .. "macrotext" .. suffix, "/click " .. proxy:GetName())
+        SetGatedType(frame, typeAttr, "click", oocOnly)
+        frame:SetAttribute(prefix .. "clickbutton" .. suffix, proxy)
+        frame:SetAttribute(prefix .. "macrotext" .. suffix, nil)
         return
     end
     -- 12.0.7+ also gates raw "target" on unit buttons, EXCEPT plain unmodified
@@ -1098,12 +1097,12 @@ end
 local function SetKeyAttr(frame, idx, actionType, spellOrMacro, macrotext, oocOnly)
     local suffix = "eui_" .. idx
     local typeAttr = "type-" .. suffix
-    -- Route a "menu" keybind through the secure proxy (see SetClickAttr for
-    -- why this uses the /click macro transport instead of the click action).
+    -- Route a "menu" keybind through the secure proxy.
     if actionType == "togglemenu" and EllesmereUI.GetSecureMenuProxy then
         local proxy = EllesmereUI.GetSecureMenuProxy(frame)
-        SetGatedType(frame, typeAttr, "macro", oocOnly)
-        frame:SetAttribute("macrotext-" .. suffix, "/click " .. proxy:GetName())
+        SetGatedType(frame, typeAttr, "click", oocOnly)
+        frame:SetAttribute("clickbutton-" .. suffix, proxy)
+        frame:SetAttribute("macrotext-" .. suffix, nil)
         return
     end
     -- A "target" keybind is never plain left-click, so it always hits the 12.0.7

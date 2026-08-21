@@ -2762,13 +2762,12 @@ do
     -- default-anchored builds re-park right after in the SetDefaultAnchor post-hook (its internal SetOwner runs first).
     local _suppressHost = CreateFrame("Frame", nil, UIParent)
     _suppressHost:Hide()
-    local _origParent, _origStrata
+    local _origParent
     local function ParkTooltip(tt)
         if _parked then return end
         _parked = true
         _origParent = tt:GetParent()
         if _origParent == _suppressHost then _origParent = nil end
-        _origStrata = tt:GetFrameStrata()
         tt:SetParent(_suppressHost)
     end
     local function UnparkTooltip(tt)
@@ -2776,7 +2775,9 @@ do
         _parked = false
         tt:SetParent(_origParent or UIParent)
         -- SetParent can demote strata; the tooltip must stay topmost.
-        tt:SetFrameStrata(_origStrata or "TOOLTIP")
+        -- GetFrameStrata() returns a secret string once the tooltip carries
+        -- secret unit data, and SetFrameStrata rejects secrets from addons.
+        tt:SetFrameStrata("TOOLTIP")
     end
     local function ApplySuppression(tt)
         if EllesmereUI._tooltipSuppressedByMode(tt) then

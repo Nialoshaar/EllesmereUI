@@ -41,7 +41,7 @@ if EUI_CLIENT_BLOCKED then return end -- pre-12.1 client failsafe (EllesmereUI_C
 --   ns.LOC_MAX_WIDTH_DEFAULT               Manual-mode width before one is set
 --   ns.BlockTextDynamic(blockType) -> r, g, b   state-driven Text Color swatch
 --   ns.UpdateAllBarVisibility()
---   ns.MakePreviewBackdrop(host, themeCfg)
+--   ns.MakePreviewBackdrop(host, themeCfg, showBorder)
 --   ns.BLOCK_TYPES / ns.BLOCK_DEFAULTS / ns.EDB_VIS_CAPS / ns.EDGE_PAD
 --
 --  The one call that runs the other way (options file -> runtime): a block
@@ -1709,7 +1709,7 @@ local function EnsureThemeTextures(host)
     UpdateBgTexCoords()
 end
 
-local function ApplyThemeToHost(host, theme, texKey)
+local function ApplyThemeToHost(host, theme, texKey, showBorder)
     EnsureThemeTextures(host)
     theme = theme or {}
     -- Bar Texture (per-bar cfg.barTexture): resolved through the shared
@@ -1752,13 +1752,20 @@ local function ApplyThemeToHost(host, theme, texKey)
     end
     -- Bar Opacity carries the border with it: the base border alpha (0.8)
     -- is baked into the strip textures, frame alpha multiplies on top.
-    -- SetAlpha is combat-legal even on implicitly protected bars.
-    if host._edbBorder then host._edbBorder:SetAlpha(op) end
+    -- SetAlpha is combat-legal even on implicitly protected bars. Off
+    -- (cfg.hideBorder == true) zeros it rather than Hide(), same reason.
+    if host._edbBorder then
+        if showBorder == false then
+            host._edbBorder:SetAlpha(0)
+        else
+            host._edbBorder:SetAlpha(op)
+        end
+    end
 end
 
 -- Exposed so the options preview strip renders the exact same recipe.
-function ns.MakePreviewBackdrop(host, themeCfg)
-    ApplyThemeToHost(host, themeCfg)
+function ns.MakePreviewBackdrop(host, themeCfg, showBorder)
+    ApplyThemeToHost(host, themeCfg, nil, showBorder)
 end
 
 -------------------------------------------------------------------------------
@@ -2194,7 +2201,7 @@ function ns.ApplyBar(id)
     end
 
     ApplyBarPosition(id)
-    ApplyThemeToHost(rec.bar, cfg.theme, cfg.barTexture)
+    ApplyThemeToHost(rec.bar, cfg.theme, cfg.barTexture, not cfg.hideBorder)
 
     -- Reconcile block instances against cfg.blocks
     local want = {}
@@ -2255,7 +2262,7 @@ function ns.ApplyTheme(id)
     local rec = live[id]
     local cfg = ns.GetBar(id)
     if not (rec and rec.bar and cfg) then return end
-    ApplyThemeToHost(rec.bar, cfg.theme, cfg.barTexture)
+    ApplyThemeToHost(rec.bar, cfg.theme, cfg.barTexture, not cfg.hideBorder)
 end
 
 function ns.GetLiveAutoLength(barId, blockId)

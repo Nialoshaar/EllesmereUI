@@ -5401,7 +5401,6 @@ local function SkinRCRow(child, isCurrency)
             if fill then keep[fill] = true end
             WSkin.FadeRegions(rb, keep)
             rb:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
-            WSkin.ApplyBarFill(rb)
             local rd = GetFFD(rb)
             if not rd.bg then
                 local trough = rb:CreateTexture(nil, "BACKGROUND", nil, -1)
