@@ -2398,7 +2398,7 @@ function EABR.SyncProviderCastSpell()
         btn:SetAttribute("spell", spellID)
         btn:SetAttribute("item", nil)
         btn:SetAttribute("macrotext", nil)
-        btn:SetAttribute("unit", nil) -- raid buffs are self-cast, no unit needed
+        btn:SetAttribute("unit", "player") -- explicit unit so casting doesn't depend on your current target
         btn._icon:SetTexture(Tex(spellID) or 134400)
         btn._tooltipSpell = spellID
         btn._tooltipItem = nil
