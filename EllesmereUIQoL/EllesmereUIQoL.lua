@@ -2754,12 +2754,22 @@ do
         end
     end
 
+    -- Durability + alert events land together per damaged slot; one check
+    -- after the frame settles (the check itself returns in combat, so a flush
+    -- landing after PLAYER_REGEN_DISABLED cannot re-show the warning).
+    local durCheckPending = false
+    local function FlushDurabilityCheck()
+        durCheckPending = false
+        CheckDurabilityAndShow()
+    end
     repairWarnFrame:SetScript("OnEvent", function(_, event)
         if event == "PLAYER_REGEN_DISABLED" then
             if durWarnOverlay then durWarnOverlay:Hide() end
             return
         end
-        CheckDurabilityAndShow()
+        if durCheckPending then return end
+        durCheckPending = true
+        C_Timer.After(0, FlushDurabilityCheck)
     end)
 
     -- Events registered only while enabled; toggle re-syncs live, and one immediate check on enable surfaces an already-low item.
@@ -2772,6 +2782,8 @@ do
             repairWarnFrame:RegisterEvent("PLAYER_REGEN_DISABLED")
             repairWarnFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
             repairWarnFrame:RegisterEvent("UPDATE_INVENTORY_DURABILITY")
+            -- Self-repair items recalculate alerts without the durability event.
+            repairWarnFrame:RegisterEvent("UPDATE_INVENTORY_ALERTS")
             CheckDurabilityAndShow()
         end
     end
@@ -4143,11 +4155,15 @@ do
             outline = (outline == "") and "OUTLINE" or (outline .. ", OUTLINE")
         end
         local size = (EllesmereUIDB and EllesmereUIDB.targetDistanceTextSize) or DEFAULT_TEXT_SIZE
+        -- HIGH = the pre-setting strata, so existing installs keep their look; the
+        -- setting is the opt-in to sit lower (e.g. under the bank window).
+        local strata = (EllesmereUIDB and EllesmereUIDB.targetDistanceStrata) or "HIGH"
         local align = GetAlign()
         distFrame._text:SetFont(fontPath, size, outline)
         distFrame._text:SetJustifyH(align)
         distFrame._text:ClearAllPoints()
         distFrame._text:SetPoint(align, distFrame, align, 0, 0)
+        distFrame:SetFrameStrata(strata)
         distFrame:SetSize(size * 5, size + 10)
 
         -- Unlock Mode owns anchors while dragging, or when Anchor-to is linked.
@@ -4169,7 +4185,6 @@ do
         if distFrame then return end
         distFrame = CreateFrame("Frame", nil, UIParent)
         distFrame:SetSize(100, 28)
-        distFrame:SetFrameStrata("HIGH")
         distFrame:SetFrameLevel(55)
         distFrame:EnableMouse(false)
         distFrame:SetMouseClickEnabled(false)

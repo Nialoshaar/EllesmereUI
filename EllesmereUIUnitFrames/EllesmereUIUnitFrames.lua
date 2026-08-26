@@ -2047,9 +2047,15 @@ do
         -- Color inputs (class/reaction/dark/disconnect/tap) change via their
         -- own events or identity repaints -- a pure health tick re-runs the
         -- color chain only for modes whose color follows health/combat state
-        -- per tick (dynamic curve, threat, tap coloring).
-        if event ~= "UNIT_HEALTH" or element.colorSmooth
-           or element.colorThreat or element.colorTapping then
+        -- per tick (dynamic curve, threat, tap coloring). The color* flags are
+        -- never set by this engine; the dynamic modes live in PostUpdateColor
+        -- (ns.UF_DynamicHealthColor) behind the unit's healthColorMode, so that
+        -- setting is the gate that keeps a dynamic bar tracking every tick.
+        local unitKey = element._euiUnitKey
+        local unitColorMode = unitKey and db.profile[unitKey]
+        unitColorMode = unitColorMode and unitColorMode.healthColorMode
+        if event ~= "UNIT_HEALTH" or element.colorSmooth or element.colorThreat
+           or element.colorTapping or (unitColorMode and unitColorMode ~= "none") then
             UF_SecretSafeHealthColor(frame, event, unit)
         end
     end
@@ -2721,9 +2727,23 @@ do
         healabsorbshort = { "%s", "healabsorbshort" },
         group        = { "%s", "group" },
     }
+    -- Identity-only zones: their pieces read name/level, which change only on
+    -- identity edges (UNIT_NAME_UPDATE, UNIT_LEVEL, repoints, provider
+    -- callbacks) -- Blizzard paints names on UNIT_NAME_UPDATE alone. Not
+    -- listed: nametotarget (target names churn) and group (roster-driven,
+    -- repainted by the value ticks it always rode).
+    local ZONE_IDENTITY = { name = true, levelname = true, namelevel = true, level = true }
+    -- Value-class events: a static zone skips these and repaints on anything
+    -- else (identity events, ForceUpdate, UnitChanged, PEW, nil = repaint all).
+    local VALUE_EVENTS = {
+        UNIT_HEALTH = true, UNIT_MAXHEALTH = true, UNIT_MAX_HEALTH_MODIFIERS_CHANGED = true,
+        UNIT_POWER_UPDATE = true, UNIT_MAXPOWER = true, UNIT_DISPLAYPOWER = true,
+        UNIT_ABSORB_AMOUNT_CHANGED = true, UNIT_HEAL_ABSORB_AMOUNT_CHANGED = true,
+        Resettle = true, EUI_AbsorbEnd = true, EUI_AbsorbBelt = true,
+    }
 
-    --- Resolves a content key to (fmt, piecesArray) for a zone, or nil for
-    --- "none"/unknown. nametotarget builds its settings-closure separator.
+    --- Resolves a content key to (fmt, piecesArray, static) for a zone, or nil
+    --- for "none"/unknown. nametotarget builds its settings-closure separator.
     function ns.ContentToZone(content, prefix, settings)
         if content == "nametotarget" then
             return "%s%s%s%s", { P.name, ns.MakeTgtSepPiece(prefix, settings), P.tgtcol, P.tgtname }
@@ -2732,22 +2752,27 @@ do
         if not def then return nil end
         local pieces = { }
         for i = 2, #def do pieces[#pieces + 1] = P[def[i]] end
-        return def[1], pieces
+        return def[1], pieces, ZONE_IDENTITY[content] or nil
     end
 
     -- The text painter: renders every registered zone on the frame. Piece
     -- returns route through a scratch table + unpack (tables carry secrets
-    -- fine; nothing inspects them).
+    -- fine; nothing inspects them). Identity-only zones (name/level) are
+    -- skipped on value-class events: the nickname provider chain behind the
+    -- name piece was running on every health tick.
     local scratch = {}
     local function PaintText(frame, unit, event)
         local zones = frame._euiTextZones
         if not zones then return end
+        local valueOnly = event ~= nil and VALUE_EVENTS[event]
         for i = 1, #zones do
             local z = zones[i]
-            local pieces = z.pieces
-            local n = #pieces
-            for k = 1, n do scratch[k] = pieces[k](unit) end
-            z.fs:SetFormattedText(z.fmt, unpack(scratch, 1, n))
+            if not (valueOnly and z.static) then
+                local pieces = z.pieces
+                local n = #pieces
+                for k = 1, n do scratch[k] = pieces[k](unit) end
+                z.fs:SetFormattedText(z.fmt, unpack(scratch, 1, n))
+            end
         end
     end
     ns.UF_PaintText = PaintText
@@ -2760,13 +2785,13 @@ do
     function ns.SetTextZone(frame, fs, content, prefix, settings)
         local zones = frame._euiTextZones
         if not zones then zones = {}; frame._euiTextZones = zones end
-        local fmt, pieces
-        if content then fmt, pieces = ns.ContentToZone(content, prefix, settings) end
+        local fmt, pieces, static
+        if content then fmt, pieces, static = ns.ContentToZone(content, prefix, settings) end
         for i = #zones, 1, -1 do
             if zones[i].fs == fs then table.remove(zones, i) end
         end
         if fmt then
-            zones[#zones + 1] = { fs = fs, fmt = fmt, pieces = pieces }
+            zones[#zones + 1] = { fs = fs, fmt = fmt, pieces = pieces, static = static }
         else
             fs:SetText("")
         end
@@ -3320,7 +3345,10 @@ function PortraitOverride(self, event, evtUnit)
     local hasStateChanged = changed
         or element.state ~= isAvailable
         or event == "UNIT_PORTRAIT_UPDATE"
-        or event == "UNIT_MODEL_CHANGED"
+        -- Model changes only matter to a 3D PlayerModel portrait (its SetUnit
+        -- must reload). 2D art follows UNIT_PORTRAIT_UPDATE / PORTRAITS_UPDATED,
+        -- the only portrait events Blizzard's own unit frames listen to.
+        or (event == "UNIT_MODEL_CHANGED" and isModel)
         or event == "ForceUpdate"
         -- Unit swaps (vehicle enter/exit) always repaint: the swap moment can
         -- paint before the new unit's art/model streams in, and nothing with
@@ -5585,10 +5613,14 @@ function ns.UpdatePowerBorder(power, settings)
         -- Nothing to render and nothing to hide: stay lazy.
         if not ((isDet or isAttached) and size > 0) then return end
         border = CreateFrame("Frame", nil, power)
-        PP.Point(border, "TOPLEFT", power, "TOPLEFT", 0, 0)
-        PP.Point(border, "BOTTOMRIGHT", power, "BOTTOMRIGHT", 0, 0)
         power._pbBorder = border
     end
+    -- Re-anchored every pass: a pass that lands while the power bar is zero-height
+    -- (Power Bar Height 0 before a Spec Override raises it) leaves the anchors set but
+    -- no resolved rect, and nothing recomputes it; re-setting both points restores it.
+    border:ClearAllPoints()
+    PP.Point(border, "TOPLEFT", power, "TOPLEFT", 0, 0)
+    PP.Point(border, "BOTTOMRIGHT", power, "BOTTOMRIGHT", 0, 0)
     local c = settings.powerBorderColor or { r = 0, g = 0, b = 0 }
     local alpha = settings.powerBorderAlpha or 1
     -- Attached bars are always Solid; their unused edges are hidden below so only
@@ -14165,12 +14197,12 @@ function InitializeFrames()
         end
     end)
 
-    -- Target-of-target/focus-target text class colors must re-apply when their unit
+    -- Target-of-target/focus-target/pet text class colors must re-apply when their unit
     -- changes or first becomes available (login/reload). Unlike target/focus, mini
     -- frames have no PLAYER_*_CHANGED of their own, so a class color set at style
-    -- time -- when "targettarget"/"focustarget" was not yet a resolvable player --
-    -- falls back to white and never recovers. Re-apply on the parent's target change
-    -- and on its UNIT_TARGET.
+    -- time -- when "targettarget"/"focustarget"/"pet" was not yet a resolvable unit --
+    -- falls back to white/reaction-nil and never recovers. Re-apply on the parent's
+    -- target change and on its UNIT_TARGET, and on UNIT_PET for the pet frame.
     local function ReapplyFrameTextClassColors(unitKey)
         local frame = frames[unitKey]
         local s = frame and db.profile[unitKey]
@@ -14190,12 +14222,15 @@ function InitializeFrames()
         frames._miniTextClassUpdater:RegisterEvent("PLAYER_TARGET_CHANGED")
         frames._miniTextClassUpdater:RegisterEvent("PLAYER_FOCUS_CHANGED")
         frames._miniTextClassUpdater:RegisterUnitEvent("UNIT_TARGET", "target", "focus")
+        frames._miniTextClassUpdater:RegisterUnitEvent("UNIT_PET", "player")
     end
     frames._miniTextClassUpdater:SetScript("OnEvent", function(_, event, arg1)
         if event == "PLAYER_TARGET_CHANGED" then
             ReapplyFrameTextClassColors("targettarget")
         elseif event == "PLAYER_FOCUS_CHANGED" then
             ReapplyFrameTextClassColors("focustarget")
+        elseif event == "UNIT_PET" then
+            ReapplyFrameTextClassColors("pet")
         elseif arg1 == "target" then
             ReapplyFrameTextClassColors("targettarget")
         elseif arg1 == "focus" then
