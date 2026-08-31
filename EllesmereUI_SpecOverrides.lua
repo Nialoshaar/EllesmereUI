@@ -357,6 +357,24 @@ local function BlacklistedFKey(fkey)
     return false
 end
 
+-- The blacklisted RF subtrees the Buff/Debuff Manager LAYER system banks wholesale
+-- per override group. Blacklisted for the slot engine, but an edit made on those
+-- pages has still landed in the edited group's fork, so the capture status must
+-- confirm that instead of refusing a write that already happened.
+local LAYER_OWNED_SEGS = {
+    bmIndicators = "bm", bmSimple = "bm", bmDisplayMode = "bm",
+    bmIconZoom = "bm", bm2 = "bm", dmDebuff = "dm",
+}
+local function LayerOwnedFKey(fkey)
+    local folder, path = SplitFKey(fkey)
+    if folder ~= "EllesmereUIRaidFrames" or not path then return nil end
+    local head, sub = path:match("^([^\30]+)\30?([^\30]*)")
+    -- bm2's filter library is shared profile-wide: _ERF_BM2HarvestFork banks
+    -- specs + seeded only, so a filter edit is NOT scoped to the fork.
+    if head == "bm2" and sub == "filters" then return nil end
+    return LAYER_OWNED_SEGS[head or ""]
+end
+
 -- Width/height-match ownership for module size keys: a size key whose unlock
 -- element is a match CHILD is written by the match engine (propagation persists
 -- the matched size on every target resize, unlock open or closed), so a captured
@@ -4884,12 +4902,18 @@ local function AutoCapture(changes)
     if not store then return end
 
     -- Validate + collect
-    local paths, skippedNum, skippedBlack = {}, false, nil
+    local paths, skippedNum, skippedBlack, layerOwned = {}, false, nil, nil
     for _, c in ipairs(changes) do
-        if c.num and not NumAllowedFKey(c.fkey) then
-            skippedNum = true
+        -- Blacklist before the numeric guard: an array-shaped blacklisted key
+        -- (bm2 indicator sets) reported as a list-position problem reads as
+        -- "buff sizes can never be overridden", which is not what happened.
+        local layer = LayerOwnedFKey(c.fkey)
+        if layer then
+            layerOwned = layer
         elseif BlacklistedFKey(c.fkey) then
             skippedBlack = c.folder
+        elseif c.num and not NumAllowedFKey(c.fkey) then
+            skippedNum = true
         elseif MatchOwnedFKey(c.fkey) then
             -- Match-owned size keys are the match engine's territory: apply
             -- skips them and every bank preserves, so capturing one only
@@ -4900,7 +4924,19 @@ local function AutoCapture(changes)
         end
     end
     if #paths == 0 then
-        if skippedBlack then
+        if layerOwned then
+            local state, text
+            if layerOwned == "bm" then
+                state = EllesmereUI.SpecOverrides_BmOverlayState()
+                text = L("Buff Manager changes on this page apply only to this override.")
+            else
+                state = EllesmereUI.SpecOverrides_DmOverlayState()
+                text = L("Debuff Manager changes on this page apply only to this override.")
+            end
+            -- No overlay = the fork IS live, so the edit landed in it. An overlay
+            -- means the page was blocked and the write came from elsewhere.
+            if not state then SetEditStatus(text, 1, 1, 0.6) end
+        elseif skippedBlack then
             if skippedBlack == "EllesmereUICooldownManager" then
                 SetEditStatus(L("Cooldown Manager has its own per-spec system and can't be overridden here."), 1, 0.55, 0.35)
             elseif FOLDER_BLACKLIST[skippedBlack] then

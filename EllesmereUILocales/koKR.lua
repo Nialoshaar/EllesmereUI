@@ -7004,7 +7004,7 @@ L["Pick which content the class-special reminders (poisons/rites/imbues/shields)
 
 --2026-08-21 신규
 
---공격대/파티 
+--핵심 애드온 - 공격대/파티 
 L["Active In"] = "활성화 위치"
 L["Cast On"] = "시전 대상"
 L["    Unit Types"] = "대상 종류"
@@ -7014,16 +7014,16 @@ L["Enemy"] = "적군"
 L["Ping Marker"] = "신호 표시기"
 L["Ping Marker Size"] = "신호 표시기 크기"
 
---공격대 /파티 - 툴팁
+--핵심 애드온 - 공격대 /파티 - 툴팁
 L["Shows the ping mark on a member's frame when someone pings them (needs Blizzard's Show Pings on Raid Frames setting on)."] = "누군가 파티원을 지정해 신호를 보내면 해당 파티원 프레임에 신호 표시를 나타냅니다 (블리자드 설정의 '공격대 프레임에 신호 표시' 기능이 켜져 있어야 합니다)."
 
---행동단축바
+--핵심 애드온 - 행동단축바
 L["Skyriding (Airborne)"] = "하늘 경주 (비행 중)"
 L["Skyriding Mount"] = "하늘 경주 탈것"
 L["Mounted"] = "탈것 탑승 중"
 L["Enemy Target"] = "적 대상"
 
---행동단축바 - 툴팁
+--핵심 애드온 - 행동단축바 - 툴팁
 L["While you are inside a house or plot."] = "집이나 개인 영지 내부에 있을 때 적용됩니다."
 L["A target you can attack."] = "공격 가능한 대상입니다."
 L["Hide while this condition is true"] = "이 조건이 참일 때 숨기기"
@@ -7033,14 +7033,14 @@ L["While on a glide-capable mount, ground included, where Blizzard shows its vig
 L["Dungeons, raids, scenarios, arenas and battlegrounds. Garrisons do not count."] = "던전, 공격대, 시나리오, 투기장 및 전장입니다. 주둔지는 포함되지 않습니다."
 L["Druid travel, aquatic and flight forms count as mounted."] = "드루이드의 여행, 바다, 비행 형태도 탈것 탑승 상태로 간주합니다."
 
---이름표
+--핵심 애드온 - 이름표
 L["Hide Border"] = "테두리 숨기기"
 L["This option requires Blizzard's Assisted Highlight to be enabled"] = "이 옵션을 사용하려면 블리자드의 '보조 강조 효과'를 활성화해야 합니다"
 L["Assisted Highlight"] = "보조 강조 효과"
 L["Assisted Highlight Outset"] = "보조 강조 효과 돌출"
 L["This option requires a style that draws the glow ring"] = "이 옵션을 사용하려면 빛나는 고리를 그리는 스타일이 필요합니다"
 
---유닛 프레임 
+--핵심 애드온 - 유닛 프레임 
 L["Hide these instead of showing them"] = "표시하는 대신 숨기기"
 L["Buffs you can spellsteal or purge"] = "마법 훔치기 또는 해제 가능한 강화 효과"
 L["Major defensive cooldowns"] = "주요 생존기"
@@ -7056,13 +7056,34 @@ L["Important Only"] = "중요 디버프만"
 L["Important and Own"] = "중요 및 자신의 디버프"
 L["Important or Own"] = "중요 또는 자신의 디버프"
 
--- 유닛 프레임 - 툴팁
+--핵심 애드온 - 유닛 프레임 - 툴팁
 L["Shows only this frame's Tracked Auras; add them with Edit Tracked Auras at the top of this menu."] = "이 프레임의 추적된 오라만 표시합니다. 이 메뉴 상단의 '추적된 오라 편집'을 통해 추가할 수 있습니다."
 L["Shows every debuff on this frame."] = "이 프레임에 모든 디버프를 표시합니다."
 L["Shows only the debuffs you apply."] = "자신이 부여한 디버프만 표시합니다."
 L["Shows only debuffs Blizzard flags as important."] = "블리자드가 중요하게 지정한 디버프만 표시합니다."
 L["Shows only the debuffs you apply that Blizzard also flags as important."] = "블리자드가 중요하게 지정한 디버프 중 자신이 부여한 디버프만 표시합니다."
 L["Shows the debuffs you apply plus important debuffs from anyone."] = "자신이 부여한 디버프와 다른 사람이 부여한 중요 디버프를 함께 표시합니다."
+
+--핵심 애드온 - 재사용 대기시간 관리자
+L["ARCANE SOUL (SUNFURY)"]         = "비전의 영혼 (태양격노)"
+L["Arcane Soul Helper"]            = "비전의 영혼 도우미"
+
+-- 하우징 방문 메뉴 
+L["House"] = "집"
+L["Leave combat to enable visiting."] = "전투에서 벗어난 후에 방문할 수 있습니다."
+L["Loading houses..."] = "집 목록 불러오는 중…"
+L["No houses found."] = "보유한 집이 없습니다."
+L["View Houses"] = "집 보기"
+L["Visit"] = "방문"
+
+-- 편의 기능 - 데이터 바
+L["Match Mode"] = "일치 조건 방식"
+L["Match All Conditions"] = "모든 조건 일치"
+L["Match Any Condition"] = "아무 조건이나 일치"
+
+-- 편의 기능 - 데이터 바 - 툴팁
+L["Every condition you set has to match. The default."] = "설정한 모든 조건이 충족되어야 합니다. (기본값)"
+L["This element shows as soon as ONE condition matches, and a Hide lane then means show while that condition is false."] = "이 요소는 하나의 조건이라도 충족되면 즉시 표시되며, 여기서 '숨기기 라인은 해당 조건이 거짓일 때 표시함을 의미합니다."
 
 -- 전체 설정 - 글꼴 
 L["Fonts"] = "글꼴"

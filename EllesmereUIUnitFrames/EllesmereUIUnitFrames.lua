@@ -8512,6 +8512,9 @@ ns._cpWatchTick = EllesmereUI.Tick.NewAnimTicker(ns._cpCastWatcher, function()
 end, 0.1)
 
 local function DestroyCustomClassPower()
+    -- Park the engine-slot warrior charge overlay: its proxy is parented to
+    -- the container being torn down; the next _WCUF_Sync re-adopts it.
+    if _G._EWC then _G._EWC.Gate("uf") end
     ns._cpTickFn = nil
     ns._cpDriverTick.Stop()
     ns._cpWatchFn = nil
@@ -8573,10 +8576,9 @@ local function CreateCustomClassPower(playerFrame, style)
             maxPower = (mMax and mMax > 0) and mMax or customMax
         elseif powerType == "TIP_OF_THE_SPEAR" then
             maxPower = customMax
-        elseif powerType == "WHIRLWIND_STACKS" then
-            maxPower = customMax
-        elseif powerType == "SWEEPING_STRIKES" then
-            maxPower = customMax
+        elseif powerType == "WHIRLWIND_STACKS" or powerType == "SWEEPING_STRIKES" then
+            -- Talent-aware cap from the engine-slot module (Broad Strokes).
+            maxPower = (_G._EWC and _G._EWC.MaxApps(powerType)) or customMax
         elseif powerType == "ICICLES" then
             maxPower = customMax or 5
         elseif powerType == "SOUL_FRAGMENTS_DEVOURER" then
@@ -8792,10 +8794,12 @@ local function CreateCustomClassPower(playerFrame, style)
                 cur, max = EllesmereUI.GetMaelstromWeapon()
             elseif powerType == "TIP_OF_THE_SPEAR" and EllesmereUI and EllesmereUI.GetTipOfTheSpear then
                 cur, max = EllesmereUI.GetTipOfTheSpear()
-            elseif powerType == "WHIRLWIND_STACKS" and EllesmereUI and EllesmereUI.GetWhirlwindStacks then
-                cur, max = EllesmereUI.GetWhirlwindStacks()
-            elseif powerType == "SWEEPING_STRIKES" and EllesmereUI and EllesmereUI.GetSweepingStrikes then
-                cur, max = EllesmereUI.GetSweepingStrikes()
+            elseif powerType == "WHIRLWIND_STACKS" or powerType == "SWEEPING_STRIKES" then
+                -- Engine slot owns the display (EllesmereUI_WarriorCharges):
+                -- the true count fills the overlay bar C-side; legacy pips
+                -- stay hidden (empty row until the deferred build lands).
+                for i = 1, #pips do if pips[i] then pips[i]:Hide() end end
+                return
             elseif powerType == "ICICLES" then
                 -- Frost Mage Icicles: stack count from the Icicles aura (205473).
                 local count = 0
@@ -8902,10 +8906,12 @@ local function CreateCustomClassPower(playerFrame, style)
         -- needs. Icicles and Maelstrom Weapon are aura-driven; everything else polls
         -- via OnUpdate (either Lua API changes mid-combat, or no reliable event exists).
         local auraDriven    = (powerType == "MAELSTROM_WEAPON" or powerType == "ICICLES")
-        local needsOnUpdate = not auraDriven
+        -- Warrior charge buffs are engine-driven end to end (the overlay owns
+        -- the row: EllesmereUI_WarriorCharges): no poll, no cast events.
+        local engineDriven  = (powerType == "WHIRLWIND_STACKS" or powerType == "SWEEPING_STRIKES")
+        local needsOnUpdate = not auraDriven and not engineDriven
         local needsAura     = auraDriven
-        local needsCasts    = (powerType == "TIP_OF_THE_SPEAR" or powerType == "WHIRLWIND_STACKS"
-                               or powerType == "SWEEPING_STRIKES")
+        local needsCasts    = (powerType == "TIP_OF_THE_SPEAR")
 
         if needsOnUpdate then
             -- 10 Hz poll on the shared anim ticker (see ns._cpDriverTick):
@@ -8931,10 +8937,6 @@ local function CreateCustomClassPower(playerFrame, style)
             eventFrame:RegisterEvent("PLAYER_DEAD")
             eventFrame:RegisterEvent("PLAYER_ALIVE")
         end
-        if powerType == "WHIRLWIND_STACKS" or powerType == "SWEEPING_STRIKES" then
-            eventFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
-        end
-
         eventFrame:SetScript("OnEvent", function(_, event, ...)
             if event == "UNIT_SPELLCAST_SUCCEEDED" then
                 if not _G._ERB_AceDB and EllesmereUI then
@@ -8943,33 +8945,12 @@ local function CreateCustomClassPower(playerFrame, style)
                         if EllesmereUI.HandleTipOfTheSpear then
                             EllesmereUI.HandleTipOfTheSpear(event, unit, castGUID, spellID)
                         end
-                        if EllesmereUI.HandleWhirlwindStacks then
-                            EllesmereUI.HandleWhirlwindStacks(event, unit, castGUID, spellID)
-                        end
-                        if EllesmereUI.HandleSweepingStrikes then
-                            EllesmereUI.HandleSweepingStrikes(event, unit, castGUID, spellID)
-                        end
                     end
                 end
             elseif event == "PLAYER_DEAD" or event == "PLAYER_ALIVE" then
                 if not _G._ERB_AceDB and EllesmereUI then
                     if EllesmereUI.HandleTipOfTheSpear then
                         EllesmereUI.HandleTipOfTheSpear(event)
-                    end
-                    if EllesmereUI.HandleWhirlwindStacks then
-                        EllesmereUI.HandleWhirlwindStacks(event)
-                    end
-                    if EllesmereUI.HandleSweepingStrikes then
-                        EllesmereUI.HandleSweepingStrikes(event)
-                    end
-                end
-            elseif event == "PLAYER_REGEN_ENABLED" then
-                if not _G._ERB_AceDB and EllesmereUI then
-                    if EllesmereUI.HandleWhirlwindStacks then
-                        EllesmereUI.HandleWhirlwindStacks(event)
-                    end
-                    if EllesmereUI.HandleSweepingStrikes then
-                        EllesmereUI.HandleSweepingStrikes(event)
                     end
                 end
             end
@@ -9021,6 +9002,14 @@ local function CreateCustomClassPower(playerFrame, style)
     container._pipH = pipH
     container._gap = gap
     container._pad = pad
+    -- Stash for the engine-slot warrior charge overlay (ns._WCUF_Sync below):
+    -- power identity, style gate and the resolved look, so the sync adapter
+    -- never re-derives them.
+    container._powerType = powerType
+    container._style = style
+    container._cpR, container._cpG, container._cpB = cr, cg, cb
+    container._emptyCol = emptyCol
+    container._sepCol = bgCol
 
     -- Reposition pips to fill a given width (for "above" position)
     -- Uses Snap() to round all positions to physical pixel boundaries
@@ -9049,6 +9038,48 @@ local function CreateCustomClassPower(playerFrame, style)
     end
 
     return container
+end
+
+-- Warrior charge buffs: hand the engine-slot module (ResourceBars) the built
+-- class-power row so the true server count fills it C-side (see
+-- EUI_ResourceBars_WarriorCharges.lua). Guarded on _G._EWC: with ResourceBars
+-- disabled the simulator path stays in charge untouched. The circles style
+-- keeps the legacy pips too -- a continuous engine fill cannot render per-pip
+-- circle sprites. Called at the class-power call sites AFTER
+-- PositionClassPowerBar, so "above" stretching has already settled the width.
+ns._WCUF_Sync = function(container)
+    local ewc = _G._EWC
+    if not (ewc and container) then return end
+    local powerType = container._powerType
+    if (powerType ~= "WHIRLWIND_STACKS" and powerType ~= "SWEEPING_STRIKES")
+       or container._style == "circles" then
+        ewc.Gate("uf")
+        return
+    end
+    local position = db.profile.player.classPowerPosition or "top"
+    local stretched = (container._style == "modern" and position == "above")
+        and container:GetWidth() or nil
+    ewc.Sync("uf", container, powerType, {
+        texPath = "Interface\\Buttons\\WHITE8x8",
+        r = container._cpR, g = container._cpG, b = container._cpB, a = 1,
+        ori = "HORIZONTAL",
+        sep = {
+            r = container._sepCol and container._sepCol.r or 0.082,
+            g = container._sepCol and container._sepCol.g or 0.082,
+            b = container._sepCol and container._sepCol.b or 0.082,
+            a = container._sepCol and container._sepCol.a or 1,
+            w = container._gap or 2,
+            cellW = container._pipSize,
+            gap = container._gap,
+            pad = container._pad,
+            stretch = stretched,
+            empty = container._emptyCol,
+            emptyInset = (container._pad or 0) / 2,
+        },
+    })
+    -- After arming: stash the live color for the queued build's bake and the
+    -- out-of-restriction live-recolor path (opts colors are the belt).
+    ewc.Recolor("uf", powerType, container._cpR or 1, container._cpG or 1, container._cpB or 1, 1)
 end
 
 -- Custom enemy reaction colors: override the shared reaction/tapped color table from
@@ -10884,19 +10915,59 @@ function ns.ResolveFrameAlpha(s, inCombat)
     return 1
 end
 
+-- The alpha a unit frame RESTS at while the cursor is not on it, plus whether that resting
+-- state is a hover gate (an alpha 0 a hover may legitimately lift). Single source of truth:
+-- the visibility pass and both hover handlers derive from it, so a mouse leave cannot land
+-- on a different verdict than the pass would. On ns for the 200-locals cap. hiddenByOpts
+-- leads because it did in the pass too (it re-forced 0 at the end of the chain); returning
+-- hoverGated false with it stops a hover from revealing what an option lane has hidden.
+function ns.ResolveVisResting(s, frame, ext, hiddenByOpts, inCombat)
+    if hiddenByOpts then return 0, false end
+    local shownAlpha = ns.ResolveFrameAlpha(s, inCombat)
+    if ext == "mouseover" then return 0, true end
+    if ext ~= nil then
+        -- Driver registered: it owns hiding, so alpha only carries the ooc fade.
+        if frame and frame._euiVisDriver then return shownAlpha, false end
+        return ext and shownAlpha or 0, false
+    end
+    local vis = s.barVisibility or "always"
+    if vis == "in_combat" then return inCombat and shownAlpha or 0, false end
+    if vis == "out_of_combat" then return (not inCombat) and shownAlpha or 0, false end
+    if vis == "mouseover" then
+        -- Legacy single mouseover: a configured "Hide if" override that is NOT currently
+        -- triggering counts as a positive show, so the frame does not require hover
+        -- (fixes "dismount in combat keeps frame hidden" / "hide if no target inverted").
+        local hasAnyHideOpt = EllesmereUI and EllesmereUI.VisHasAnyOption
+                           and EllesmereUI.VisHasAnyOption(s)
+        if hasAnyHideOpt then return shownAlpha, false end
+        return 0, true
+    end
+    return shownAlpha, false
+end
+
+-- Same verdict for callers outside the visibility pass (the hover handlers): derives the
+-- two inputs the pass would have handed over. State is left nil so the shared engine fills
+-- it from its own combat/group tracking.
+function ns.ResolveVisRestingLive(s, frame)
+    local hiddenByOpts = EllesmereUI and EllesmereUI.CheckVisibilityOptions
+                      and EllesmereUI.CheckVisibilityOptions(s)
+    local ext = EllesmereUI.EvalVisibilityExtended
+        and EllesmereUI.EvalVisibilityExtended(s, "barVisibility", nil, EllesmereUI.VIS_CAPS_DEFAULT)
+    return ns.ResolveVisResting(s, frame, ext, hiddenByOpts, InCombatLockdown())
+end
+
 local function UnitFrame_OnEnter(self)
     local unit = self._euiUnit
     if not unit then return end
     local unitKey = unit:match("^boss%d$") and "boss" or unit
     local s = db and db.profile and db.profile[unitKey]
     if s and (s.barVisibility or "always") == "mouseover" then
-        -- Hover-gated sets only reveal while their conditions pass; a
-        -- legacy single "mouseover" reveals unconditionally as before.
-        local eligible = true
-        if EllesmereUI.VisWantsMouseover then
-            eligible = EllesmereUI.VisWantsMouseover(s, "barVisibility", nil, EllesmereUI.VIS_CAPS_DEFAULT)
-        end
-        if eligible then
+        -- Reveal only what is actually hover-gated right now. Under Any the frame may
+        -- already be shown on another passing disjunct, in which case there is nothing to
+        -- reveal and OnLeave must not undo anything either -- both handlers read the same
+        -- resting verdict so they cannot disagree.
+        local _, hoverGated = ns.ResolveVisRestingLive(s, self)
+        if hoverGated then
             local a = ns.ResolveFrameAlpha(s, InCombatLockdown())
             ;(self._visWrap or self):SetAlpha(a)
             -- 3D models don't inherit parent alpha: reveal the portrait too
@@ -10939,26 +11010,10 @@ local function UnitFrame_OnLeave(self)
     local unitKey = unit:match("^boss%d$") and "boss" or unit
     local s = db and db.profile and db.profile[unitKey]
     if s and (s.barVisibility or "always") == "mouseover" then
-        local vmActive = EllesmereUI.GetActiveVisibilityModes
-            and EllesmereUI.GetActiveVisibilityModes(s, "barVisibility")
-        local leaveAlpha
-        if vmActive then
-            -- Hover-gated set: hidden again on leave; the visibility pass
-            -- re-evaluates the conditions on the next event.
-            leaveAlpha = 0
-        else
-            -- Mirror UpdateFrameVisibility's mouseover logic: when a positive
-            -- "Hide if" override is configured and currently not triggering,
-            -- keep the frame shown on mouse leave instead of re-hiding it.
-            local hiddenByOpts = EllesmereUI and EllesmereUI.CheckVisibilityOptions
-                                 and EllesmereUI.CheckVisibilityOptions(s)
-            -- Shared walk over every option lane: a hand-written subset here left a frame
-            -- fading out on mouse leave whenever it used a lane the list had not caught up to.
-            local hasAnyHideOpt = EllesmereUI and EllesmereUI.VisHasAnyOption
-                               and EllesmereUI.VisHasAnyOption(s)
-            local keepShown = (not hiddenByOpts) and hasAnyHideOpt
-            leaveAlpha = keepShown and ns.ResolveFrameAlpha(s, InCombatLockdown()) or 0
-        end
+        -- Return to the resting alpha the visibility pass would paint, never a hardcoded
+        -- 0: under Any a passing disjunct keeps the frame visible with no hover involved,
+        -- and hiding it here would leave it wrong until the next visibility event fires.
+        local leaveAlpha = ns.ResolveVisRestingLive(s, self)
         ;(self._visWrap or self):SetAlpha(leaveAlpha)
         -- 3D models don't inherit parent alpha: hide/dim the portrait too
         local bd3d = self.Portrait and self.Portrait.backdrop and self.Portrait.backdrop._3d
@@ -11498,6 +11553,7 @@ function InitializeFrames()
                 frames._customClassPower = custom
                 frames._classPowerBar = custom
                 PositionClassPowerBar(custom)
+                if ns._WCUF_Sync then ns._WCUF_Sync(custom) end
             else
                 -- Spec has no class resource: reset frame sizing
                 ResizeFrameForClassPower(0)
@@ -11572,6 +11628,7 @@ function InitializeFrames()
                 frames._customClassPower = custom
                 frames._classPowerBar = custom
                 PositionClassPowerBar(custom)
+                if ns._WCUF_Sync then ns._WCUF_Sync(custom) end
             else
                 -- Spec has no class resource: reset frame sizing
                 ResizeFrameForClassPower(0)
@@ -12348,13 +12405,6 @@ function InitializeFrames()
                     frame._euiVisDriver = wantDriver
                 end
 
-                -- Whole-frame out-of-combat fade: the alpha to use whenever the frame is
-                -- "shown" below. 1 unless "Fade Out of Combat" is on and we're out of
-                -- combat, in which case the chosen oocAlpha. Uses the event-tracked
-                -- _ufInCombat (authoritative on regen transitions, which lead
-                -- InCombatLockdown()) so the fade flips instantly.
-                local shownAlpha = ns.ResolveFrameAlpha(s, _ufInCombat)
-
                 -- Combat-sensitive and mouseover modes use SetAlpha to show/hide
                 -- (not a restricted API); the frame stays technically shown so it can
                 -- transition instantly, alpha controls visibility. For the player frame
@@ -12362,54 +12412,11 @@ function InitializeFrames()
                 -- the inner frame's alpha (oUF updates, secure templates) can fight us --
                 -- alpha inherits down the parent chain so wrapper alpha 0 always wins.
                 local alphaTarget = frame._visWrap or frame
-                local bodyAlpha
-                if ext == "mouseover" then
-                    -- Hover-gated set with passing conditions: hidden until
-                    -- hovered (the hover handlers reveal it).
-                    bodyAlpha = 0
-                elseif ext ~= nil then
-                    if frame._euiVisDriver then
-                        -- The driver owns hiding; alpha only carries the
-                        -- ooc fade (hide-options still force 0 below).
-                        bodyAlpha = shownAlpha
-                    else
-                        -- Driver not registered yet (selection changed in
-                        -- combat): alpha covers until the regen pass.
-                        bodyAlpha = (not hiddenByOpts and ext) and shownAlpha or 0
-                    end
-                elseif vis == "in_combat" then
-                    bodyAlpha = (not hiddenByOpts and _ufInCombat) and shownAlpha or 0
-                elseif vis == "out_of_combat" then
-                    bodyAlpha = (not hiddenByOpts and not _ufInCombat) and shownAlpha or 0
-                elseif vis == "mouseover" then
-                    -- Mouseover: hidden by default; hover toggles alpha. But when the user
-                    -- has configured any positive "Hide if" override (no target, no enemy,
-                    -- mounted, etc.) and it's NOT currently triggering, treat the frame as
-                    -- a positive-show so it doesn't require hover to see (fixes "dismount
-                    -- in combat keeps frame hidden" / "hide if no target inverted").
-                    local hasAnyHideOpt = EllesmereUI and EllesmereUI.VisHasAnyOption
-                                       and EllesmereUI.VisHasAnyOption(s)
-                    if hiddenByOpts then
-                        bodyAlpha = 0
-                    elseif hasAnyHideOpt then
-                        bodyAlpha = shownAlpha
-                    else
-                        bodyAlpha = 0
-                    end
-                else
-                    -- Non-combat modes: restore the resting alpha (full, or the
-                    -- out-of-combat fade); Show/Hide controls visibility below.
-                    bodyAlpha = shownAlpha
-                end
-
-                -- Alpha-only hide for the "visHide*" overrides (mounted, no target,
-                -- housing, etc). Force alpha 0 now so the frame still looks hidden, but
-                -- leave the secure Show/Hide state alone below -- otherwise a dismount
-                -- landing inside a combat lockdown would leave the frame permanently
-                -- hidden (Show/SetAttribute are restricted in combat).
-                if hiddenByOpts then
-                    bodyAlpha = 0
-                end
+                -- Shared with both hover handlers. Forces 0 for the visHide* overrides too,
+                -- so the frame looks hidden while the secure bucket below stays untouched:
+                -- a dismount inside a lockdown would otherwise hide it permanently.
+                -- _ufInCombat leads InCombatLockdown() on regen, so the ooc fade is instant.
+                local bodyAlpha = ns.ResolveVisResting(s, frame, ext, hiddenByOpts, _ufInCombat)
                 alphaTarget:SetAlpha(bodyAlpha)
 
                 -- 3D PlayerModel frames don't inherit parent alpha, so the model must
@@ -12581,6 +12588,12 @@ function InitializeFrames()
         frames._visFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
         frames._visFrame:RegisterEvent("PLAYER_MOUNT_DISPLAY_CHANGED")
         frames._visFrame:RegisterEvent("UPDATE_SHAPESHIFT_FORM")
+        -- Resting: IsResting() has no dedicated poll, so without this the Resting
+        -- axis only re-evaluated when some unrelated event above happened to fire.
+        frames._visFrame:RegisterEvent("PLAYER_UPDATE_RESTING")
+        -- Vehicle edges for the In Vehicle axis (player-filtered; same reasoning).
+        frames._visFrame:RegisterUnitEvent("UNIT_ENTERED_VEHICLE", "player")
+        frames._visFrame:RegisterUnitEvent("UNIT_EXITED_VEHICLE", "player")
         frames._visFrame:RegisterEvent("ZONE_CHANGED_NEW_AREA")
         frames._visFrame:RegisterEvent("PLAYER_TARGET_CHANGED")
         -- Dragonriding visibility modes: capability edge plus the airborne
