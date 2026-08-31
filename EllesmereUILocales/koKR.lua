@@ -7076,7 +7076,24 @@ L["No houses found."] = "보유한 집이 없습니다."
 L["View Houses"] = "집 보기"
 L["Visit"] = "방문"
 
+-- 편의기능 - 편의기능 - 공격대 도구
+L["QUICK FIRE"] = "빠른 징표"
+L["Enable Quick Fire"] = "빠른 징표 사용"
+L["Place World Marker"] = "세계 징표 놓기"
+L["Undo Last Marker"] = "마지막 징표 되돌리기"
+L["Clear All Markers"] = "모든 징표 지우기"
+
+-- 편의기능 - 편의기능 - 공격대 도구 - 툴팁
+L["Adds three optional world-marker keybinds that remain usable in combat. Place drops the first free marker at the cursor in Star to Skull order; Undo removes the last marker placed through Quick Fire; Clear removes all world markers. Every binding starts empty. Marker changes made elsewhere during combat are picked up afterward."] = "전투 중에도 사용할 수 있는 선택적 세계 징표 단축키 3개를 추가합니다. '놓기(Place)'는 별부터 해골 순서대로 커서 위치에 비어 있는 첫 번째 징표를 배치하고, '되돌리기(Undo)'는 퀵 파이어를 통해 마지막으로 배치한 징표를 제거하며, '지우기(Clear)'는 모든 세계 징표를 제거합니다. 모든 단축키는 처음에는 비어 있습니다. 전투 중에 다른 곳에서 변경된 징표는 전투가 끝난 후 반영됩니다."
+L["Shows the Role Check button in window layouts and enables Right Click: Role Check on Compact Band."] = "창 레이아웃에 역할 확인 버튼을 표시하고, 컴팩트 밴드(Compact Band)에서 우클릭 시 역할 확인 기능을 활성화합니다."
+L["Countdown length in seconds. Compact Band uses First with Ctrl + Left Click, Second with Shift + Left Click, Third with Left Click, and Right Click stops the timer. Set a timer to 0 to disable that shortcut."] = "초 단위의 카운트다운 길이입니다. 컴팩트 밴드(Compact Band)는 Ctrl + 좌클릭 시 첫 번째, Shift + 좌클릭 시 두 번째, 그냥 좌클릭 시 세 번째 타이머가 작동하며, 우클릭하면 타이머가 중지됩니다. 해당 단축키를 비활성화하려면 타이머를 0으로 설정하세요."
+
 -- 편의 기능 - 데이터 바
+L["Combat Status"] = "전투 상태"
+L["Broker Plugin"] = "애드온 단축 아이콘"
+L["Plugin"] = "플러그인"
+L["Select a plugin"] = "표시할 애드온 선택"
+L["Strip Colors"] = "색상 코드 제거"
 L["Match Mode"] = "일치 조건 방식"
 L["Match All Conditions"] = "모든 조건 일치"
 L["Match Any Condition"] = "아무 조건이나 일치"
@@ -7084,6 +7101,12 @@ L["Match Any Condition"] = "아무 조건이나 일치"
 -- 편의 기능 - 데이터 바 - 툴팁
 L["Every condition you set has to match. The default."] = "설정한 모든 조건이 충족되어야 합니다. (기본값)"
 L["This element shows as soon as ONE condition matches, and a Hide lane then means show while that condition is false."] = "이 요소는 하나의 조건이라도 충족되면 즉시 표시되며, 여기서 '숨기기 라인은 해당 조건이 거짓일 때 표시함을 의미합니다."
+L["Any LibDataBroker plugin registered right now. One block per plugin -- add the block again for a second one."] = "현재 등록된 모든 LibDataBroker 애드온(플러그인)입니다. 플러그인당 하나의 블록이 생성되며, 두 번째 블록을 원하시면 블록을 다시 추가하세요."
+L["Shows the plugin's text. Off leaves an icon-only block that still carries the plugin's tooltip and clicks."] = "플러그인의 텍스트를 표시합니다. 끄면 툴팁과 클릭 기능은 유지되면서 아이콘만 표시되는 블록이 됩니다."
+L["Removes the color codes the plugin writes into its own text, so this block's Text Color applies. Off keeps the plugin's colors."] = "플러그인이 자체 텍스트에 지정한 색상 코드를 제거하여 이 블록의 텍스트 색상이 적용되도록 합니다. 끄면 플러그인 원래의 색상이 유지됩니다."
+L["Holds the block at this width and clips longer text, so a plugin whose text keeps changing length never shifts the blocks beside it. Zero sizes the block to whatever the plugin currently says."] = "블록의 너비를 고정하고 긴 텍스트는 잘라냅니다. 텍스트 길이가 자주 바뀌는 플러그인 때문에 옆의 블록들이 밀려나는 현상을 방지합니다. 0으로 설정하면 플러그인의 현재 텍스트 크기에 맞춰 자동 조절됩니다."
+L["Prefixes the plugin's own name to its text."] = "플러그인의 이름을 텍스트 앞에 접두사로 붙입니다."
+L["Shows the plugin's own icon next to its text."] = "텍스트 옆에 플러그인 고유의 아이콘을 표시합니다."
 
 -- 전체 설정 - 글꼴 
 L["Fonts"] = "글꼴"
@@ -7281,9 +7304,6 @@ L["Outline style override for all Bags text. EUI Global Outline follows the glob
 L["Outline style override for all Quickdraw text. EUI Global Outline follows the global Outline Mode setting above."] = "모든 퀵드로우 텍스트의 외곽선 스타일을 강제로 설정합니다. EUI 전체 외곽선은 위의 전체 외곽선 모드 설정을 따릅니다."
 L["Outline style override for all Resource & Cast Bars text. EUI Global Outline follows the global Outline Mode setting above."] = "모든 자원 및 시전 바 텍스트의 외곽선 스타일을 강제로 설정합니다. EUI 전체 외곽선은 위의 전체 외곽선 모드 설정을 따릅니다."
 
--- 편의 기능 - 데이터 바 
-L["Combat Status"] = "전투 상태"
-
 -- UI 모양 변경 - 쐐기돌 도구 
 L["INTERRUPT AND VISIBILITY"] = "차단 및 가시성"
 L["Cast Colors"] = "시전 바 색상"
@@ -7292,6 +7312,12 @@ L["Show Raid Target Marker"] = "공격대 징표 표시"
 L["Range Fade Settings"] = "사거리 흐려짐 설정"
 L["Raid Target Marker"] = "공격대 징표"
 L["Important Cast Glow Settings"] = "중요 시전 반짝임 설정"
+
+-- UI 모양 변경 -- 가방
+L["Show Clear Button"] = "초기화 버튼 표시"
+
+-- ui 모양 변경 - 기본 ui 개선 - 툴팁,메뉴&팝업
+L["Restyles Blizzard's on-screen progress bars (event objectives, nameplate counters) to the EUI look. Requires reload to apply.\n\nThese bars are drawn over rather than modified, so if the game ever reports their contents as protected the original bar is shown instead.\n\nUse the cog to set a minimum size, so bars on shrunken nameplates stay readable."] = "블리자드의 기본 화면 진행 바(이벤트 목표, 이름표 카운터 등)를 EUI 스타일로 재디자인합니다. 적용하려면 애드온을 새로고침(리로드)해야 합니다.\n\n이 바들은 기존 바를 수정하는 게 아니라 그 위에 덧그리는 방식이므로, 게임 내에서 해당 콘텐츠를 보호 항목으로 지정할 경우 원래의 기본 바가 대신 표시됩니다.\n\n톱니바퀴 아이콘을 눌러 최소 크기를 설정하면, 작아진 이름표 위의 바도 가독성을 유지할 수 있습니다."
 
 -- UI 모양 변경 - 쐐기돌 도구 - 툴팁
 L["Fade a bar when the enemy is beyond your active interrupt spell's range. Has no effect for specs without an interrupt."] = "적이 현재 활성화된 차단 주문의 사거리를 벗어나면 주문 바를 흐리게 표시합니다. 차단기가 없는 전문화에는 효과가 없습니다."

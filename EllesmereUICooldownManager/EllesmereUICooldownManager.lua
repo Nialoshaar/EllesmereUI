@@ -5219,202 +5219,6 @@ function ns.StyleOverlayCooldownText(oCd, barData, ssb, iconScale)
     end
 end
 
--- Font/colour/anchor for one Cooldown widget's countdown FontString. Split out
--- of RefreshCDMIconAppearance so the text clone below can also be styled from
--- its arming hook. Returns true once a FontString actually existed: the engine
--- creates it lazily on the first armed countdown, so an unarmed widget has
--- nothing to style yet.
-function ns.CdmStyleCooldownNumber(target, barData, ssb, fontScale)
-    if not target then return false end
-    fontScale = fontScale or 1
-    local cdFont = GetCDMFont()
-    local cdSize = ((ssb and ssb.cooldownFontSize) or (barData and barData.cooldownFontSize) or 12) * fontScale
-    local cdR = (ssb and ssb.cooldownTextR) or (barData and barData.cooldownTextR) or 1
-    local cdG = (ssb and ssb.cooldownTextG) or (barData and barData.cooldownTextG) or 1
-    local cdB = (ssb and ssb.cooldownTextB) or (barData and barData.cooldownTextB) or 1
-    local cdPosition = (ssb and ssb.cooldownTextPosition)
-        or (barData and barData.cooldownTextPosition) or "center"
-    local cdX = (ssb and ssb.cooldownTextX) or (barData and barData.cooldownTextX) or 0
-    local cdY = (ssb and ssb.cooldownTextY) or (barData and barData.cooldownTextY) or 0
-    local found = false
-    -- Keep the FontString ON its widget: REPARENTING it makes Blizzard's engine
-    -- re-center it and ignore the user's position and X/Y offset. Our own anchor
-    -- also overrides the engine's stale baseline (raw SetFont vs SetCountdownFont).
-    for _, rgn in pairs({ target:GetRegions() }) do
-        if rgn and rgn.GetObjectType and rgn:GetObjectType() == "FontString" then
-            EllesmereUI.ApplyIconTextFont(rgn, cdFont, cdSize, "cdm")
-            rgn:SetTextColor(cdR, cdG, cdB)
-            ns.AnchorCooldownText(rgn, target, cdPosition, cdX, cdY)
-            found = true
-        end
-    end
-    return found
-end
-
--- Countdown carrier: a swipe-less Cooldown that renders ONLY the number, at
--- icon+19. Swipe and number are drawn C-side by ONE widget and cannot be layered
--- apart, but the icon needs them apart: a glow overlay has to sit ABOVE the swipe
--- (below it, the swipe clips a Pixel Glow ring's inner edge and the ring reads
--- thinner) and BELOW the number (above it, the interior-painting styles --
--- Modern/Classic WoW Glow, GCD, Shape Glow -- wash the digits out). So the real
--- widget keeps the swipe at icon+14 with its own numbers off and this clone
--- carries the number. Built only for icons that show Duration Text.
-function ns.CdmEnsureCooldownTextClone(icon, cd, fd)
-    if not (icon and cd and fd) then return nil end
-    if fd.cdTextClone then return fd.cdTextClone end
-    -- Our own preset/custom frames run their own Cooldown AND their own Threshold
-    -- Text apply, which attaches the formatter straight to f._cooldown at injection
-    -- time (EllesmereUICdmHooks). A clone would orphan that, so they keep the
-    -- single-widget layout and today's behaviour. Same for a real Blizzard
-    -- buff-viewer frame (fd._isBuffViewerFrame): a clone would hide the real
-    -- widget's numbers with nothing driving the clone's, blanking the aura's
-    -- duration text.
-    if icon._isCustomBuffFrame or icon._isCustomSpellFrame or (fd and fd._isBuffViewerFrame) then
-        return nil
-    end
-    local ok, tc = pcall(CreateFrame, "Cooldown", nil, icon, "CooldownFrameTemplate")
-    if not ok or not tc then return nil end
-    fd.cdTextClone = tc
-    tc:SetAllPoints(icon)
-    tc:SetFrameLevel(icon:GetFrameLevel() + 19)
-    tc:EnableMouse(false)
-    if tc.SetDrawSwipe then tc:SetDrawSwipe(false) end
-    if tc.SetDrawEdge then tc:SetDrawEdge(false) end
-    if tc.SetDrawBling then tc:SetDrawBling(false) end
-    tc:SetHideCountdownNumbers(false)
-
-    -- Seed: the clone is built lazily, so the widget can already be armed and the
-    -- forwarding hooks below only see future calls. GetCooldownTimes returns
-    -- MILLISECONDS, and that division is why the secret probe comes first --
-    -- arithmetic on a secret value is a hard error, as is testing one for nil.
-    -- Under restriction the next arm seeds it instead.
-    if cd.GetCooldownTimes then
-        local okT, cdStart, cdDur = pcall(cd.GetCooldownTimes, cd)
-        if okT and not (issecretvalue and (issecretvalue(cdStart) or issecretvalue(cdDur)))
-           and cdStart and cdDur and cdDur > 0 then
-            tc:SetCooldown(cdStart / 1000, cdDur / 1000)
-        end
-    end
-
-    if fd._cdTextCloneHooked then return tc end
-    fd._cdTextCloneHooked = true
-    -- One-time bootstrap styling. The engine creates the countdown FontString on
-    -- the first armed countdown, so a refresh that ran before the widget was ever
-    -- armed found nothing to style and the first number would render in
-    -- Blizzard's default font. Self-retiring: it stops the moment it lands.
-    local function BootstrapStyle()
-        if fd._cdTextStyled then return end
-        local st = fd._cdTextStyle
-        if not st then return end
-        if ns.CdmStyleCooldownNumber(fd.cdTextClone, st.barData, st.ssb, st.fontScale) then
-            fd._cdTextStyled = true
-        end
-    end
-    -- Forward every setter that arms the widget, matching the per-frame hook
-    -- pattern the charge/recharge repairs already use. The closures read fd,
-    -- which is keyed on the icon and so survives Blizzard's frame pooling.
-    hooksecurefunc(cd, "SetCooldown", function(_, start, duration, modRate)
-        local t = fd.cdTextClone
-        if not t then return end
-        -- Raw cooldown numbers are AllowedWhenUntainted ONLY: in restricted
-        -- content Blizzard arms the real widget with SECRET start/duration,
-        -- and forwarding them from this tainted hook is a hard error (live
-        -- 9.1.1 storm). Duration objects are the secret-safe carrier and
-        -- keep riding the SetCooldownFromDurationObject forward; for a
-        -- secret RAW arm, fall back to the real widget's own number for
-        -- this arm (the old under-the-glow layering) instead of showing
-        -- none. Flip edges only; the routing guard keeps the choke hook
-        -- from undoing our writes.
-        if issecretvalue and (issecretvalue(start) or issecretvalue(duration)
-            or issecretvalue(modRate)) then
-            -- Secret raw arm: raw numbers cannot cross tainted execution, but
-            -- a DURATION OBJECT can -- the AB swipe channel's carrier
-            -- (C_Spell.GetSpellCooldownDuration -> SetCooldownFromDuration
-            -- Object, engine fills the secret timing C-side). ONE fetch per
-            -- icon per frame: a same-frame duplicate arm keeps the first
-            -- outcome (plain GetTime compare; never memo across frames --
-            -- every arm edge re-decides).
-            local now = GetTime()
-            if fd._cdDurFetchAt == now then return end
-            fd._cdDurFetchAt = now
-            local sid = icon.GetSpellID and icon:GetSpellID()
-            if sid and not (issecretvalue(sid))
-               and C_Spell and C_Spell.GetSpellCooldownDuration
-               and t.SetCooldownFromDurationObject then
-                local okD, durObj = pcall(C_Spell.GetSpellCooldownDuration, sid)
-                if okD and durObj then
-                    t:SetCooldownFromDurationObject(durObj)
-                    BootstrapStyle()
-                    if fd._cdRealNumShown then
-                        -- Object lane carried it: number back on the clone.
-                        fd._cdRealNumShown = nil
-                        fd._cdTextRouting = true
-                        cd:SetHideCountdownNumbers(true)
-                        fd._cdTextRouting = false
-                        t:SetHideCountdownNumbers(false)
-                    end
-                    return
-                end
-            end
-            -- No object (item-sourced icons, odd arms): the real widget's own
-            -- number for this arm -- present under the glow beats absent.
-            if not fd._cdRealNumShown then
-                fd._cdRealNumShown = true
-                fd._cdTextRouting = true
-                cd:SetHideCountdownNumbers(false)
-                fd._cdTextRouting = false
-                t:SetHideCountdownNumbers(true)
-                local st = fd._cdTextStyle
-                if st and ns.CdmStyleCooldownNumber then
-                    ns.CdmStyleCooldownNumber(cd, st.barData, st.ssb, st.fontScale)
-                end
-            end
-            return
-        end
-        if fd._cdRealNumShown then
-            -- Plain again (restriction lifted): numbers back on the clone.
-            fd._cdRealNumShown = nil
-            fd._cdTextRouting = true
-            cd:SetHideCountdownNumbers(true)
-            fd._cdTextRouting = false
-            t:SetHideCountdownNumbers(false)
-        end
-        t:SetCooldown(start, duration, modRate)
-        BootstrapStyle()
-    end)
-    hooksecurefunc(cd, "Clear", function()
-        local t = fd.cdTextClone
-        if t then t:Clear() end
-    end)
-    if cd.SetCooldownFromDurationObject then
-        hooksecurefunc(cd, "SetCooldownFromDurationObject", function(_, durObj)
-            local t = fd.cdTextClone
-            if not (t and t.SetCooldownFromDurationObject) then return end
-            t:SetCooldownFromDurationObject(durObj)
-            BootstrapStyle()
-        end)
-    end
-    if cd.SetUseAuraDisplayTime then
-        hooksecurefunc(cd, "SetUseAuraDisplayTime", function(_, use)
-            local t = fd.cdTextClone
-            if t and t.SetUseAuraDisplayTime then t:SetUseAuraDisplayTime(use) end
-        end)
-    end
-    -- Choke point. Eight sites across this module set the real widget's number
-    -- visibility; rather than teach each one about the clone, force the real
-    -- widget's numbers off here and pass the caller's intent through. The guard
-    -- blocks the recursion our own re-write would otherwise cause.
-    hooksecurefunc(cd, "SetHideCountdownNumbers", function(_, hide)
-        local t = fd.cdTextClone
-        if not t or fd._cdTextRouting then return end
-        fd._cdTextRouting = true
-        cd:SetHideCountdownNumbers(true)
-        t:SetHideCountdownNumbers(hide)
-        fd._cdTextRouting = false
-    end)
-    return tc
-end
-
 -------------------------------------------------------------------------------
 --  Per-spell Threshold Text (engine countdown formatters)
 --
@@ -5738,18 +5542,12 @@ local function RefreshCDMIconAppearance(barKey)
         if cd then
             cd:ClearAllPoints()
             cd:SetAllPoints(icon)
-            -- Above the border (icon+13) and BELOW the glow overlays (icon+16/+17):
-            -- a swipe drawn over a glow clips the ring's inner edge and it reads
-            -- thinner. The countdown number rides fd.cdTextClone instead, the only
-            -- way to get it above the glow -- see ns.CdmEnsureCooldownTextClone.
+            -- Above the border (icon+13); still below glow (icon+16) / text (icon+23).
             pcall(cd.SetFrameLevel, cd, icon:GetFrameLevel() + 14)
             -- Per-icon Duration Text override (ssb) falls back to the bar's values. Only Show
             -- Numbers no longer forces this on: hiding the duration (bar toggle or per-icon) under it leaves just the stack count.
             local showCD = ns.CdmDurationTextOn(barData)
             if ssb and ssb.showCooldownText ~= nil then showCD = ssb.showCooldownText end
-            local cdNum = (showCD and ns.CdmEnsureCooldownTextClone(icon, cd, fd))
-                or (fd and fd.cdTextClone) or cd
-            if cdNum ~= cd then cdNum:SetFrameLevel(icon:GetFrameLevel() + 19) end
             cd:SetSwipeColor(0, 0, 0, barData.swipeAlpha or 0.7)
             -- Per-spell Reverse Swipe: flips this icon's swipe direction away from the bar default
             -- (buffs fill up, cooldowns deplete). Entire block is gated by the session flag, so it
@@ -5825,28 +5623,34 @@ local function RefreshCDMIconAppearance(barKey)
                 if ttSid and ns.ResolveThresholdTextSettings then
                     tt = ns.ResolveThresholdTextSettings(icon, ttSid, ns.GetBarSpellData(barKey), barKey)
                 end
-                -- The clone renders the number, so the formatter belongs there too.
-                ns.ApplyThresholdFormatter(cdNum, tt)
+                ns.ApplyThresholdFormatter(cd, tt)
             end
             -- Per-spell "Hide CD Text (Charges)" can additionally hide the recharge numbers while
             -- a charge is in hand; the font block below still styles the text (using the bar's showCD) so it is ready when numbers return.
             local hideCD = not showCD
             if ns.CdmShouldHideCountdown then hideCD = ns.CdmShouldHideCountdown(icon, hideCD) end
-            -- With a clone present its SetHideCountdownNumbers hook takes this over:
-            -- the real widget's own numbers go off and hideCD lands on the clone.
             cd:SetHideCountdownNumbers(hideCD)
             -- Apply cooldown text font directly.
             if showCD then
-                if fd then
-                    -- Stashed for the clone's bootstrap restyle, which runs before
-                    -- the next refresh whenever the widget was armed for the first time.
-                    fd._cdTextStyle = fd._cdTextStyle or {}
-                    fd._cdTextStyle.barData = barData
-                    fd._cdTextStyle.ssb = ssb
-                    fd._cdTextStyle.fontScale = fontScale
-                end
-                if ns.CdmStyleCooldownNumber(cdNum, barData, ssb, fontScale) and fd then
-                    fd._cdTextStyled = true
+                local cdFont = GetCDMFont()
+                local cdSize = ((ssb and ssb.cooldownFontSize) or barData.cooldownFontSize or 12) * fontScale
+                local cdR = (ssb and ssb.cooldownTextR) or barData.cooldownTextR or 1
+                local cdG = (ssb and ssb.cooldownTextG) or barData.cooldownTextG or 1
+                local cdB = (ssb and ssb.cooldownTextB) or barData.cooldownTextB or 1
+                local cdPosition = (ssb and ssb.cooldownTextPosition)
+                    or barData.cooldownTextPosition or "center"
+                local cdX = (ssb and ssb.cooldownTextX) or barData.cooldownTextX or 0
+                local cdY = (ssb and ssb.cooldownTextY) or barData.cooldownTextY or 0
+                -- Find Blizzard's countdown FontString on the Cooldown widget. Keep it ON the
+                -- widget (anchored to cd) so the user's position and X/Y offset work -- REPARENTING
+                -- it makes Blizzard's engine re-center and ignore both. Setting our own anchor also
+                -- overrides the engine's stale baseline (raw SetFont vs SetCountdownFont); off-center anchors are where a missed or stomped anchor first becomes visible.
+                for _, rgn in pairs({ cd:GetRegions() }) do
+                    if rgn and rgn.GetObjectType and rgn:GetObjectType() == "FontString" then
+                        EllesmereUI.ApplyIconTextFont(rgn, cdFont, cdSize, "cdm")
+                        rgn:SetTextColor(cdR, cdG, cdB)
+                        ns.AnchorCooldownText(rgn, cd, cdPosition, cdX, cdY)
+                    end
                 end
             end
         end

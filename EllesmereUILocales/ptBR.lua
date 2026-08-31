@@ -6623,6 +6623,72 @@ L["Match All Conditions"] = "Corresponder a Todas as Condições"
 L["Every condition you set has to match. The default."] = "Todas as condições que você definir precisam ser atendidas. O padrão."
 L["Match Any Condition"] = "Corresponder a Qualquer Condição"
 L["This element shows as soon as ONE condition matches, and a Hide lane then means show while that condition is false."] = "Este elemento é exibido assim que UMA condição for atendida, e uma faixa Ocultar passa a significar exibir enquanto essa condição for falsa."
-L["Reveal on hover only. Combines with the conditions below: hover-reveals while at least ONE passes, stays hidden while none does."] = "Revela apenas ao passar o mouse. Combina-se com as condições abaixo: revela ao passar o mouse enquanto pelo menos UMA for atendida, e permanece oculto se nenhuma for."
+L["Combines with the conditions below: shows outright once at least one passes, otherwise still reveals on hover."] = "Combina-se com as condições abaixo: exibe diretamente assim que pelo menos uma for atendida; caso contrário, ainda revela ao passar o mouse."
 L["Not available while a legacy visibility value is selected. Pick Never or Always first."] = "Não disponível enquanto um valor de visibilidade legado estiver selecionado. Escolha Nunca ou Sempre primeiro."
+L["Resting"] = "Descanso"
+L["While resting, in a city or at an inn."] = "Enquanto estiver descansando, em uma cidade ou em uma estalagem."
+L["In Vehicle"] = "Em Veículo"
+L["While seated in a vehicle."] = "Enquanto estiver sentado em um veículo."
 L["Show while this condition is false"] = "Exibir enquanto esta condição for falsa"
+
+-- == Performance Reminder Popup ===================================================
+L["Performance Reminder"] = "Lembrete de Desempenho"
+L["The taintLog and scriptProfile CVars are enabled."] = "As CVars taintLog e scriptProfile estão ativadas."
+L["The taintLog CVar is enabled."] = "A CVar taintLog está ativada."
+L["The scriptProfile CVar is enabled."] = "A CVar scriptProfile está ativada."
+L["It reduces performance and should be off unless you are capturing a bug report."] = "Isso reduz o desempenho e deve ficar desativado, a menos que você esteja capturando um relatório de bug."
+L["Disable and Reload"] = "Desativar e Recarregar"
+L["Ignore"] = "Ignorar"
+
+-- == Chat / Recall ================================================================
+L["Chat recall is unavailable here. Use Alt+Up and Alt+Down."] = "O histórico de bate-papo não está disponível aqui. Use Alt+Up e Alt+Down."
+
+-- == Bags / Recent Items ==========================================================
+L["Clear"] = "Limpar"
+L["Clears the Recent Items list."] = "Limpa a lista de Itens Recentes."
+
+-- == QoL Raid Tools / Quick Fire ==================================================
+L["QUICK FIRE"] = "DISPARO RÁPIDO"
+L["Enable Quick Fire"] = "Ativar Disparo Rápido"
+L["Adds three optional world-marker keybinds that remain usable in combat. Place drops the first free marker at the cursor in Star to Skull order; Undo removes the last marker placed through Quick Fire; Clear removes all world markers. Every binding starts empty. Marker changes made elsewhere during combat are picked up afterward."] = "Adiciona três atalhos opcionais de marcador de mundo que continuam utilizáveis em combate. Colocar solta o primeiro marcador livre no cursor, na ordem de Estrela a Caveira; Desfazer remove o último marcador colocado pelo Disparo Rápido; Limpar remove todos os marcadores de mundo. Todo atalho começa vazio. Alterações de marcadores feitas em outro lugar durante o combate são detectadas depois."
+L["Place World Marker"] = "Colocar Marcador de Mundo"
+L["Undo Last Marker"] = "Desfazer Último Marcador"
+L["Clear All Markers"] = "Limpar Todos os Marcadores"
+
+-- == Data Bars / Broker Plugin Block ==============================================
+L["Select a plugin"] = "Selecionar um plugin"
+L["not loaded"] = "não carregado"
+L["Broker Plugin"] = "Plugin de Broker"
+L["Plugin"] = "Plugin"
+L["Any LibDataBroker plugin registered right now. One block per plugin -- add the block again for a second one."] = "Qualquer plugin do LibDataBroker registrado no momento. Um bloco por plugin -- adicione o bloco novamente para um segundo."
+L["Show Text"] = "Mostrar texto"
+L["Shows the plugin's own icon next to its text."] = "Mostra o ícone do próprio plugin ao lado do seu texto."
+L["Shows the plugin's text. Off leaves an icon-only block that still carries the plugin's tooltip and clicks."] = "Mostra o texto do plugin. Desativado deixa um bloco somente com ícone, que ainda mantém a dica de ferramenta e os cliques do plugin."
+L["Prefixes the plugin's own name to its text."] = "Adiciona o nome do próprio plugin como prefixo ao seu texto."
+L["Strip Colors"] = "Remover cores"
+L["Removes the color codes the plugin writes into its own text, so this block's Text Color applies. Off keeps the plugin's colors."] = "Remove os códigos de cor que o plugin escreve no próprio texto, para que a Cor do texto deste bloco seja aplicada. Desativado mantém as cores do plugin."
+L["Holds the block at this width and clips longer text, so a plugin whose text keeps changing length never shifts the blocks beside it. Zero sizes the block to whatever the plugin currently says."] = "Mantém o bloco nessa largura e corta o texto mais longo, para que um plugin cujo texto muda de tamanho nunca desloque os blocos ao lado. Zero ajusta o bloco ao que o plugin estiver exibindo no momento."
+
+-- == Raid Frames / Hover & Target Border ==========================================
+L["Highlight Border"] = "Borda de Destaque"
+L["Hover Border Size"] = "Tamanho da borda ao passar o mouse"
+L["Target Border Size"] = "Tamanho da borda do alvo"
+
+-- == Cooldown Manager / Stack Text and Glows ======================================
+L["Stack Text and Glows"] = "Texto de Pilha e Brilhos"
+L["Glow at Stacks"] = "Brilho por Pilha"
+L["Enable Glow at Stacks"] = "Ativar Brilho por Pilha"
+L["Min Stack Count"] = "Quantidade Mínima de Pilha"
+L["Show Stack Text"] = "Mostrar Texto de Pilha"
+L["Replaces Buff Glow: the icon glows only at the set stacks or higher, using this spell's Buff Glow style (Modern WoW Glow if none is set)."] = "Substitui o Brilho de Buff: o ícone brilha apenas na quantidade de pilha definida ou acima, usando o estilo de Brilho de Buff deste feitiço (Brilho Moderno do WoW, se nenhum estiver definido)."
+
+-- == Mythic+ Timer / Split Compare =================================================
+L["Always Show Split Times"] = "Sempre Mostrar Tempos Parciais"
+L["Shows your best split on upcoming bosses instead of only killed ones."] = "Mostra seu melhor tempo parcial em chefes futuros, em vez de apenas os já derrotados."
+L["This option requires a Split Compare mode"] = "Esta opção requer um modo de Comparação de Parciais"
+
+-- == Resource Bars / Ignore Pain ===================================================
+L["Tracking it also makes the fill show Ignore Pain alone; without it the fill shows your total absorb, so other shields can add to it."] = "Rastreá-lo também faz o preenchimento mostrar apenas Ignorar Dor; sem isso, o preenchimento mostra sua absorção total, permitindo que outros escudos se somem a ela."
+
+-- == Raid Frames / Buff Manager (Glyphed Buffs) ===================================
+L["Guardian of Ancient Kings (Glyph of the Queen)"] = "Guardião dos Reis Antigos (Glifo da Rainha)"
