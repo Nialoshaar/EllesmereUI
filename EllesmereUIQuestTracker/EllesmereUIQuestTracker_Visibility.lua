@@ -321,26 +321,14 @@ local function ApplyTopDivider()
     tex:Show()
 end
 
--- Find the module that sits at the bottom of the tracker. Used to anchor the
--- BG's bottom edge.
---
--- Reference-only: no coordinate is read here, because Blizzard's block geometry
--- turns into a secret value once our execution is tainted and comparing one
--- throws. The container anchors each displayed module below the previous one in
--- ipairs(modules) order, so the last displayed one owns the bottom edge -- the
--- same frame Blizzard anchors its own NineSlice background to.
-local function IsUsableAnchor(frame)
-    if not frame or type(frame) ~= "table" then return false end
-    if not frame.IsShown or not frame.GetObjectType then return false end
-    return frame:IsShown()
-end
-
+-- Find the frame that sits at the absolute bottom of all visible content
+-- across every tracker module. Used to anchor the BG's bottom edge.
 local function GetLowestContentFrame()
     local otf = GetTracker()
     if not otf then return nil end
     local modules = otf.modules or otf.MODULES
     if not modules then return nil end
-    local lowestModule
+    local lowestFrame, lowestY
     local _scenarioTracker = _G.ScenarioObjectiveTracker
     local _widgetTracker = _G.UIWidgetObjectiveTracker
     for _, tracker in ipairs(modules) do
@@ -356,16 +344,39 @@ local function GetLowestContentFrame()
         -- refuses to touch these frames for the same reason.
         if tracker == _scenarioTracker or tracker == _widgetTracker then
             -- skip
-        -- EndLayout hides a module that has nothing to display, so IsShown is
-        -- the content gate, and a later module sits further down. Anchoring to
-        -- the module rather than to its lowest block matters: blocks go back
-        -- into Blizzard's pool on collapse, which clears their points and drags
-        -- an anchored BG along; module frames are permanent.
-        elseif IsUsableAnchor(tracker) then
-            lowestModule = tracker
+        else
+        local function consider(frame)
+            if not frame or type(frame) ~= "table" then return end
+            if not frame.GetBottom or not frame.GetObjectType then return end
+            if not (frame.IsShown and frame:IsShown()) then return end
+            local ok, otype = pcall(frame.GetObjectType, frame)
+            if not ok then return end
+            if otype ~= "Frame" and otype ~= "Button" then return end
+            local y = frame:GetBottom()
+            if y and (not lowestY or y < lowestY) then
+                lowestY, lowestFrame = y, frame
+            end
         end
+        if tracker.usedBlocks then
+            for _, v in pairs(tracker.usedBlocks) do
+                if type(v) == "table" then
+                    if v.GetBottom then
+                        consider(v)
+                    else
+                        for _, block in pairs(v) do consider(block) end
+                    end
+                end
+            end
+        end
+        -- Only consider the Header as content if the tracker actually has something to
+        -- display. Empty trackers leave their Header shown at stale positions and would
+        -- otherwise stretch the BG past real content when a section clears.
+        if tracker.hasContents then
+            consider(tracker.Header)
+        end
+        end -- else (skip scenario / widget-pool trackers)
     end
-    return lowestModule
+    return lowestFrame
 end
 
 -- Event-driven resize with a debounce. Every QueueResize call coalesces into a single
@@ -429,21 +440,27 @@ local function ResizeBGToContent()
     local leftOfs = GetBGLeftOffset()
     local anchorFrame, anchorPoint = GetBGTopAnchor()
     anchorFrame = anchorFrame or otf
+    local topY = (anchorPoint == "BOTTOM") and anchorFrame:GetBottom() or anchorFrame:GetTop()
+    local lowestBottom = lowest:GetBottom()
     if bg._divider then
         bg._divider:ClearAllPoints()
         bg._divider:SetPoint("TOPLEFT",  anchorFrame, anchorPoint .. "LEFT",  leftOfs, topOfs)
         bg._divider:SetPoint("TOPRIGHT", anchorFrame, anchorPoint .. "RIGHT", 11, topOfs)
     end
-    -- UpdateHeight sizes a module to contentsHeight + bottomSpacing, so its
-    -- bottom sits bottomSpacing below its last block. Adding that back keeps the
-    -- 15px gap the old SetHeight calculation produced, still coordinate-free.
-    local bottomSpacing = lowest.bottomSpacing
-    if issecretvalue and issecretvalue(bottomSpacing) then bottomSpacing = nil end
-    if type(bottomSpacing) ~= "number" then bottomSpacing = 0 end
-    bg:ClearAllPoints()
-    bg:SetPoint("TOPLEFT",  anchorFrame, anchorPoint .. "LEFT",  leftOfs, topOfs)
-    bg:SetPoint("TOPRIGHT", anchorFrame, anchorPoint .. "RIGHT", 11, topOfs)
-    bg:SetPoint("BOTTOM",   lowest,      "BOTTOM",               0, bottomSpacing - 15)
+    if topY and lowestBottom then
+        local h = topY + topOfs - lowestBottom + 15
+        if h < 1 then h = 1 end
+        bg:ClearAllPoints()
+        bg:SetPoint("TOPLEFT",  anchorFrame, anchorPoint .. "LEFT",  leftOfs, topOfs)
+        bg:SetPoint("TOPRIGHT", anchorFrame, anchorPoint .. "RIGHT", 11, topOfs)
+        bg:SetHeight(h)
+        bg._lastHeight = h
+    elseif bg._lastHeight then
+        bg:ClearAllPoints()
+        bg:SetPoint("TOPLEFT",  anchorFrame, anchorPoint .. "LEFT",  leftOfs, topOfs)
+        bg:SetPoint("TOPRIGHT", anchorFrame, anchorPoint .. "RIGHT", 11, topOfs)
+        bg:SetHeight(bg._lastHeight)
+    end
     bg._lastLowest = lowest
 end
 EQT.ResizeBGToContent = ResizeBGToContent

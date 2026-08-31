@@ -2383,12 +2383,9 @@ StartNativeGlow = function(overlay, style, cr, cg, cb, opts)
 
     _G_Glows.StopAllGlows(overlay)
 
-    -- Threshold glows pass the owning icon and its size explicitly so every
-    -- style sizes exactly like the normal buff-glow path.
-    local parent = (opts and opts.owner) or overlay:GetParent()
+    local parent = overlay:GetParent()
     if not parent then return end
-    local pW = (opts and opts.width) or parent:GetWidth()
-    local pH = (opts and opts.height) or parent:GetHeight()
+    local pW, pH = parent:GetWidth(), parent:GetHeight()
     if pW < 5 then pW = 36 end
     if pH < 5 then pH = 36 end
     local noColor = (cr == nil)
@@ -2412,13 +2409,6 @@ StartNativeGlow = function(overlay, style, cr, cg, cb, opts)
             maskPath   = maskPath,
             borderPath = borderPath,
             shapeMask  = shapeMask,
-            -- Gated (threshold) glows only: ApplyMaskWith below can bind only the
-            -- textures ON the wrapper, and this is the one engine that creates
-            -- them on the anchor frame instead -- unmasked, its pulse showed
-            -- below the stack threshold. The overlay is SetAllPoints on the icon,
-            -- so anchoring there is identical geometry; ungated callers keep the
-            -- icon parenting they have always had.
-            anchorFrame = (opts and opts.maskWith) and overlay or nil,
         })
     elseif entry.procedural then
         -- Pixel Glow params. Pandemic glow passes explicit opts; per-button glows (active-state,
@@ -2450,12 +2440,6 @@ StartNativeGlow = function(overlay, style, cr, cg, cb, opts)
     else
         if noColor then cr, cg, cb = nil, nil, nil end
         _G_Glows.StartFlipBookGlow(overlay, pW, entry, cr, cg, cb, pH)
-    end
-
-    -- Threshold gating: bound every texture the style just created with the
-    -- caller's mask (see ApplyMaskWith in EllesmereUI_Glows.lua).
-    if opts and opts.maskWith and _G_Glows.ApplyMaskWith then
-        _G_Glows.ApplyMaskWith(overlay, opts.maskWith)
     end
 
     overlay._glowActive = true
@@ -5668,26 +5652,10 @@ local function RefreshCDMIconAppearance(barKey)
             if nColor == "custom" and ssb then
                 nR, nG, nB = ssb.buffGlowColorR, ssb.buffGlowColorG, ssb.buffGlowColorB
             end
-            -- Glow at Stacks: only with the per-spell toggle ON and a sane
-            -- threshold. Own custom frames expose no native applications
-            -- count, so they keep the normal presence glow.
-            local nThreshold
-            if ssb and ssb.buffGlowStackEnabled then
-                -- Default 2 when the toggle is on before the input was ever
-                -- touched (matches the input's displayed default). Minimum 2:
-                -- at 1 this would just be the normal presence glow.
-                nThreshold = tonumber(ssb.buffGlowStackThreshold) or 2
-                if nThreshold < 2 then nThreshold = nil end
-            end
-            if icon._isCustomBuffFrame or not ns.StackGlow_Configure then
-                nThreshold = nil
-            end
             if fd then
                 if fd._bgT ~= nT or fd._bgColor ~= nColor
-                   or fd._bgR ~= nR or fd._bgG ~= nG or fd._bgB ~= nB
-                   or fd._bgThreshold ~= nThreshold then
+                   or fd._bgR ~= nR or fd._bgG ~= nG or fd._bgB ~= nB then
                     fd._bgT = nT; fd._bgColor = nColor; fd._bgR = nR; fd._bgG = nG; fd._bgB = nB
-                    fd._bgThreshold = nThreshold
                     if fd.buffGlowActive and fd.buffGlowOverlay then
                         StopNativeGlow(fd.buffGlowOverlay)
                         fd.buffGlowActive = false
@@ -5695,35 +5663,7 @@ local function RefreshCDMIconAppearance(barKey)
                 end
                 -- Per-icon Desaturate Inactive override, read by the BuffTicker.
                 fd._desatOverride = (ssb and ssb.desatInactive) or nil
-
-                if nThreshold then
-                    -- Style: the spell's effective Buff Glow (per-spell
-                    -- override falling back to the bar's), with None and
-                    -- Blizzard Default falling back to Modern WoW Glow so the
-                    -- threshold always has a maskable glow to drive.
-                    local sgStyle = nT
-                    if sgStyle == nil then sgStyle = barData.buffGlowType end
-                    sgStyle = tonumber(sgStyle) or 0
-                    if sgStyle <= 0 then sgStyle = 6 end -- Modern WoW Glow
-                    local sgMode = nColor or barData.buffGlowMode
-                    local sgR, sgG, sgB
-                    if nColor == "custom" then
-                        sgR, sgG, sgB = nR, nG, nB
-                    elseif sgMode == "class" then
-                        local cc = EllesmereUI.GetClassColor(EllesmereUI._playerClass)
-                        if cc then sgR, sgG, sgB = cc.r, cc.g, cc.b end
-                    elseif sgMode == "custom" then
-                        sgR, sgG, sgB = barData.buffGlowR, barData.buffGlowG, barData.buffGlowB
-                    end
-                    ns.StackGlow_Configure(icon, nThreshold, sgStyle, sgR, sgG, sgB, barData)
-                elseif fd.stackGlow then
-                    ns.StackGlow_Configure(icon)
-                end
             end
-        elseif fd and fd.stackGlow and ns.StackGlow_Configure then
-            -- Blizzard viewer frames are pooled across cooldown and buff
-            -- families: retire a controller when its frame goes non-buff.
-            ns.StackGlow_Configure(icon)
         end
         -- Update texture -- fill the entire frame. The border renders on top via PP.CreateBorder so no inset is needed.
         if tex then
@@ -5738,18 +5678,12 @@ local function RefreshCDMIconAppearance(barKey)
         if cd then
             cd:ClearAllPoints()
             cd:SetAllPoints(icon)
-            -- Above the border (icon+13) and BELOW the glow overlays (icon+16/+17):
-            -- a swipe drawn over a glow clips the ring's inner edge and it reads
-            -- thinner. The countdown number rides fd.cdTextClone instead, the only
-            -- way to get it above the glow -- see ns.CdmEnsureCooldownTextClone.
+            -- Above the border (icon+13); still below glow (icon+16) / text (icon+23).
             pcall(cd.SetFrameLevel, cd, icon:GetFrameLevel() + 14)
             -- Per-icon Duration Text override (ssb) falls back to the bar's values. Only Show
             -- Numbers no longer forces this on: hiding the duration (bar toggle or per-icon) under it leaves just the stack count.
             local showCD = ns.CdmDurationTextOn(barData)
             if ssb and ssb.showCooldownText ~= nil then showCD = ssb.showCooldownText end
-            local cdNum = (showCD and ns.CdmEnsureCooldownTextClone(icon, cd, fd))
-                or (fd and fd.cdTextClone) or cd
-            if cdNum ~= cd then cdNum:SetFrameLevel(icon:GetFrameLevel() + 19) end
             cd:SetSwipeColor(0, 0, 0, barData.swipeAlpha or 0.7)
             -- Per-spell Reverse Swipe: flips this icon's swipe direction away from the bar default
             -- (buffs fill up, cooldowns deplete). Entire block is gated by the session flag, so it
@@ -5825,28 +5759,34 @@ local function RefreshCDMIconAppearance(barKey)
                 if ttSid and ns.ResolveThresholdTextSettings then
                     tt = ns.ResolveThresholdTextSettings(icon, ttSid, ns.GetBarSpellData(barKey), barKey)
                 end
-                -- The clone renders the number, so the formatter belongs there too.
-                ns.ApplyThresholdFormatter(cdNum, tt)
+                ns.ApplyThresholdFormatter(cd, tt)
             end
             -- Per-spell "Hide CD Text (Charges)" can additionally hide the recharge numbers while
             -- a charge is in hand; the font block below still styles the text (using the bar's showCD) so it is ready when numbers return.
             local hideCD = not showCD
             if ns.CdmShouldHideCountdown then hideCD = ns.CdmShouldHideCountdown(icon, hideCD) end
-            -- With a clone present its SetHideCountdownNumbers hook takes this over:
-            -- the real widget's own numbers go off and hideCD lands on the clone.
             cd:SetHideCountdownNumbers(hideCD)
             -- Apply cooldown text font directly.
             if showCD then
-                if fd then
-                    -- Stashed for the clone's bootstrap restyle, which runs before
-                    -- the next refresh whenever the widget was armed for the first time.
-                    fd._cdTextStyle = fd._cdTextStyle or {}
-                    fd._cdTextStyle.barData = barData
-                    fd._cdTextStyle.ssb = ssb
-                    fd._cdTextStyle.fontScale = fontScale
-                end
-                if ns.CdmStyleCooldownNumber(cdNum, barData, ssb, fontScale) and fd then
-                    fd._cdTextStyled = true
+                local cdFont = GetCDMFont()
+                local cdSize = ((ssb and ssb.cooldownFontSize) or barData.cooldownFontSize or 12) * fontScale
+                local cdR = (ssb and ssb.cooldownTextR) or barData.cooldownTextR or 1
+                local cdG = (ssb and ssb.cooldownTextG) or barData.cooldownTextG or 1
+                local cdB = (ssb and ssb.cooldownTextB) or barData.cooldownTextB or 1
+                local cdPosition = (ssb and ssb.cooldownTextPosition)
+                    or barData.cooldownTextPosition or "center"
+                local cdX = (ssb and ssb.cooldownTextX) or barData.cooldownTextX or 0
+                local cdY = (ssb and ssb.cooldownTextY) or barData.cooldownTextY or 0
+                -- Find Blizzard's countdown FontString on the Cooldown widget. Keep it ON the
+                -- widget (anchored to cd) so the user's position and X/Y offset work -- REPARENTING
+                -- it makes Blizzard's engine re-center and ignore both. Setting our own anchor also
+                -- overrides the engine's stale baseline (raw SetFont vs SetCountdownFont); off-center anchors are where a missed or stomped anchor first becomes visible.
+                for _, rgn in pairs({ cd:GetRegions() }) do
+                    if rgn and rgn.GetObjectType and rgn:GetObjectType() == "FontString" then
+                        EllesmereUI.ApplyIconTextFont(rgn, cdFont, cdSize, "cdm")
+                        rgn:SetTextColor(cdR, cdG, cdB)
+                        ns.AnchorCooldownText(rgn, cd, cdPosition, cdX, cdY)
+                    end
                 end
             end
         end
@@ -10134,17 +10074,6 @@ function ns.RefreshItemCountOOCBars()
     end
 end
 
--- TAINT LAW (field-proven 2026-08-31, 24x error burst in the field): NEVER
--- write ANY field on a Blizzard CooldownViewer item frame, not even a key
--- Blizzard itself owns (spellOutOfRange), and never call its paint methods
--- from our execution. The written value is tainted; Blizzard's refresh
--- chains read it MID-EXECUTION and the taint poisons everything downstream:
--- forbidden secure caches (CheckAllowOnCooldownGeneric dataCache), secret
--- boolean fields (allowOnCooldownAlert), and map registrations made inside
--- the chain, which then convert every later event dispatch on the viewer
--- into tainted execution. A stale-range repaint is never worth that. The
--- range-on-override-swap staleness this replaced is cosmetic and stays.
-
 -------------------------------------------------------------------------------
 --  Event-Driven Runtime Maintenance
 --
@@ -10193,12 +10122,6 @@ eventFrame:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
 -- Visibility option events: mounted, target, instance zone changes
 eventFrame:RegisterEvent("PLAYER_MOUNT_DISPLAY_CHANGED")
 eventFrame:RegisterEvent("PLAYER_TARGET_CHANGED")
--- Resting: IsResting() has no dedicated poll, so without this the Resting
--- axis only re-evaluated when some unrelated event above happened to fire.
-eventFrame:RegisterEvent("PLAYER_UPDATE_RESTING")
--- Vehicle edges for the In Vehicle axis (player-filtered; same reasoning).
-eventFrame:RegisterUnitEvent("UNIT_ENTERED_VEHICLE", "player")
-eventFrame:RegisterUnitEvent("UNIT_EXITED_VEHICLE", "player")
 -- Dragonriding visibility modes: capability edge (mount/dismount/zone) plus
 -- the airborne edge (takeoff/landing while staying mounted; probed at load
 -- in EllesmereUI_Visibility.lua -- absent = the checklist items lock).
@@ -10402,8 +10325,7 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, updateInfo, arg3)
         if ns.QueueReanchor then ns.QueueReanchor() end
         return
     end
-    if event == "PLAYER_TARGET_CHANGED" or event == "PLAYER_UPDATE_RESTING"
-       or event == "UNIT_ENTERED_VEHICLE" or event == "UNIT_EXITED_VEHICLE" then
+    if event == "PLAYER_TARGET_CHANGED" then
         _CDMApplyVisibility()
         return
     end
