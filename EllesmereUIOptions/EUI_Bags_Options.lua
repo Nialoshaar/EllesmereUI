@@ -751,6 +751,12 @@ initFrame:SetScript("OnEvent", function(self)
                               db.profile.bagRecentInOneBag = v
                               if _G.EUI_Bags and _G.EUI_Bags.RefreshInventory then _G.EUI_Bags:RefreshInventory() end
                           end },
+                        { type="toggle", label="Show Clear Button",
+                          get=function() return db.profile.bagShowRecentClear == true end,
+                          set=function(v)
+                              db.profile.bagShowRecentClear = v
+                              if _G.EUI_Bags and _G.EUI_Bags.RefreshInventory then _G.EUI_Bags:RefreshInventory() end
+                          end },
                     },
                 })
                 local rightRgn = pinRecRow._rightRegion

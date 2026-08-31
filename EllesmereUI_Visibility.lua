@@ -143,6 +143,16 @@ visFrame:RegisterEvent("ZONE_CHANGED_NEW_AREA")
 visFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
 visFrame:RegisterEvent("GROUP_ROSTER_UPDATE")
 visFrame:RegisterEvent("UPDATE_SHAPESHIFT_FORM")
+-- Resting edge: IsResting() itself has no dedicated poll, so without this the Resting
+-- checklist row only re-evaluates when some unrelated event (mount/zone/combat) happens
+-- to fire the dispatcher afterward -- e.g. it looked "bound to landing" because dismounting
+-- fires PLAYER_MOUNT_DISPLAY_CHANGED, not because resting is actually tied to mounting.
+visFrame:RegisterEvent("PLAYER_UPDATE_RESTING")
+-- Vehicle edges: same reasoning as Resting -- the In Vehicle axis needs its
+-- own edge or it only re-evaluates on incidental traffic. Player-filtered:
+-- other units' vehicle changes are irrelevant to these axes.
+visFrame:RegisterUnitEvent("UNIT_ENTERED_VEHICLE", "player")
+visFrame:RegisterUnitEvent("UNIT_EXITED_VEHICLE", "player")
 -- Dragonriding edges: mount-capability changes fire PLAYER_CAN_GLIDE_CHANGED
 -- (repo-proven event); takeoff/landing while staying mounted fires
 -- PLAYER_IS_GLIDING_CHANGED, which is probed because nothing registered it before this
@@ -256,12 +266,13 @@ _G._EBS_UpdateVisEventRegistration = function() end
 --    dragon axis:  show_dragonriding / show_not_dragonriding
 --  An axis with none (or all) of its items checked imposes no constraint.
 --  Never / Always are exclusive single selections and never appear in a set.
---  Mouseover combines as one more AND gate (hover-gated conditions): the
+--  Mouseover under All is one more AND gate (hover-gated conditions): the
 --  element is hover-revealed while every condition axis passes and hidden
---  outright while any fails. A set containing mouseover stores the scalar
---  "mouseover" as its representative, so every legacy mouseover mechanism
---  (Action Bars' mouseoverEnabled fade, UF hover handlers, the dispatcher
---  poll) engages without per-module rewiring.
+--  outright while any fails. Under Any it is a disjunct of its own instead: a
+--  passing condition shows the element outright, and hover stays available when
+--  none passes. A set containing mouseover stores the scalar "mouseover" as its
+--  representative, so every legacy mouseover mechanism (Action Bars' fade, UF
+--  hover handlers, the dispatcher poll) engages without per-module rewiring.
 -------------------------------------------------------------------------------
 
 EUI.VIS_AXES = {
@@ -526,8 +537,12 @@ local function EvalAnyMatch(store, legacyKey, vm, state, caps)
     end
     -- Nothing constrained at all reads as Always, exactly as it does under All.
     local pass = (constrained == 0) or (passed > 0)
+    -- Mouseover is a disjunct in its own right under Any, not a gate on top of the
+    -- others: a passing condition shows outright (no hover needed), and a set that
+    -- constrains nothing but mouseover -- or whose other conditions all fail -- stays
+    -- hover-revealable instead of hiding outright.
     if sel.mouseover then
-        return pass and "mouseover" or false
+        return (passed > 0) and true or "mouseover"
     end
     return pass
 end
@@ -671,7 +686,12 @@ end
 -- grammar). `opts` = the option lanes the driver can express (Lua-only ones are the
 -- caller's); `wrap` = tokens every bracket must carry (Pet Bar); `extraConstrained` =
 -- axes decided outside this string, so a Lua-only-constrained selection compiles to hide.
-function EUI.BuildVisibilityDriverStringAny(prefix, vm, opts, extraConstrained, wrap)
+-- `hasMouseover` = the selection also carries the hover-gate: this compiler cannot
+-- express mouseover as a macro token, so every branch that would otherwise HIDE the
+-- frame outright falls back to showing it instead -- a hard-hidden secure frame can
+-- never be revealed again by the unprotected Lua hover poll. The alpha layer (outside
+-- this compiler) is what actually decides full opacity vs. hover-gated 0 from there.
+function EUI.BuildVisibilityDriverStringAny(prefix, vm, opts, extraConstrained, wrap, hasMouseover)
     vm, opts, wrap = vm or {}, opts or {}, wrap or ""
     local lead = (wrap ~= "") and (wrap .. ",") or ""
     local out, axes = "", 0
@@ -730,16 +750,24 @@ function EUI.BuildVisibilityDriverStringAny(prefix, vm, opts, extraConstrained, 
     end
 
     local wrappedShow = (wrap ~= "") and ("[" .. wrap .. "] show; hide") or "show"
+    local noMatch = hasMouseover and wrappedShow or "hide"
     if axes == 0 then
         -- Nothing this string can decide: either nothing is constrained anywhere
         -- (Always), or the only constrained axes are Lua-only ones that all failed.
-        if (extraConstrained or 0) > 0 then return prefix .. "hide", 0 end
+        if (extraConstrained or 0) > 0 then return prefix .. noMatch, 0 end
         return prefix .. wrappedShow, 0
     end
     if dragonTail then
+        -- Under mouseover the negative-dragon veto would just be dead weight: dropping
+        -- it lets the trailing wrappedShow (itself the hover-gated fallback) cover the
+        -- airborne case too, instead of nesting wrappedShow's own bracket/semicolons
+        -- inside this clause's action slot.
+        if hasMouseover then
+            return prefix .. out .. wrappedShow, axes
+        end
         return prefix .. out .. "[" .. lead .. "advflyable,flying] hide; " .. wrappedShow, axes
     end
-    return prefix .. out .. "hide", axes
+    return prefix .. out .. noMatch, axes
 end
 
 -- Two macro tokens disagree with their Lua probe: [exists] counts a soft target and
@@ -837,7 +865,8 @@ function EUI.BuildAnyMatchTail(store, legacyKey, vm, wrap, edges)
             end
         end
     end
-    local tail, axes = EUI.BuildVisibilityDriverStringAny("", modes, opts, luaC + dropped, wrap)
+    local hasMouseover = (vm and vm.mouseover) or (store[legacyKey] == "mouseover") or false
+    local tail, axes = EUI.BuildVisibilityDriverStringAny("", modes, opts, luaC + dropped, wrap, hasMouseover)
     return tail, axes + luaC + dropped, axes
 end
 

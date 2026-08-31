@@ -10704,10 +10704,10 @@ initFrame:SetScript("OnEvent", function(self)
                             })
                         end)
 
-                        MakeCogRow("Charge/Stack Text", function()
+                        MakeCogRow("Stack Text and Glows", function()
                             local b = cdmBd
-                            return valChanged(ss.showItemCount, (b and b.showItemCount) ~= false)
-                                or valChanged(ss.showChargeStackText, (b and b.showChargeStackText) ~= false)
+                            return valChanged(ss.showChargeStackText, (b and b.showChargeStackText) ~= false)
+                                or ss.buffGlowStackEnabled == true
                                 or valChanged(ss.stackCountSize, (b and b.stackCountSize) or 11)
                                 or colChanged(ss.stackCountR, ss.stackCountG, ss.stackCountB,
                                     (b and b.stackCountR) or 1, (b and b.stackCountG) or 1, (b and b.stackCountB) or 1)
@@ -10716,13 +10716,26 @@ initFrame:SetScript("OnEvent", function(self)
                                 or valChanged(ss.stackCountY, (b and b.stackCountY) or 0)
                         end, function(row)
                             return EllesmereUI.BuildCogPopup({
-                                title = "Charge/Stack Text", noOwnerDim = true,
+                                title = "Stack Text and Glows", noOwnerDim = true,
                                 frameStrata = "FULLSCREEN_DIALOG", frameLevel = 350,
                                 rows = {
-                                    { type="toggle", label="Show Item Count",
-                                      get=function() if ss.showItemCount ~= nil then return ss.showItemCount end return (cdmBd and cdmBd.showItemCount) ~= false end,
-                                      set=function(v) EnsureSS(); ss.showItemCount = v; if ns.RefreshCDMIconAppearance then ns.RefreshCDMIconAppearance(barKey) end if row._updateLabel then row._updateLabel() end end },
-                                    { type="toggle", label="Show Charge/Stack Text",
+                                    { type="toggle", label="Glow at Stacks",
+                                      tooltip="Replaces Buff Glow: the icon glows only at the set stacks or higher, using this spell's Buff Glow style (Modern WoW Glow if none is set).",
+                                      get=function() return ss.buffGlowStackEnabled == true end,
+                                      set=function(v) EnsureSS(); ss.buffGlowStackEnabled = v or nil; if ns.RefreshCDMIconAppearance then ns.RefreshCDMIconAppearance(barKey) end if row._updateLabel then row._updateLabel() end end },
+                                    { type="input", label="Min Stack Count", inputWidth=42, commitOnBlur=true,
+                                      disabled=function() return not ss.buffGlowStackEnabled end,
+                                      disabledTooltip="Enable Glow at Stacks",
+                                      get=function() return tostring(tonumber(ss.buffGlowStackThreshold) or 2) end,
+                                      set=function(v)
+                                          local t = math.floor(tonumber(v) or 0)
+                                          if t < 2 then t = 2 end
+                                          if t > 99 then t = 99 end
+                                          EnsureSS(); ss.buffGlowStackThreshold = t
+                                          if ns.RefreshCDMIconAppearance then ns.RefreshCDMIconAppearance(barKey) end
+                                          if row._updateLabel then row._updateLabel() end
+                                      end },
+                                    { type="toggle", label="Show Stack Text",
                                       get=function() if ss.showChargeStackText ~= nil then return ss.showChargeStackText end return (cdmBd and cdmBd.showChargeStackText) ~= false end,
                                       set=function(v) EnsureSS(); ss.showChargeStackText = v; if ns.RefreshCDMIconAppearance then ns.RefreshCDMIconAppearance(barKey) end if row._updateLabel then row._updateLabel() end end },
                                     { type="slider", label="Size", min=6, max=30, step=1,
@@ -10747,7 +10760,7 @@ initFrame:SetScript("OnEvent", function(self)
                         end)
 
                         -- Border: per-icon override of the bar's border SIZE + COLOR (never style).
-                        -- Mirrors the Charge/Stack Text cog exactly; the render side reads (ssb and ssb.border*) or the bar value in ApplyShapeToCDMIcon.
+                        -- Mirrors the Charges/Stacks cog exactly; the render side reads (ssb and ssb.border*) or the bar value in ApplyShapeToCDMIcon.
                         MakeCogRow("Border", function()
                             local b = cdmBd
                             return valChanged(ss.borderSize, (b and b.borderSize) or 1)
@@ -18414,7 +18427,7 @@ initFrame:SetScript("OnEvent", function(self)
             if on then scBlock:Hide() else scBlock:Show() end
 
             local scPopupSpec = {
-                title = "Charge/Stack Text",
+                title = "Charges/Stacks",
                 rows = {
                     -- View over the legacy showItemCount boolean (Never = false,
                     -- Always = true/nil) plus the itemCountOOC flag for the new

@@ -5233,7 +5233,6 @@ L["Show Name"] = "Exibir Nome"
 
 -- Flask/food/weapon restock behavior
 L["Show Without Item in Bags"] = "Exibir Sem o Item nas Bolsas"
-L["When on, flask/food/weapon reminders still show (dimmed) when you have no matching item in your bags, as a prompt to restock.\nWhen off, they are hidden entirely if you don't carry the item."] = "Quando ativado, os lembretes de frasco/comida/arma continuam aparecendo (esmaecidos) mesmo sem o item correspondente nas bolsas, como um aviso para reabastecer.\nQuando desativado, ficam totalmente ocultos se você não estiver carregando o item."
 L["Preferred (Click to Buff)"] = "Preferido (Clique para Buffar)"
 L["Last Used"] = "Usado por Último"
 
@@ -6610,3 +6609,20 @@ L["World Marker: Triangle"] = "Marcador de Mundo: Triângulo"
 -- == Data Bars / Gold ===========================================================
 L["Abbreviate Amount"] = "Abreviar Quantidade"
 L["Shows large amounts using K/M suffixes (284,208g becomes 284.2Kg) instead of the full grouped number. The tooltip always shows the exact amount."] = "Mostra grandes quantidades usando sufixos K/M (284.208 vira 284,2K) em vez do número completo agrupado. A dica sempre mostra a quantia exata."
+
+-- == Raid Frames / Buff Manager ==================================================
+L["Dawnlight"] = "Alvorecer"
+L["Sense Power (Ally)"] = "Detectar Poder (Aliado)"
+
+-- == Aura Buff Reminders =========================================================
+L["When on, augment rune/flask/food/weapon reminders still show (dimmed) when you have no matching item in your bags, as a prompt to restock.\nWhen off, they are hidden entirely if you don't carry the item."] = "Quando ativado, os lembretes de runa de aprimoramento/frasco/comida/arma continuam aparecendo (esmaecidos) mesmo sem o item correspondente nas bolsas, como um aviso para reabastecer.\nQuando desativado, ficam totalmente ocultos se você não estiver carregando o item."
+
+-- == Visibility / Match Mode =====================================================
+L["Match Mode"] = "Modo de Correspondência"
+L["Match All Conditions"] = "Corresponder a Todas as Condições"
+L["Every condition you set has to match. The default."] = "Todas as condições que você definir precisam ser atendidas. O padrão."
+L["Match Any Condition"] = "Corresponder a Qualquer Condição"
+L["This element shows as soon as ONE condition matches, and a Hide lane then means show while that condition is false."] = "Este elemento é exibido assim que UMA condição for atendida, e uma faixa Ocultar passa a significar exibir enquanto essa condição for falsa."
+L["Reveal on hover only. Combines with the conditions below: hover-reveals while at least ONE passes, stays hidden while none does."] = "Revela apenas ao passar o mouse. Combina-se com as condições abaixo: revela ao passar o mouse enquanto pelo menos UMA for atendida, e permanece oculto se nenhuma for."
+L["Not available while a legacy visibility value is selected. Pick Never or Always first."] = "Não disponível enquanto um valor de visibilidade legado estiver selecionado. Escolha Nunca ou Sempre primeiro."
+L["Show while this condition is false"] = "Exibir enquanto esta condição for falsa"

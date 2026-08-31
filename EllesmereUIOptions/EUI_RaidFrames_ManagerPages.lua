@@ -4294,7 +4294,9 @@ function ns.BMP_BuildAssignedFilters(parent, sy, ind, fontPath)
         local function SpellEntry(id)
             local name = (ns.SPELL_NAME_BY_ID and ns.SPELL_NAME_BY_ID[id])
                 or (C_Spell and C_Spell.GetSpellName and C_Spell.GetSpellName(id))
-            return { key = id, label = (name or ("Spell " .. tostring(id))),
+            local label = name or ("Spell " .. tostring(id))
+            -- Truncated rows (long/duplicate names) still need to be told apart on hover.
+            return { key = id, label = label, tooltip = label,
                 icon = C_Spell and C_Spell.GetSpellTexture and C_Spell.GetSpellTexture(id) }
         end
         local function ByLabel(a, b) return a.label < b.label end

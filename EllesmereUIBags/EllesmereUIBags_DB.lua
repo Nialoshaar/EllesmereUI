@@ -31,6 +31,7 @@ local BAGS_DEFAULTS = {
         bagShowRecentItems    = true,
         bagPinnedInOneBag     = true,
         bagRecentInOneBag     = false,
+        bagShowRecentClear    = false,
         bagShowPinRecentTips  = true,
         bagShowSortIcon       = true,
         bagSortToBottom       = false,

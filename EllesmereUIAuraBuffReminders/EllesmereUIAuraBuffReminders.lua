@@ -2359,6 +2359,9 @@ function EABR.EnsureProviderCastButton()
     btn:SetSize(ICON_SIZE, ICON_SIZE)
     btn:RegisterForClicks("LeftButtonDown", "LeftButtonUp", "MiddleButtonUp")
     securecallfunction(btn.SetPassThroughButtons, btn, "RightButton")
+    -- MiddleButton is the dismiss click: NOOP its action type so it cannot fall
+    -- back to the plain "type" attribute and cast the reminder.
+    btn:SetAttribute("*type3", ATTRIBUTE_NOOP)
     btn:SetAttribute("useOnKeyDown", false)
     btn:SetFrameStrata(GetStrata())
     btn:SetFrameLevel(120)
@@ -2837,6 +2840,9 @@ local function GetOrCreateIcon(index)
     btn:SetSize(ICON_SIZE, ICON_SIZE)
     btn:RegisterForClicks("LeftButtonDown", "LeftButtonUp", "MiddleButtonUp")
     securecallfunction(btn.SetPassThroughButtons, btn, "RightButton")
+    -- MiddleButton is the dismiss click: NOOP its action type so it cannot fall
+    -- back to the plain "type" attribute and cast the reminder.
+    btn:SetAttribute("*type3", ATTRIBUTE_NOOP)
     btn:SetFrameStrata(GetStrata())
     btn:Hide()
 

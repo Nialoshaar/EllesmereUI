@@ -3167,6 +3167,10 @@ initFrame:SetScript("OnEvent", function(self)
             end
             if _G._EABR_RequestRefresh then _G._EABR_RequestRefresh() end
         end,
+        -- Tears down the Ready Check Mana Warning preview on module switch.
+        onModuleLeave = function()
+            if _G._EABR_RCWarnHidePreview then _G._EABR_RCWarnHidePreview() end
+        end,
     })
 
     -- Register unlock elements after a short delay

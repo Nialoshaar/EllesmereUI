@@ -16157,6 +16157,13 @@ initFrame:SetScript("OnEvent", function(self)
             db:ResetProfile()
             ReloadUI()
         end,
+        -- Tears down Boss Preview on module switch (RegisterOnHide above
+        -- only covers closing the whole options window).
+        onModuleLeave = function()
+            if ns._bossPreviewActive and ns.SetBossPreview then
+                ns.SetBossPreview(false)
+            end
+        end,
     })
 
     ---------------------------------------------------------------------------
