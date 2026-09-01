@@ -5822,6 +5822,17 @@ local function UpdateSecondaryResource()
         -- value read.
         if ns.WC_Recolor and (powerType == "WHIRLWIND_STACKS" or powerType == "SWEEPING_STRIKES") then
             ns.WC_Recolor(powerType, r, g, b, a)
+            -- Threshold/band settings ride along raw (already resolved above
+            -- at this pass's existing cost); the engine module change-gates
+            -- and renders them as fill-masked range strips -- no Lua count
+            -- exists for these two powers, so this is the only threshold
+            -- renderer they have.
+            if ns.WC_Thresholds then
+                ns.WC_Thresholds(powerType,
+                    (_tsEntry and _tsEntry.thresholdMode) or sp.thresholdMode,
+                    _tsThreshCount, _tsR, _tsG, _tsB, _tsA,
+                    _tsBandOn, _tsBands, _tsBandReverse, _tsReverse)
+            end
         end
         if _wcEngine then
             for i = 1, #pips do if pips[i] then pips[i]:Hide() end end

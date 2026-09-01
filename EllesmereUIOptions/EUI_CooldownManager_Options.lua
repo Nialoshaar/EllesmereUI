@@ -8933,6 +8933,15 @@ initFrame:SetScript("OnEvent", function(self)
                     AB.RunBarApply = function(applyKeys, applyWrite, val, allSpecs)
                         if not applyWrite then return end
                         local keys = applyKeys or {}
+                        -- Resolve the value ONCE, before anything below clears a thing. A payload
+                        -- writer (custom colour, Threshold Seconds) reads the source spell's own keys
+                        -- back out of its entry, and the sweeps clear exactly those keys -- re-running
+                        -- it per tier and per stamp would make the result depend on sweep order.
+                        local temp = {}
+                        applyWrite(temp, val)
+                        local function stamp(t)
+                            for _, k in ipairs(keys) do t[k] = temp[k] end
+                        end
                         local touchesCas = false
                         for _, k in ipairs(keys) do
                             if AB.CAS_KEYS[k] then touchesCas = true; break end
@@ -8955,10 +8964,10 @@ initFrame:SetScript("OnEvent", function(self)
                                 end
                             end)
                             if touchesCas then
-                                AB.StampMemberCas(bsX, applyWrite, val, keys)
+                                AB.StampMemberCas(bsX, stamp, val, keys)
                             end
                             if touchesHosted then
-                                AB.StampHostedBuffs(prof, bsX, applyWrite, val, keys)
+                                AB.StampHostedBuffs(prof, bsX, stamp, val, keys)
                             end
                         end
                         if allSpecs then
@@ -8969,7 +8978,7 @@ initFrame:SetScript("OnEvent", function(self)
                                 -- New tier table: chained results are stale.
                                 ns._cdmResGen = (ns._cdmResGen or 0) + 1
                             end
-                            applyWrite(abs, val)
+                            stamp(abs)
                             AB.FlipSessionGates(abs)
                             local spAll = ns.GetActiveSpecProfiles and ns.GetActiveSpecProfiles()
                             if spAll then
@@ -8989,7 +8998,7 @@ initFrame:SetScript("OnEvent", function(self)
                                 ns._cdmResGen = (ns._cdmResGen or 0) + 1
                             end
                             ns.ChainSettings(bs, bdSel and bdSel.barSpellSettings)
-                            applyWrite(bs, val)
+                            stamp(bs)
                             AB.FlipSessionGates(bs)
                             local spAll = ns.GetActiveSpecProfiles and ns.GetActiveSpecProfiles()
                             local specKeyA = ns.GetActiveSpecKey and ns.GetActiveSpecKey()
@@ -11285,6 +11294,13 @@ initFrame:SetScript("OnEvent", function(self)
                                 { apply = { keys = { "activeSwipeMode", "activeSwipeClassColor",
                                                      "activeSwipeR", "activeSwipeG", "activeSwipeB", "activeSwipeA" },
                                             write = function(t, v)
+                                                -- Read the source colour BEFORE the clear below: a bar
+                                                -- apply stamps every preset member's cas entry, this icon's included, so clearing first would wipe the colour this write then reads back.
+                                                local pr, pg, pb, pa
+                                                if cas then
+                                                    pr, pg, pb, pa = cas.activeSwipeR, cas.activeSwipeG,
+                                                                     cas.activeSwipeB, cas.activeSwipeA
+                                                end
                                                 -- Colour keys belong to Custom only; clear them for
                                                 -- class/none so a stale colour from an earlier Custom
                                                 -- apply can't linger in the tier. Leftover R/G/B/A
@@ -11303,10 +11319,10 @@ initFrame:SetScript("OnEvent", function(self)
                                                     -- Custom: push this icon's current color.
                                                     t.activeSwipeMode = "custom"
                                                     t.activeSwipeClassColor = false
-                                                    t.activeSwipeR = (cas and cas.activeSwipeR) or 1
-                                                    t.activeSwipeG = (cas and cas.activeSwipeG) or 0.776
-                                                    t.activeSwipeB = (cas and cas.activeSwipeB) or 0.376
-                                                    t.activeSwipeA = (cas and cas.activeSwipeA) or 0.7
+                                                    t.activeSwipeR = pr or 1
+                                                    t.activeSwipeG = pg or 0.776
+                                                    t.activeSwipeB = pb or 0.376
+                                                    t.activeSwipeA = pa or 0.7
                                                 end
                                             end } })
 
@@ -11572,6 +11588,10 @@ initFrame:SetScript("OnEvent", function(self)
                         { apply = { keys = { "activeSwipeMode", "activeSwipeClassColor",
                                              "activeSwipeR", "activeSwipeG", "activeSwipeB", "activeSwipeA" },
                                     write = function(t, v)
+                                        -- Read the source colour BEFORE the clear below: "Apply to This
+                                        -- Spell" passes ss itself, so clearing first would wipe the picked colour this write then reads back, resetting it to the default.
+                                        local pr, pg, pb, pa = ss.activeSwipeR, ss.activeSwipeG,
+                                                               ss.activeSwipeB, ss.activeSwipeA
                                         -- Colour keys belong to Custom only; clear them for class/none so a
                                         -- stale colour from an earlier Custom apply can't linger in the tier and make valuesMatch always fail (perpetual overwrite popup, no change).
                                         t.activeSwipeR = nil; t.activeSwipeG = nil
@@ -11586,10 +11606,10 @@ initFrame:SetScript("OnEvent", function(self)
                                             -- Custom: push this spell's effective color.
                                             t.activeSwipeMode = "custom"
                                             t.activeSwipeClassColor = false
-                                            t.activeSwipeR = ss.activeSwipeR or 1
-                                            t.activeSwipeG = ss.activeSwipeG or 0.776
-                                            t.activeSwipeB = ss.activeSwipeB or 0.376
-                                            t.activeSwipeA = ss.activeSwipeA or 0.7
+                                            t.activeSwipeR = pr or 1
+                                            t.activeSwipeG = pg or 0.776
+                                            t.activeSwipeB = pb or 0.376
+                                            t.activeSwipeA = pa or 0.7
                                         end
                                     end } })
                     if isCustomInjected and activeRow then

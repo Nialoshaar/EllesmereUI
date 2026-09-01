@@ -220,7 +220,10 @@ local defaults = {
     classColorFriendly = true,
     friendlyBarColor = { r = 0.314, g = 0.800, b = 0.408 },
     friendlyNPCColor = { r = 0, g = 1, b = 0 },
+    friendlyNPCNameColor = { r = 0, g = 1, b = 0 },
+    friendlyNPCTitleColor = { r = 0, g = 1, b = 0, a = 0.7 },
     friendlyNPCNameSize = 13,
+    friendlyNPCTitleSize = 10,
     friendlyNameTextSize = 12,
     friendlyBelowName = "none",
     friendlyBelowNameSize = 12,
@@ -2752,6 +2755,14 @@ local frameCache = CreateFramePool("Frame", UIParent, nil, nil, false, function(
             local hb = PP.GetBorders(plate.health)
             if hb then
                 local sz = (p and p.borderSize) or defaults.borderSize
+                -- The target border-size effect (ApplyTarget) already resized the health
+                -- border before the cast bar showed; carry that size into the wrap instead
+                -- of falling back to the base size, or starting a cast on your target visibly
+                -- shrinks the border back to normal until the next target change.
+                if plate._targetBorderSized then
+                    local tbsz = ns.GetTargetBorderSizeValue()
+                    if tbsz then sz = tbsz end
+                end
                 local col = hb._bdColor
                 local r, g, b, a = 0, 0, 0, 1
                 if col then r, g, b, a = col[1], col[2], col[3], col[4] or 1 end
@@ -2816,7 +2827,12 @@ local frameCache = CreateFramePool("Frame", UIParent, nil, nil, false, function(
             local hb = PP.GetBorders(plate.health)
             if hb then
                 hb._hideBottom = nil
-                PP.SetBorderSize(plate.health, (p and p.borderSize) or defaults.borderSize)
+                local sz = (p and p.borderSize) or defaults.borderSize
+                if plate._targetBorderSized then
+                    local tbsz = ns.GetTargetBorderSizeValue()
+                    if tbsz then sz = tbsz end
+                end
+                PP.SetBorderSize(plate.health, sz)
             end
             if plate.castWrapRegion then
                 local crb = PP.GetBorders(plate.castWrapRegion)

@@ -1908,6 +1908,12 @@ EllesmereUI.RESKIN = {
     BRD_ALPHA  = 0.18,   -- border alpha (white)
 }
 
+-- LFG queue accept countdown defaults (shared by the skin and its options)
+EllesmereUI.QUEUE_TIMER = {
+    TEXT_R = 1, TEXT_G = 0.831, TEXT_B = 0,   -- #ffd400
+    TEXT_SIZE = 9, BAR_HEIGHT = 11, TEXT_OFFSET_Y = 0,
+}
+
 -- Unified tooltip background for BOTH the Blizzard tooltip reskin and EUI widget tooltips.
 -- Customizable via Blizz UI Enhanced > Blizzard Tooltip (tooltipBgColor/tooltipBgOpacity in
 -- EllesmereUIDB); unset = RESKIN palette. Returns r,g,b,a (0 is valid: Lua 0 is truthy, so `or` fallback fires on nil only).
@@ -10693,7 +10699,7 @@ end
 -------------------------------------------------------------------------------
 --  Slash commands
 -------------------------------------------------------------------------------
-EllesmereUI.VERSION = "9.1.3"
+EllesmereUI.VERSION = "9.1.4"
 
 -- Register this addon's version into a shared global table (taint-free at load time)
 if not _G._EUI_AddonVersions then _G._EUI_AddonVersions = {} end
@@ -12191,10 +12197,23 @@ end
 -- keep their own narrower mount check for the shapeshift forms [mounted] cannot see.
 function EllesmereUI.CheckVisibilityOptionsNonMacro(opts, skipMountAxis)
     if not opts then return false end
+    if EllesmereUI.VisOverrideValue and EllesmereUI.VisOverrideValue(opts) then return false end
 
-    -- Any match: the lanes are disjuncts, not vetoes; EvalVisibilityExtended (or the
-    -- secure driver build path) owns the combined verdict.
-    if opts.visibilityMatch == "any" then return false end
+    -- Any match: only the SHOW lanes are disjuncts, owned by EvalVisibilityExtended (or
+    -- the secure driver build path). The HIDE lanes stay vetoes in every match mode, so
+    -- they run here too -- see EllesmereUI.VisOptionHideVeto.
+    -- No live caller: every Action Bars site gates on visibilityMatch ~= "any", and
+    -- CheckVisibilityOptions settles Any before calling in. Kept anyway, because removing
+    -- it would drop an Any store into the All veto chain, where SHOW lanes read as vetoes.
+    -- Divergence on purpose: the All chain flags only the skyriding lanes "mountaxis",
+    -- this one every combatFlip lane. combatFlip is the honest test, a bare "hide" from
+    -- any of them being a constant no driver can re-evaluate in combat, so widen the All
+    -- chain to match if this ever gains a caller; do not narrow this one.
+    if opts.visibilityMatch == "any" then
+        local fired, combatFlip = EllesmereUI.VisOptionHideVeto(opts, "nonMacro", nil, skipMountAxis)
+        if not fired then return false end
+        return combatFlip and "mountaxis" or true
+    end
 
     -- Instances axis: Only Show in Instances / Hide in Instances share one probe.
     if opts.visOnlyInstances or opts.visHideInstances then
@@ -12264,10 +12283,16 @@ end
 
 function EllesmereUI.CheckVisibilityOptions(opts)
     if not opts then return false end
+    -- An override replaces the whole Visibility configuration, option lanes included:
+    -- "Always" set on an override means always, whatever the shared value hides.
+    if EllesmereUI.VisOverrideValue and EllesmereUI.VisOverrideValue(opts) then return false end
 
-    -- Any match: the lanes are disjuncts, not vetoes; EvalVisibilityExtended (or the
-    -- secure driver build path) owns the combined verdict.
-    if opts.visibilityMatch == "any" then return false end
+    -- Any match: only the SHOW lanes are disjuncts; the HIDE lanes veto here as they do
+    -- under All (EllesmereUI.VisOptionHideVeto), which is what makes "Hide when X" mean
+    -- hide for every Lua consumer regardless of the match mode.
+    if opts.visibilityMatch == "any" then
+        return EllesmereUI.VisOptionHideVeto(opts) and true or false
+    end
 
     -- Instances / housing / mounted (shared with secure-frame fast path).
     if EllesmereUI.CheckVisibilityOptionsNonMacro(opts) then return true end
@@ -12294,6 +12319,8 @@ end
 -- Option-lane axes: one axis per condition (Show lane, Hide lane, probe() = holds now),
 -- read by the "any" match for per-axis verdicts; the "all" veto chain above is untouched.
 -- luaOnly = no macro conditional exists, so the secure driver resolves the axis in Lua.
+-- combatFlip = the probe can change INSIDE combat, where a secure driver cannot be
+-- rewritten, so a hide verdict from this axis must not compile to a bare dead "hide".
 EllesmereUI.VIS_OPT_AXES = {
     { show = "visOnlyInstances", hide = "visHideInstances", luaOnly = true,
       probe = function() return EllesmereUI.IsInInstancedContent() end },
@@ -12302,13 +12329,13 @@ EllesmereUI.VIS_OPT_AXES = {
           return (C_Housing and C_Housing.IsInsideHouseOrPlot
               and C_Housing.IsInsideHouseOrPlot()) and true or false
       end },
-    { show = "visOnlyMounted", hide = "visHideMounted",
+    { show = "visOnlyMounted", hide = "visHideMounted", combatFlip = true,
       probe = function() return EllesmereUI.IsPlayerMountedLike() end },
-    { show = "visOnlySkyriding", hide = "visHideDragonriding", luaOnly = true,
+    { show = "visOnlySkyriding", hide = "visHideDragonriding", luaOnly = true, combatFlip = true,
       probe = function() return EllesmereUI.IsPlayerSkyriding() end },
     { show = "visOnlyResting", hide = "visHideResting", luaOnly = true,
       probe = function() return IsResting() and true or false end },
-    { show = "visOnlyVehicle", hide = "visHideVehicle", luaOnly = true,
+    { show = "visOnlyVehicle", hide = "visHideVehicle", luaOnly = true, combatFlip = true,
       probe = function() return UnitInVehicle("player") and true or false end },
     -- needsEdge: [exists]/[harm] re-evaluate on soft-target changes that
     -- UnitExists("target") ignores; a consumer without those edges resolves the axis in Lua.
@@ -12328,12 +12355,45 @@ function EllesmereUI.VisAxisIsLuaOnly(ax, edges)
     return ax.needsEdge ~= nil and not (edges and edges[ax.needsEdge])
 end
 
+-- Hide-lane veto, evaluated in EVERY match mode: Match Mode governs how the SHOW side
+-- combines, a checked Hide lane always hides. As a disjunct it instead passed whenever
+-- its condition was FALSE, so one Hide lane out-voted every Show condition.
+-- filter/edges follow TallyVisibilityOptionAxes below, plus "nonMacro" for the subset
+-- CheckVisibilityOptionsNonMacro owns; skipMount serves its skipMountAxis contract.
+-- Both lanes checked at once counts as unconstrained here, same as in that tally.
+-- Second return: the firing axis is combatFlip, so a secure-driver caller must bake a
+-- combat escape hatch instead of writing a bare "hide".
+function EllesmereUI.VisOptionHideVeto(opts, filter, edges, skipMount)
+    if not opts then return false end
+    if EllesmereUI.VisOverrideValue and EllesmereUI.VisOverrideValue(opts) then return false end
+    local axes = EllesmereUI.VIS_OPT_AXES
+    for i = 1, #axes do
+        local ax = axes[i]
+        local skip
+        if filter == "nonMacro" then
+            skip = ax.needsEdge == "softTarget"
+        elseif filter then
+            local luaOnly = EllesmereUI.VisAxisIsLuaOnly(ax, edges)
+            skip = (filter == "luaOnly" and not luaOnly) or (filter == "driver" and luaOnly)
+        end
+        if skipMount and ax.hide == "visHideMounted" then skip = true end
+        if not skip and opts[ax.hide] and not opts[ax.show] and ax.probe() then
+            return true, ax.combatFlip or false
+        end
+    end
+    return false
+end
+
 -- Per-axis tally for the "any" match. filter: nil counts every axis, "luaOnly" only
 -- the ones this consumer must resolve in Lua, "driver" only the ones it can compile.
 -- Returns how many axes are constrained and how many of those currently match.
+-- SHOW lanes only: a Hide lane is a veto (VisOptionHideVeto), never a disjunct.
 function EllesmereUI.TallyVisibilityOptionAxes(opts, filter, edges)
     local constrained, passed = 0, 0
     if not opts then return constrained, passed end
+    if EllesmereUI.VisOverrideValue and EllesmereUI.VisOverrideValue(opts) then
+        return constrained, passed
+    end
     local axes = EllesmereUI.VIS_OPT_AXES
     for i = 1, #axes do
         local ax = axes[i]
@@ -12341,16 +12401,12 @@ function EllesmereUI.TallyVisibilityOptionAxes(opts, filter, edges)
         local skip = (filter == "luaOnly" and not luaOnly)
                   or (filter == "driver" and luaOnly)
         if not skip then
-            local wantShow, wantHide = opts[ax.show], opts[ax.hide]
             -- Both lanes at once is the contradiction the row already prevents on
             -- click; count it as unconstrained rather than as an axis that can never
             -- match, so a hand-edited store cannot lock an Any selection to hidden.
-            if wantShow and not wantHide then
+            if opts[ax.show] and not opts[ax.hide] then
                 constrained = constrained + 1
                 if ax.probe() then passed = passed + 1 end
-            elseif wantHide and not wantShow then
-                constrained = constrained + 1
-                if not ax.probe() then passed = passed + 1 end
             end
         end
     end

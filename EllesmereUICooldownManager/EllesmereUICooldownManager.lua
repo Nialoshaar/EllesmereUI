@@ -9947,7 +9947,167 @@ end
 -- boolean fields (allowOnCooldownAlert), and map registrations made inside
 -- the chain, which then convert every later event dispatch on the viewer
 -- into tainted execution. A stale-range repaint is never worth that. The
--- range-on-override-swap staleness this replaced is cosmetic and stays.
+-- range-on-override-swap staleness it replaced is cosmetic, and is repainted
+-- below WITHIN this law: our own texture only, no frame field, no paint call.
+
+-- Blizzard arms the range check on the BASE spell, so while an override is up the
+-- icon tracks the wrong spell's range. Repainted on fd.tex and the side table,
+-- never the frame. The hook RE-POLLS instead of replaying a stored answer: it
+-- fires on every Blizzard repaint, including the one their own range event drives,
+-- so walking back into range clears the tint without a second event of our own. A
+-- secret or unknown answer leaves their colour alone. Cleared to nil when no
+-- override is live, since Blizzard's own check is correct for the base spell.
+-- On ns.* because the main chunk is at Lua 5.1's 200-local cap.
+function ns.ApplyOverrideRangeTint(icon, overrideSpellID)
+    local fd = _getFD(icon)
+    local tex = fd and fd.tex
+    local C = CooldownViewerConstants
+    if not (tex and C) then return end
+    -- Live-override count, kept on the nil<->value transitions of the ONLY
+    -- writer of _oorSpellID: RepaintOverrideRange gates its whole icon walk on
+    -- it, so the event dispatches Blizzard's own base-spell registrations
+    -- produce (nearly all of them, for nearly every player) cost one integer
+    -- read instead of a full bar scan.
+    if (fd._oorSpellID ~= nil) ~= (overrideSpellID ~= nil) then
+        ns._oorLiveCount = (ns._oorLiveCount or 0) + (overrideSpellID and 1 or -1)
+    end
+    fd._oorSpellID = overrideSpellID
+    if not fd._oorHooked then
+        fd._oorHooked = true
+        local guard = false
+        hooksecurefunc(tex, "SetVertexColor", function()
+            local sid = fd._oorSpellID
+            if guard or not sid then return end
+            local r = C_Spell.IsSpellInRange(sid)
+            if issecretvalue and issecretvalue(r) then return end
+            if r ~= false then return end
+            guard = true
+            tex:SetVertexColor(C.ITEM_NOT_IN_RANGE_COLOR:GetRGBA())
+            guard = false
+        end)
+    end
+    -- Repaint once now: the hook only rides Blizzard's own writes, and the swap
+    -- that brought us here does not produce one.
+    local inRange = overrideSpellID and C_Spell.IsSpellInRange(overrideSpellID)
+    if issecretvalue and issecretvalue(inRange) then return end
+    if inRange == false then
+        tex:SetVertexColor(C.ITEM_NOT_IN_RANGE_COLOR:GetRGBA())
+        return
+    end
+    local sid = overrideSpellID or icon.rangeCheckSpellID
+    if not sid then return end
+    local usable, notEnoughMana = C_Spell.IsSpellUsable(sid)
+    if issecretvalue and (issecretvalue(usable) or issecretvalue(notEnoughMana)) then
+        return
+    end
+    if usable then
+        tex:SetVertexColor(C.ITEM_USABLE_COLOR:GetRGBA())
+    elseif notEnoughMana then
+        tex:SetVertexColor(C.ITEM_NOT_ENOUGH_MANA_COLOR:GetRGBA())
+    else
+        tex:SetVertexColor(C.ITEM_NOT_USABLE_COLOR:GetRGBA())
+    end
+end
+
+-- Blizzard arms its check on the BASE spell only, so a melee base with a 15yd
+-- override never dispatches when you cross 15yd. Arming the override id closes that.
+--
+-- The registration is per SPELL, not per caller, and an override can be a CDM entry
+-- in its own right (Hammer of Wrath overrides Judgment and is also its own icon), so
+-- an id Blizzard holds is left alone in both directions -- re-checked at disarm time,
+-- since a spell can become theirs while ours is armed.
+function ns.BlizzardArmsRange(spellID)
+    for _, icons in pairs(cdmBarIcons) do
+        for _, icon in ipairs(icons) do
+            if icon.rangeCheckSpellID == spellID then return true end
+        end
+    end
+    return false
+end
+
+function ns.ArmOverrideRange(baseSpellID, overrideSpellID)
+    local armed = ns._oorArmed
+    if not armed then armed = {}; ns._oorArmed = armed end
+    local prev = armed[baseSpellID]
+    if prev == overrideSpellID then return end
+    if prev then
+        if not ns.BlizzardArmsRange(prev) then
+            C_Spell.EnableSpellRangeCheck(prev, false)
+        end
+        armed[baseSpellID] = nil
+    end
+    if overrideSpellID and not ns.BlizzardArmsRange(overrideSpellID) then
+        C_Spell.EnableSpellRangeCheck(overrideSpellID, true)
+        armed[baseSpellID] = overrideSpellID
+    end
+end
+
+-- Every registration dropped at once (spec change, logout): a leaked one costs a
+-- dispatch we ignore, but they would accumulate across a session of swaps.
+function ns.DisarmOverrideRanges()
+    local armed = ns._oorArmed
+    if not armed then return end
+    for base, ov in pairs(armed) do
+        if not ns.BlizzardArmsRange(ov) then
+            C_Spell.EnableSpellRangeCheck(ov, false)
+        end
+        armed[base] = nil
+    end
+    -- The tracked ids go with the registrations ("the new spec's overrides
+    -- re-arm on their own events"): a value left behind would keep that icon's
+    -- hook polling a dead spell and hold the repaint gate open. Also what
+    -- keeps the live count exact across spec changes.
+    for _, icons in pairs(cdmBarIcons) do
+        for _, icon in ipairs(icons) do
+            local fd = _getFD(icon)
+            if fd and fd._oorSpellID ~= nil then fd._oorSpellID = nil end
+        end
+    end
+    ns._oorLiveCount = 0
+end
+
+-- SPELL_RANGE_CHECK_UPDATE. Keyed off the icon's own stored override id rather than
+-- our armed set, so it still repaints for an override Blizzard arms itself. The
+-- payload's isInRange is ignored in favour of ApplyOverrideRangeTint's own poll,
+-- which already guards a secret answer. Falls through immediately for the base-spell
+-- registrations Blizzard makes, which is nearly every dispatch.
+function ns.RepaintOverrideRange(spellID)
+    -- No icon holds a live override: nothing here could match. Reads only our
+    -- own counter, so it runs before any payload value is touched.
+    if (ns._oorLiveCount or 0) <= 0 then return end
+    if type(spellID) ~= "number" then return end
+    if issecretvalue and issecretvalue(spellID) then return end
+    for _, icons in pairs(cdmBarIcons) do
+        for _, icon in ipairs(icons) do
+            local fd = _getFD(icon)
+            if fd and fd._oorSpellID == spellID then
+                ns.ApplyOverrideRangeTint(icon, spellID)
+            end
+        end
+    end
+end
+
+-- rangeCheckSpellID is READ, never written: the law is about writes.
+function ns.ResyncCdmRange(baseSpellID, overrideSpellID)
+    -- Secret payload fails open, before any truthiness test or comparison
+    -- touches it: same guard the action bar dispatcher puts on this event.
+    if issecretvalue and (issecretvalue(baseSpellID) or issecretvalue(overrideSpellID)) then
+        return
+    end
+    if not (baseSpellID and C_Spell and C_Spell.IsSpellInRange) then return end
+    -- nil once the override lapses, which hands the icon back to Blizzard: their
+    -- own check is armed on the base spell and is right again from that moment.
+    local liveOverride = (overrideSpellID and overrideSpellID ~= baseSpellID)
+        and overrideSpellID or nil
+    ns.ArmOverrideRange(baseSpellID, liveOverride)
+    for _, icons in pairs(cdmBarIcons) do
+        for _, icon in ipairs(icons) do
+            if icon.rangeCheckSpellID == baseSpellID then
+                ns.ApplyOverrideRangeTint(icon, liveOverride)
+            end
+        end
+    end
+end
 
 -------------------------------------------------------------------------------
 --  Event-Driven Runtime Maintenance
@@ -9965,6 +10125,9 @@ eventFrame:RegisterEvent("SPELLS_CHANGED")
 -- Live override flips (proc-based hero-talent transforms): resolution memos
 -- derived from override state go stale the moment this fires.
 eventFrame:RegisterEvent("COOLDOWN_VIEWER_SPELL_OVERRIDE_UPDATED")
+-- Only ever acted on for an override id we armed ourselves; Blizzard's own base-spell
+-- registrations dispatch here too and fall straight through.
+eventFrame:RegisterEvent("SPELL_RANGE_CHECK_UPDATE")
 eventFrame:RegisterEvent("PLAYER_REGEN_DISABLED")
 eventFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
 eventFrame:RegisterEvent("ZONE_CHANGED_NEW_AREA")
@@ -10108,9 +10271,17 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, updateInfo, arg3)
         ns.SaveCachedBarSizes()
         return
     end
+    if event == "SPELL_RANGE_CHECK_UPDATE" then
+        ns.RepaintOverrideRange(unit)   -- payload is (spellID, isInRange, checksRange)
+        return
+    end
     if event == "COOLDOWN_VIEWER_SPELL_OVERRIDE_UPDATED" then
         -- Bump-only: painting is driven by the cooldown/desat hooks, which re-resolve on their next fire. No repaint request from here.
         ns._cdmResGen = ns._cdmResGen + 1
+        -- Except the range tint, which no hook re-resolves -- Blizzard's own check
+        -- is armed on the base id and never re-polls for the override.
+        -- Payload here is (baseSpellID, overrideSpellID).
+        ns.ResyncCdmRange(unit, updateInfo)
         return
     end
     if event == "COMBAT_LOG_EVENT_UNFILTERED" then
@@ -10311,6 +10482,7 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, updateInfo, arg3)
         return
     end
     if event == "PLAYER_SPECIALIZATION_CHANGED" and unit == "player" then
+        ns.DisarmOverrideRanges()   -- the new spec's overrides re-arm on their own events
         -- Non-rebuild work only. The actual spec change rebuild is driven by SPELLS_CHANGED above
         -- (which fires for both manual and auto swaps). This handler just invalidates caches that need immediate clearing.
         if EllesmereUI and EllesmereUI.InvalidateFrameCache then

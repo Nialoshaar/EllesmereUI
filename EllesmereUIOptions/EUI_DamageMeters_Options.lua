@@ -103,8 +103,8 @@ initFrame:SetScript("OnEvent", function(self)
             -- behind; its "(seconds)" suffix is attached below.
             { type="slider", text="Refresh Rate",
               tooltip = "Increase to improve performance, Decrease to update meters faster",
-              min = 0.1, max = 2, step = 0.1,
-              getValue = function() return Cfg("refreshRate") or 0.5 end,
+              min = 0.5, max = 2, step = 0.1,
+              getValue = function() return Cfg("refreshRate") or 1 end,
               setValue = function(v) Set("refreshRate", v) end,
               fmt = function(v) return format("%.2fs", v) end })
         y = y - h

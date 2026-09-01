@@ -963,6 +963,59 @@ end
 -------------------------------------------------------------------------------
 EllesmereUI._WHATSNEW_PATCHES = {
     {
+        version = "9.1.4",
+        heroes = {
+            {
+                module = "Bags",
+                title  = "Bank Organization",
+                desc   = "The bank window catches up to the bags: nest OneBank and OneWarbank by expansion, group items by your bag categories with automatic splits by equipment slot, profession and material, and browse a category sidebar that spans your character bank and warband together.",
+                nav    = { module = "EllesmereUIBags", page = "Bank" },
+            },
+        },
+        features = {
+            {
+                module = "Blizz UI Enhanced",
+                title  = "Queue Timer Style",
+                desc   = "Configurable text color, size, bar height and text position for the queue accept countdown, via a swatch and cog beside Show Queue Timer",
+                nav    = { module = "EllesmereUIBlizzardSkin", page = "Tooltips, Menus & Popups",
+                           section = "BLIZZARD POPUPS & GAME MENU", highlight = "Show Queue Timer" },
+            },
+            {
+                module = "Nameplates",
+                title  = "Friendly NPC Name Styling",
+                desc   = "Name-only friendly NPC plates gain configurable name color, title color and title size in the Friendly NPC Settings cog",
+                nav    = { module = "EllesmereUINameplates", page = "General",
+                           section = "OTHER NAMEPLATES", highlight = "Show Friendly NPC Nameplates" },
+            },
+            {
+                module = "Resource Bars",
+                title  = "Whirlwind and Sweeping Strikes Thresholds",
+                desc   = "Threshold and band colors work on the Whirlwind and Sweeping Strikes charge bar again, drawn as color ranges along the fill",
+                nav    = { module = "EllesmereUIResourceBars", page = "Class, Power and Health Bars" },
+            },
+            {
+                module = "Unit Frames",
+                title  = "Hide Trailing Zeros",
+                desc   = "With health decimals on, full health renders 100% instead of 100.0% while real decimals like 99.5% stay",
+                nav    = { module = "EllesmereUIUnitFrames", page = "Main Frames",
+                           section = "DISPLAY", highlight = "Show Decimal on Health Text" },
+            },
+        },
+        fixes = {
+            { module = "Blizz UI Enhanced", text = "Hovering names in the Guild & Communities roster no longer errors, and member tooltips keep their race and class lines." },
+            { module = "Cooldown Manager", text = "Out-of-range coloring now tracks the spell actually on the icon while a proc or talent override replaces it, instead of the base spell's range." },
+            { module = "Cooldown Manager", text = "Apply to This Spell and Apply to Bar no longer reset a picked Active State color (or other value-carrying settings on preset icons, trinkets and racials) back to defaults." },
+            { module = "Damage Meters", text = "In-combat ally breakdowns are now dungeon-only, cutting Damage Meters memory use in raids where duplicate specs blocked most of them anyway." },
+            { module = "General", text = "A checked Hide visibility condition now always hides its element in both match modes, and every condition has its own Show and Hide row, with new Out of Combat and Not Skyriding (Airborne) rows." },
+            { module = "General", text = "Spec and conditional overrides can now hold the Visibility setting itself, replacing it with Never, Always or Mouseover for those specs." },
+            { module = "General", text = "Picking a raid marker from the fallback unit menu (shown for group members whose data has not streamed in) is now greyed out like the other unavailable actions there instead of throwing a blocked-action error." },
+            { module = "Minimap", text = "With the Rectangular shape, player and party arrows no longer draw in the hidden bands above and below the map, and combat transitions no longer leave the map cut off wrong." },
+            { module = "Mythic+ Tools", text = "Target, Focus and Targeted Spell cast bars no longer truncate spell names when there is no target text sharing the bar." },
+            { module = "Nameplates", text = "The target effect's border size no longer snaps back to normal while a cast bar is shown with Border Wraps Around Cast Bar enabled." },
+            { module = "Localization", text = "Simplified Chinese caught up on the recent additions (chat recall, the performance reminder, Ignore Pain tracking and more)." },
+        },
+    },
+    {
         version = "9.1.3",
         mini = true,
         fixes = {

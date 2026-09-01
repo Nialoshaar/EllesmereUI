@@ -1260,7 +1260,12 @@ initFrame:SetScript("OnEvent", function(self)
                   end,
                   legacyKey = "barVisibility",
                   label = leftLabel,
-                  caps = { partyIncludesRaid = false, luaDragonriding = true },
+                  -- noOverrideMouseover: this module's hover wiring reads the STORED
+                  -- mouseoverEnabled, which an override does not write, so a Mouseover
+                  -- override would silently behave like Always. Offered as locked rather
+                  -- than looking available and doing nothing.
+                  caps = { partyIncludesRaid = false, luaDragonriding = true,
+                           noOverrideMouseover = true },
                   applyScalarFn = function(s, mode) ApplyVisibilityKey(s, mode) end,
                   disabledFn = disabledFn, disabledTooltip = disTip, rawTooltip = disTip and true or nil,
                   onChanged = function()
@@ -1688,7 +1693,8 @@ initFrame:SetScript("OnEvent", function(self)
             end
 
             -- Pet Bar cannot express group modes: lock them with an explanation instead of offering silent no-ops.
-            local visCaps = { partyIncludesRaid = false }
+            -- noOverrideMouseover: see the caps on the bar row above.
+            local visCaps = { partyIncludesRaid = false, noOverrideMouseover = true }
             if SelectedKey() == "PetBar" then
                 visCaps.noGroupModes = true
                 visCaps.lockedTooltips = {

@@ -222,6 +222,8 @@ local defaults = {
         showDecimalBoss2 = true,
         -- With decimals on, "Only Show for % Health" keeps the decimal on PERCENT (77.3%) but leaves VALUES whole (240k); same inline cog.
         showDecimalPercentOnly = false,
+        -- With decimals on, "Hide Trailing Zeros" drops a zero decimal from the PERCENT (100.0% -> 100%, 99.5% unchanged); same inline cog.
+        showDecimalTrimZeros = false,
         -- Player Threat (Non-Tank): additive "Shadow" border on the PLAYER frame while
         -- pulling/holding aggro, instanced content only; global, default off (zero cost
         -- until enabled). Colors mirror the nameplate non-tank threat defaults (has/near aggro).
@@ -2167,9 +2169,10 @@ EllesmereUI.IsSmartPowerPercent = EUI_IsSmartPowerPercent
 -- Show Decimal on Text (global): AbbreviateNumbers config emitting one decimal per
 -- magnitude band (240500 -> "240.5k", 2405000 -> "2.4m"). AbbreviateNumbers runs in
 -- Blizzard's secure context, so a secret value plus this config stays secret-safe
--- (like the no-config call on secret health/power). Tags read two _G flags:
+-- (like the no-config call on secret health/power). Tags read these _G flags:
 --   _G._EUI_AbbrevDecimalCfg = this table when on, nil when off
 --   _G._EUI_TextDecimals     = true/false, selects "%.1f" vs "%d" for percents
+--   _G._EUI_PctTrim          = { curve, cfg } trimming the percent, nil when off
 ns._decimalAbbrevConfig = { breakpointData = {
     { breakpoint = 1e9, abbreviation = "b", significandDivisor = 1e8, fractionDivisor = 10, abbreviationIsGlobal = false },
     { breakpoint = 1e6, abbreviation = "m", significandDivisor = 1e5, fractionDivisor = 10, abbreviationIsGlobal = false },
@@ -2182,6 +2185,25 @@ ns._decimalAbbrevConfig2 = { breakpointData = {
     { breakpoint = 1e6, abbreviation = "m", significandDivisor = 1e4, fractionDivisor = 100, abbreviationIsGlobal = false },
     { breakpoint = 1e3, abbreviation = "k", significandDivisor = 1e1, fractionDivisor = 100, abbreviationIsGlobal = false },
 } }
+-- "Hide Trailing Zeros": AbbreviateNumbers drops a zero fraction ("100") but keeps a
+-- real one ("99.5"), which "%.1f" cannot do and a SECRET percent forbids doing with
+-- Lua string ops. It TRUNCATES though, so a fractional significandDivisor reads a tenth
+-- low (0.1 renders 33.3 as "33.2"); the curve scales instead, handing over whole
+-- tenths/hundredths, +0.5 so truncation lands where "%.1f" would have rounded.
+local function MakePctTrim(scale, fractionDivisor)
+    local curve = C_CurveUtil.CreateCurve()
+    curve:SetType(Enum.LuaCurveType.Linear)
+    curve:AddPoint(0.0, 0.5)
+    curve:AddPoint(1.0, scale + 0.5)
+    return {
+        curve = curve,
+        cfg = { breakpointData = {
+            { breakpoint = 0, abbreviation = "", significandDivisor = 1, fractionDivisor = fractionDivisor, abbreviationIsGlobal = false },
+        } },
+    }
+end
+ns._pctTrim  = MakePctTrim(1000, 10)
+ns._pctTrim2 = MakePctTrim(10000, 100)
 function ns.ApplyTextDecimalGlobals()
     if db and db.profile and db.profile.showDecimalOnText then
         _G._EUI_TextDecimals = true
@@ -2191,21 +2213,28 @@ function ns.ApplyTextDecimalGlobals()
         local percentOnly = db.profile.showDecimalPercentOnly
         _G._EUI_AbbrevDecimalCfg = ns._decimalAbbrevConfig
         if percentOnly then _G._EUI_AbbrevDecimalCfg = nil end
+        -- Percent-only, so "Only Show for % Health" never withholds these.
+        local trimZeros = db.profile.showDecimalTrimZeros
+        _G._EUI_PctTrim = trimZeros and ns._pctTrim or nil
         -- Boss frames get a second decimal place. Tags use the 1-decimal path
         -- for non-boss units when the flag is set, and ignore it when nil.
         if db.profile.showDecimalBoss2 ~= false then
             _G._EUI_BossExtraDecimal = true
             _G._EUI_AbbrevDecimalCfg2 = ns._decimalAbbrevConfig2
             if percentOnly then _G._EUI_AbbrevDecimalCfg2 = nil end
+            _G._EUI_PctTrim2 = trimZeros and ns._pctTrim2 or nil
         else
             _G._EUI_BossExtraDecimal = false
             _G._EUI_AbbrevDecimalCfg2 = nil
+            _G._EUI_PctTrim2 = nil
         end
     else
         _G._EUI_TextDecimals = false
         _G._EUI_AbbrevDecimalCfg = nil
         _G._EUI_BossExtraDecimal = false
         _G._EUI_AbbrevDecimalCfg2 = nil
+        _G._EUI_PctTrim = nil
+        _G._EUI_PctTrim2 = nil
     end
 end
 
@@ -2230,16 +2259,29 @@ do
 end
 
 do
+  -- Health percent under the decimal options. "Hide Trailing Zeros" reads the percent
+  -- through a scaling curve so AbbreviateNumbers can drop the zero "%.1f" would pad.
+  local function PercentHP(unit)
+    local boss = _G._EUI_BossExtraDecimal and string.sub(unit, 1, 4) == "boss"
+    local trim = _G._EUI_PctTrim
+    if boss then trim = _G._EUI_PctTrim2 end
+    if trim then
+      local scaled = UnitHealthPercent(unit, true, trim.curve)
+      if not scaled then return "0" end
+      return AbbreviateNumbers(scaled, trim.cfg)
+    end
+    local pct = UnitHealthPercent(unit, true, CurveConstants.ScaleTo100)
+    if not pct then return "0" end
+    if boss then return string_format("%.2f", pct) end
+    return string_format(_G._EUI_TextDecimals and "%.1f" or "%d", pct)
+  end
+
+  TagFns.perhp = PercentHP
   TagFns.perhpnosign = function(unit)
     if not unit or not UnitExists(unit) then return "" end
     if not UnitIsConnected(unit) then return "OFFLINE" end
     if UnitIsDeadOrGhost(unit) then return "DEAD" end
-    local pct = UnitHealthPercent(unit, true, CurveConstants.ScaleTo100)
-    if not pct then return "0" end
-    if _G._EUI_BossExtraDecimal and string.sub(unit, 1, 4) == "boss" then
-      return string_format("%.2f", pct)
-    end
-    return string_format(_G._EUI_TextDecimals and "%.1f" or "%d", pct)
+    return PercentHP(unit)
   end
 end
 
@@ -2616,6 +2658,7 @@ do
 
     -- Function-registered tag methods are shared directly: one body, no drift.
     P.curhpshort  = TagFns.curhpshort
+    P.perhp       = TagFns.perhp
     P.perhpnosign = TagFns.perhpnosign
     P.level       = TagFns.level
     P.name        = TagFns.name
@@ -2625,11 +2668,6 @@ do
     -- String-compiled tag methods get real equivalents (same logic, same
     -- _EUI_ globals; the compiled strings stay registered only while the tag
     -- engine still runs).
-    P.perhp = function(u)
-        local fmt = _G._EUI_TextDecimals and "%.1f" or "%d"
-        if _G._EUI_BossExtraDecimal and string.sub(u, 1, 4) == "boss" then fmt = "%.2f" end
-        return sf(fmt, UnitHealthPercent(u, true, CurveConstants.ScaleTo100))
-    end
     P.perpp = function(u)
         local pType = _G._EUI_ResolvedPowerType[u] or UnitPowerType(u)
         return sf("%d", UnitPowerPercent(u, pType, true, CurveConstants.ScaleTo100))
@@ -2839,9 +2877,24 @@ end
 -- spawn, actively disable Blizzard's too). "hidden" has highest precedence so a
 -- legacy disabled frame (enabledFrames[unit]==false: Visibility "never" or an
 -- "Enable X Frame" toggle off) keeps meaning "no frame at all".
+--- True when the unit has no EllesmereUI frame at all. That is the enabledFrames flag,
+--- with the one exception an applied Visibility override carves out: the same flag is how
+--- a shared Visibility of "never" is stored (applyScalarFn writes it), and an override
+--- REPLACES the whole Visibility setting, "never" included. A frame source of "hidden" is
+--- the cog's own choice rather than a Visibility setting, so it still wins. On ns for the
+--- 200-locals cap.
+function ns.VisUnitDisabled(profile, unitKey)
+    local ef = profile and profile.enabledFrames
+    if not ef or ef[unitKey] ~= false then return false end
+    if (profile.frameSource and profile.frameSource[unitKey]) == "hidden" then return true end
+    local s = profile[unitKey]
+    local ov = s and EllesmereUI.VisOverrideValue and EllesmereUI.VisOverrideValue(s)
+    return not (ov and ov ~= "never")
+end
+
 function ns.GetUnitFrameSource(unit)
     if not db or not db.profile then return "eui" end
-    if db.profile.enabledFrames[unit] == false then return "hidden" end
+    if ns.VisUnitDisabled(db.profile, unit) then return "hidden" end
     local fs = db.profile.frameSource and db.profile.frameSource[unit]
     if fs == "blizzard" then
         -- ToT/focus-target have no standalone Blizzard frame (native one is a child
@@ -10956,12 +11009,23 @@ function ns.ResolveVisRestingLive(s, frame)
     return ns.ResolveVisResting(s, frame, ext, hiddenByOpts, InCombatLockdown())
 end
 
+--- Is the hover mechanism wired for this frame at all? The cheap static prefilter both
+--- handlers use, kept static on purpose (a live verdict here would write alpha on every
+--- mouse leave of every frame). An applied Visibility override answers it too: it holds
+--- the hover state itself, and without this the frame would rest at alpha 0 with no
+--- handler willing to reveal it again.
+function ns.VisMouseoverWired(s)
+    if not s then return false end
+    if (s.barVisibility or "always") == "mouseover" then return true end
+    return (EllesmereUI.VisOverrideValue and EllesmereUI.VisOverrideValue(s)) == "mouseover"
+end
+
 local function UnitFrame_OnEnter(self)
     local unit = self._euiUnit
     if not unit then return end
     local unitKey = unit:match("^boss%d$") and "boss" or unit
     local s = db and db.profile and db.profile[unitKey]
-    if s and (s.barVisibility or "always") == "mouseover" then
+    if ns.VisMouseoverWired(s) then
         -- Reveal only what is actually hover-gated right now. Under Any the frame may
         -- already be shown on another passing disjunct, in which case there is nothing to
         -- reveal and OnLeave must not undo anything either -- both handlers read the same
@@ -11009,7 +11073,7 @@ local function UnitFrame_OnLeave(self)
     if not unit then return end
     local unitKey = unit:match("^boss%d$") and "boss" or unit
     local s = db and db.profile and db.profile[unitKey]
-    if s and (s.barVisibility or "always") == "mouseover" then
+    if ns.VisMouseoverWired(s) then
         -- Return to the resting alpha the visibility pass would paint, never a hardcoded
         -- 0: under Any a passing disjunct keeps the frame visible with no hover involved,
         -- and hiding it here would leave it wrong until the next visibility event fires.
@@ -12342,7 +12406,6 @@ function InitializeFrames()
         -- (SetAlpha) are not restricted and must run on combat transitions.
         -- Show/Hide and SetAttribute ARE restricted; those are guarded below.
         local isLocked = InCombatLockdown()
-        local enabled2 = db.profile.enabledFrames
         local inRaid = IsInRaid()
         local inParty = not inRaid and IsInGroup()
         local solo = not inRaid and not inParty
@@ -12351,7 +12414,9 @@ function InitializeFrames()
         for _, unitKey in ipairs({"player", "target", "focus"}) do
             local s = db.profile[unitKey]
             local frame = frames[unitKey]
-            if frame and enabled2[unitKey] ~= false and s then
+            -- The enabledFrames gate through VisUnitDisabled: a unit disabled purely by a
+            -- shared Visibility of "never" comes back while an override replaces it.
+            if frame and not ns.VisUnitDisabled(db.profile, unitKey) and s then
                 local hiddenByOpts = EllesmereUI and EllesmereUI.CheckVisibilityOptions and EllesmereUI.CheckVisibilityOptions(s)
                 local vis = s.barVisibility or "always"
 
@@ -12381,7 +12446,12 @@ function InitializeFrames()
                 -- Tail built once and reused by the mini frame below (both compilers only
                 -- PREPEND their prefix).
                 local visTail
-                if s.visibilityMatch == "any" and EllesmereUI.BuildAnyMatchTail then
+                -- An applied Visibility override replaces the whole setting, so the tail
+                -- is a constant and the shared selection never reaches the driver.
+                local visOv = EllesmereUI.VisOverrideValue and EllesmereUI.VisOverrideValue(s)
+                if visOv then
+                    visTail = (visOv == "never") and "hide" or "show"
+                elseif s.visibilityMatch == "any" and EllesmereUI.BuildAnyMatchTail then
                     local tail, _, liveAxes = EllesmereUI.BuildAnyMatchTail(s, "barVisibility", drvSet)
                     -- Gated on liveAxes: with no soft-target edge here, target/enemy axes
                     -- resolve in Lua, and a driver compiled from those alone would be a

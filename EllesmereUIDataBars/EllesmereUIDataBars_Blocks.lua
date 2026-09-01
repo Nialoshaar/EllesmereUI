@@ -4545,7 +4545,7 @@ function ns.RefreshMicroMenuHider(force)
         local bars = profile.bars
         for i = 1, #bars do
             local bar = bars[i]
-            if bar.visibility ~= "never" then
+            if not ns.VisIsNever(bar) then
                 for j = 1, #bar.blocks do
                     local b = bar.blocks[j]
                     if b.type == "micromenu" and b.settings and b.settings.disableBlizzardMicroMenu then

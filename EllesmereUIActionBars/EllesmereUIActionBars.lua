@@ -8907,16 +8907,22 @@ EAB.VIS_EDGES = { softTarget = true }
 local function BuildVisibilityString(info, s, visOverride)
     local key = info.key
     local vis = visOverride or s.barVisibility or "always"
+    -- An applied Visibility override replaces the whole setting, the shared option
+    -- lanes included. The runtime toggle keybind still wins over it, the same way it
+    -- wins over the saved mode.
+    local visOv = (not visOverride) and EllesmereUI.VisOverrideValue
+        and EllesmereUI.VisOverrideValue(s) or nil
 
     if info.isStance and (GetNumShapeshiftForms() or 0) == 0 then
         return "hide" -- classes/specs with no forms have no stance bar to show
     end
 
     -- Visibility-option hide clauses expressed as macro conditionals; run
-    -- inside the secure state driver so they work in combat without taint. Under Any
-    -- they are disjuncts, compiled by the Any tail below, never a gate.
+    -- inside the secure state driver so they work in combat without taint. Under Any the
+    -- Any tail below compiles both halves itself: Show lanes as disjuncts, Hide lanes as
+    -- its own leading gates, so this block would only duplicate them.
     local visOptHide = ""
-    if s.visibilityMatch ~= "any" then
+    if s.visibilityMatch ~= "any" and not visOv then
         if s.visHideMounted then visOptHide = visOptHide .. "[mounted] hide; " end
         -- Inverse of the above. [nomounted] cannot see druid travel/flight forms
         -- (they are shapeshifts), so a druid in a mount-like form reads unmounted
@@ -8964,7 +8970,12 @@ local function BuildVisibilityString(info, s, visOverride)
         -- mode (inverting the two dragonriding modes). A negated axis has no AND token,
         -- becoming a leading hide gate instead (same technique as visOptHide).
         local conj, negGate
-        if vm then
+        if visOv then
+            -- An override replaces the setting, so no mode terms at all: Never hides
+            -- outright, the other two leave the pet wrapper as the only condition.
+            if visOv == "never" then return "hide" end
+            conj, negGate = "", ""
+        elseif vm then
             -- Group modes are structurally unsupported here (locked in UI, stripped by sync copies).
             conj, negGate = EAB.BuildVisModeConjuncts(vm)
         else
@@ -9001,6 +9012,11 @@ local function BuildVisibilityString(info, s, visOverride)
 
     -- Inject visibility-option hide clauses after the standard hide-prefix
     hidePrefix = hidePrefix .. visOptHide
+
+    -- One constant, with the standard pet battle / vehicle prefix still in front.
+    if visOv then
+        return hidePrefix .. ((visOv == "never") and "hide" or "show")
+    end
 
     -- Multi-select set: compiled tail; the legacy single-mode chain below
     -- stays byte-identical for every scalar value.
@@ -9351,7 +9367,15 @@ function EAB:ApplyCombatVisibility()
                 local newStr
                 if s.alwaysHidden then
                     newStr = "hide"
-                elseif EllesmereUI.CheckVisibilityOptionsNonMacro and EllesmereUI.CheckVisibilityOptionsNonMacro(s) then
+                -- Under Any the compiled driver already carries both halves (Show lanes as
+                -- disjuncts, Hide lanes as leading gates, the Lua-only ones resolved at
+                -- build time with their own combat escape hatch), so a literal "hide" here
+                -- would replace a self-updating string with a dead constant. Same guard
+                -- ShouldHideNonMacro carries; with all of them skipping it, the "any"
+                -- branch inside CheckVisibilityOptionsNonMacro has no live caller left and
+                -- is kept only so the helper stays correct for a future non-driver one.
+                elseif s.visibilityMatch ~= "any" and EllesmereUI.CheckVisibilityOptionsNonMacro
+                    and EllesmereUI.CheckVisibilityOptionsNonMacro(s) then
                     newStr = "hide"
                 else
                     newStr = BuildVisibilityString(info, s)
@@ -9491,7 +9515,9 @@ function EAB:RefreshRuntimeVisibility()
                         -- Forced-show via the toggle keybind: ignore the saved mode
                         -- (which may be "never") and any non-macro hide options.
                         newStr = BuildVisibilityString(info, s, "always")
-                    elseif EllesmereUI.CheckVisibilityOptionsNonMacro and EllesmereUI.CheckVisibilityOptionsNonMacro(s) then
+                    -- Any is driver-owned, same reason as in ApplyCombatVisibility.
+                    elseif s.visibilityMatch ~= "any" and EllesmereUI.CheckVisibilityOptionsNonMacro
+                        and EllesmereUI.CheckVisibilityOptionsNonMacro(s) then
                         newStr = "hide"
                     else
                         newStr = BuildVisibilityString(info, s)
@@ -9551,6 +9577,10 @@ do
 local MYSLOT_VIS_FIELDS = {
     "barVisibility", "alwaysHidden", "mouseoverEnabled", "mouseoverAlpha",
     "_savedBarAlpha", "combatShowEnabled", "combatHideEnabled", "alwaysShowButtons",
+    -- An applied Visibility override REPLACES the whole setting (a "never"
+    -- would keep the bar hidden through the import); captured, force-cleared
+    -- and restored like every other field here.
+    "visibilityOverride",
     -- Multi-select set: backed up by reference (the shared setter assigns a
     -- fresh table on every write, so the captured table never mutates) and
     -- restored/cleared like any other field.
@@ -9876,8 +9906,16 @@ function EAB:UpdateHousingVisibility()
         -- forms are also handled here to cover cases [mounted] does not match.
         local function ShouldHideNonMacro(s)
             if not s then return false end
-            -- Under Any the lanes are disjuncts folded into the driver string; a literal
-            -- "hide" here would veto the whole disjunction on one failing lane.
+            -- An applied Visibility override replaces the whole setting, the shared option
+            -- lanes included, and BuildVisibilityString already compiles it into a
+            -- constant. Checked before the two raw lane reads below, which would otherwise
+            -- keep hiding the bar on a lane the override took over.
+            if EllesmereUI.VisOverrideValue and EllesmereUI.VisOverrideValue(s) then return false end
+            -- Under Any the driver string already carries both halves (Show lanes as
+            -- disjuncts, Hide lanes as leading gates, the Lua-only ones resolved at build
+            -- time with their own combat escape hatch), and the rebuild below refreshes
+            -- it on exactly these events. A literal "hide" here would add nothing and
+            -- would veto the whole disjunction on a lane that is not even firing.
             if s.visibilityMatch == "any" then return false end
             if s.visHideNoTarget then
                 -- [noexists] in the state driver covers the basic has-target

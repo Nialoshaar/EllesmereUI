@@ -249,6 +249,21 @@ local function EnsureDB()
     if not EUI or not EUI.Lite then return nil end
     _dmDB = EUI.Lite.NewDB("EllesmereUIDamageMetersDB", DM_DEFAULTS)
     _G._EDM_DB = _dmDB
+    -- Refresh Rate floor raised to 0.5s: each tick fetches a full session
+    -- snapshot per window, so sub-0.5 rates multiply allocation churn far
+    -- past any visual gain. Clamp every stored profile once per session
+    -- (idempotent; imports of old exports are caught by the ticker clamp
+    -- until their next login).
+    local sv = _G.EllesmereUIDamageMetersDB
+    if type(sv) == "table" and type(sv.profiles) == "table" then
+        for _, p in pairs(sv.profiles) do
+            local dm = type(p) == "table" and p.dm
+            if type(dm) == "table" and type(dm.refreshRate) == "number"
+               and dm.refreshRate < 0.5 then
+                dm.refreshRate = 0.5
+            end
+        end
+    end
     return _dmDB
 end
 
@@ -1038,7 +1053,18 @@ ns._IsSecret, ns._IsOwnRow = IsSecret, IsOwnRow
 -- pre-combat snapshots stay correct all fight; sources first seen only
 -- mid-combat resolve after it ends.
 local _srcKeyGuid = {}
+-- The group-row resolve channel runs in DUNGEONS ONLY (user rule). Raids
+-- mostly ambiguous-block anyway (duplicate specs collapse the class:spec
+-- key), while the Overall harvest walk and its session fetch scale with
+-- source count; outside instanced parties there is no group audience worth
+-- the fetches. Own-row breakdowns and death recaps are separate lanes and
+-- keep working everywhere (every caller checks IsOwnRow first).
+local function AllyResolveZone()
+    local _, instType = IsInInstance()
+    return instType == "party"
+end
 local function SnapshotSourceKeys()
+    if not AllyResolveZone() then return end
     -- Declassification LAGS regen (field-confirmed: a post-combat snapshot
     -- banked only the own row): while the Combat addon-restriction is still
     -- active the source list reads partially secret. Skip WITHOUT wiping so
@@ -1077,6 +1103,7 @@ end
 ns._SnapshotSourceKeys = SnapshotSourceKeys
 local function ResolveGroupGUID(src)
     if not src then return nil end
+    if not AllyResolveZone() then return nil end
     -- Out of combat the callers' row guids are plain and the gates never
     -- fire, so a resolve call here is a cheap chance to refresh the
     -- snapshot instead (one session fetch at hover edge cadence).
@@ -5001,6 +5028,9 @@ end
 StartSharedTicker = function()
     if _sharedTicker then _sharedTicker:Cancel() end
     local rate = DB().refreshRate or TICK_COMBAT
+    -- Belt for values the login clamp has not seen yet (a profile imported
+    -- mid-session from an old export can carry a sub-floor rate).
+    if rate < 0.5 then rate = 0.5 end
     _sharedTicker = C_Timer.NewTicker(rate, SharedRefreshTick)
     StopTimerTicker()
     _timerTicker = C_Timer.NewTicker(0.5, TimerTick)

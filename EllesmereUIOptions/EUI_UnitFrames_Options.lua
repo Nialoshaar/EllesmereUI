@@ -1318,7 +1318,10 @@ initFrame:SetScript("OnEvent", function(self)
                 return cfg and AbbreviateNumbers(v, cfg) or AbbreviateNumbers(v)
             end
             local function _pvPct(p01)
-                return _G._EUI_TextDecimals and string.format("%.1f", p01 * 100) or tostring(math.floor(p01 * 100))
+                if not _G._EUI_TextDecimals then return tostring(math.floor(p01 * 100)) end
+                local trim = _G._EUI_PctTrim
+                if trim then return AbbreviateNumbers(trim.curve:Evaluate(p01), trim.cfg) end
+                return string.format("%.1f", p01 * 100)
             end
             local function _pvName()
                 if unitKey == "player" then return UnitName("player") or "Player" end
@@ -4535,6 +4538,13 @@ initFrame:SetScript("OnEvent", function(self)
         -- showInRaid/showInParty/showSolo trio: only group items constrain it
         -- (unconstrained = true), matching ToggleFrame's group gating for multi-select.
         local function GroupAxisPasses(vm, inRaid, inParty)
+            -- A checked Hide lane vetoes whatever the Show lanes say, in both match
+            -- modes; both lanes of one row at once counts as unconstrained.
+            if (vm.hide_in_raid and not vm.in_raid and inRaid)
+                or (vm.hide_in_party and not vm.in_party and inParty)
+                or (vm.hide_solo and not vm.solo and not inRaid and not inParty) then
+                return false
+            end
             local g1, g2, g3 = vm.in_raid, vm.in_party, vm.solo
             if not (g1 or g2 or g3) or (g1 and g2 and g3) then return true end
             if g1 and inRaid then return true end
@@ -4584,8 +4594,11 @@ initFrame:SetScript("OnEvent", function(self)
                   if ns.UpdateFrameVisibility then ns.UpdateFrameVisibility() end
                   ReloadAndUpdate()
                   -- Un-hiding a frame whose EUI frame isn't spawned this session
-                  -- (source was Blizzard/Hidden at login) needs a /reload.
-                  if (s.barVisibility or "always") ~= "never" then PromptReloadIfUnspawned({ selectedUnit }) end
+                  -- (source was Blizzard/Hidden at login) needs a /reload. The EFFECTIVE
+                  -- value decides: an override replaces the shared scalar, so an override
+                  -- of Always on a unit whose shared value is "never" un-hides it too.
+                  local visOv = EllesmereUI.VisOverrideValue and EllesmereUI.VisOverrideValue(s)
+                  if (visOv or s.barVisibility or "always") ~= "never" then PromptReloadIfUnspawned({ selectedUnit }) end
               end,
               onOptionChanged = function()
                   if ns.UpdateFrameVisibility then ns.UpdateFrameVisibility() end
@@ -5228,6 +5241,13 @@ initFrame:SetScript("OnEvent", function(self)
                       get=function() return db.profile.showDecimalBoss2 ~= false end,
                       set=function(v)
                           db.profile.showDecimalBoss2 = v
+                          if ns.ApplyTextDecimalGlobals then ns.ApplyTextDecimalGlobals() end
+                          ReloadAndUpdate(); UpdatePreview()
+                      end },
+                    { type="toggle", label="Hide Trailing Zeros",
+                      get=function() return db.profile.showDecimalTrimZeros == true end,
+                      set=function(v)
+                          db.profile.showDecimalTrimZeros = v
                           if ns.ApplyTextDecimalGlobals then ns.ApplyTextDecimalGlobals() end
                           ReloadAndUpdate(); UpdatePreview()
                       end },
