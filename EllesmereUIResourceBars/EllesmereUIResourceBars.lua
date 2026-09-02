@@ -3780,9 +3780,9 @@ local function BuildBars()
                 if not runeFrames[i] then
                     runeFrames[i] = CreatePip(secondaryFrame, 20, pipH, i,
                         0, 0, 0, 0, 0)
-                    -- Countdown number on its own overlay ABOVE the bar border. Rune
-                    -- pips use per-pip border size 0, so the VISIBLE border is the
-                    -- outer secondaryFrame._barBorder at level +5 -- the number must
+                    -- Countdown number on its own overlay ABOVE the bar border (whichever
+                    -- one is visible: per-pip when Border on Individual Pips is on, else
+                    -- the outer secondaryFrame._barBorder at level +5) -- the number must
                     -- clear that (not just the pip) while staying below the
                     -- count/value text overlay (level 25). Recharge fill stays
                     -- framed by the border, matching the ready-rune fill.
@@ -3828,7 +3828,13 @@ local function BuildBars()
                 rf["_barAnim_x1"] = x1 - x0
                 rf["_barAnim_ph"] = pipH
                 ApplyRunePos()
-                runeFrames[i]:ApplyBorder(0, 0, 0, 0, 0)
+                if sp.borderOnPips then
+                    runeFrames[i]:ApplyBorder(sp.borderSize, sp.borderR, sp.borderG, sp.borderB, sp.borderA,
+                        sp.borderTexture, sp.borderTextureOffset, sp.borderTextureOffsetY,
+                        sp.borderTextureShiftX, sp.borderTextureShiftY, "resourcebars", sp.borderSize)
+                else
+                    runeFrames[i]:ApplyBorder(0, 0, 0, 0, 0)
+                end
                 if sp.useContinuousTexture then
                     runeFrames[i]:ApplyTexture(g.barTexture or "none", x0 / widthSnapped, x1 / widthSnapped, isVertical)
                 else
@@ -3945,7 +3951,7 @@ local function BuildBars()
             local pl = secondaryFrame:GetFrameLevel()
             secondaryFrame._barBorder._frame:SetFrameLevel(sp.borderBehind and math.max(0, pl - 1) or (pl + 5))
         end
-        if sp.borderOnPips and cachedSecondary.type ~= "runes" and not isBarType then
+        if sp.borderOnPips and not isBarType then
             secondaryFrame._barBorder:ApplyStyle(0,0,0,0,0)
         else
             secondaryFrame._barBorder:ApplyStyle(sp.borderSize, sp.borderR, sp.borderG, sp.borderB, sp.borderA,
@@ -3993,13 +3999,6 @@ local function BuildBars()
             secondaryFrame._barBg:SetColorTexture(sp.barBgR or 0, sp.barBgG or 0, sp.barBgB or 0, sp.barBgA or 0.5)
         end
 
-        -- Warrior charge buffs: hand the engine-slot module the resolved build
-        -- (it parks itself for every other power type and non-warriors; see
-        -- EUI_ResourceBars_WarriorCharges.lua).
-        if ns.WC_Sync then
-            ns.WC_Sync(secondaryFrame, sp, cachedSecondary and cachedSecondary.power, g)
-        end
-
         if sp.showText then
             if not secondaryFrame._countText then
                 -- Parent to a high-level overlay so text renders above pip fills and borders
@@ -4031,6 +4030,15 @@ local function BuildBars()
             end
         elseif secondaryFrame._countText then
             secondaryFrame._countText:Hide()
+        end
+
+        -- Warrior charge buffs: hand the engine-slot module the resolved build
+        -- (it parks itself for every other power type and non-warriors; see
+        -- EUI_ResourceBars_WarriorCharges.lua). Must run after _countText is
+        -- created and styled above -- the engine bakes its count-text font from
+        -- this fontstring at slot-creation time and never re-reads it.
+        if ns.WC_Sync then
+            ns.WC_Sync(secondaryFrame, sp, cachedSecondary and cachedSecondary.power, g)
         end
 
         secondaryFrame:Show()
@@ -5830,7 +5838,7 @@ local function UpdateSecondaryResource()
             if ns.WC_Thresholds then
                 ns.WC_Thresholds(powerType,
                     (_tsEntry and _tsEntry.thresholdMode) or sp.thresholdMode,
-                    _tsThreshCount, _tsR, _tsG, _tsB, _tsA,
+                    _tsEntry and _tsThreshCount or nil, _tsR, _tsG, _tsB, _tsA,
                     _tsBandOn, _tsBands, _tsBandReverse, _tsReverse)
             end
         end
