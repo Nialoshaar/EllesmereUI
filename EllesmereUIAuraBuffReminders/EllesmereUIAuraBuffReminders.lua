@@ -1997,21 +1997,38 @@ local iconAnchor
 local iconPool = {}     -- all created icon buttons
 local activeIcons = {}  -- currently visible icons
 
-local ICON_SHAPES = {
-    circle={ mask="Interface\\AddOns\\EllesmereUI\\media\\portraits\\circle_mask.tga", border="Interface\\AddOns\\EllesmereUI\\media\\portraits\\circle_border.tga", inset=17 },
-    csquare={ mask="Interface\\AddOns\\EllesmereUI\\media\\portraits\\csquare_mask.tga", border="Interface\\AddOns\\EllesmereUI\\media\\portraits\\csquare_border.tga", inset=17 },
-    diamond={ mask="Interface\\AddOns\\EllesmereUI\\media\\portraits\\diamond_mask.tga", border="Interface\\AddOns\\EllesmereUI\\media\\portraits\\diamond_border.tga", inset=14 },
-    hexagon={ mask="Interface\\AddOns\\EllesmereUI\\media\\portraits\\hexagon_mask.tga", border="Interface\\AddOns\\EllesmereUI\\media\\portraits\\hexagon_border.tga", inset=17 },
-    portrait={ mask="Interface\\AddOns\\EllesmereUI\\media\\portraits\\portrait_mask.tga", border="Interface\\AddOns\\EllesmereUI\\media\\portraits\\portrait_border.tga", inset=17 },
-    shield={ mask="Interface\\AddOns\\EllesmereUI\\media\\portraits\\shield_mask.tga", border="Interface\\AddOns\\EllesmereUI\\media\\portraits\\shield_border.tga", inset=13 },
-    square={ mask="Interface\\AddOns\\EllesmereUI\\media\\portraits\\square_mask.tga", border="Interface\\AddOns\\EllesmereUI\\media\\portraits\\square_border.tga", inset=17 },
-}
+-- Keep shape state on the published module namespace. This file is at Lua's
+-- 200-local ceiling, and the load-on-demand options file consumes the same data.
+-- Build the table only when options or a non-default shape actually needs it.
+EllesmereUI._ModuleNS[ADDON_NAME].GetIconShapeData = function()
+    if not EllesmereUI._ModuleNS[ADDON_NAME]._iconShapeData then
+        EllesmereUI._ModuleNS[ADDON_NAME]._iconShapeData = {
+            values = {
+                none="None", cropped="Cropped", square="Square", circle="Circle",
+                csquare="Rounded Square", diamond="Diamond", hexagon="Hexagon",
+                portrait="Portrait", shield="Shield",
+            },
+            order = { "none", "cropped", "---", "square", "circle", "csquare", "diamond", "hexagon", "portrait", "shield" },
+            circle={ mask="Interface\\AddOns\\EllesmereUI\\media\\portraits\\circle_mask.tga", border="Interface\\AddOns\\EllesmereUI\\media\\portraits\\circle_border.tga", inset=17 },
+            csquare={ mask="Interface\\AddOns\\EllesmereUI\\media\\portraits\\csquare_mask.tga", border="Interface\\AddOns\\EllesmereUI\\media\\portraits\\csquare_border.tga", inset=17 },
+            diamond={ mask="Interface\\AddOns\\EllesmereUI\\media\\portraits\\diamond_mask.tga", border="Interface\\AddOns\\EllesmereUI\\media\\portraits\\diamond_border.tga", inset=14 },
+            hexagon={ mask="Interface\\AddOns\\EllesmereUI\\media\\portraits\\hexagon_mask.tga", border="Interface\\AddOns\\EllesmereUI\\media\\portraits\\hexagon_border.tga", inset=17 },
+            portrait={ mask="Interface\\AddOns\\EllesmereUI\\media\\portraits\\portrait_mask.tga", border="Interface\\AddOns\\EllesmereUI\\media\\portraits\\portrait_border.tga", inset=17 },
+            shield={ mask="Interface\\AddOns\\EllesmereUI\\media\\portraits\\shield_mask.tga", border="Interface\\AddOns\\EllesmereUI\\media\\portraits\\shield_border.tga", inset=13 },
+            square={ mask="Interface\\AddOns\\EllesmereUI\\media\\portraits\\square_mask.tga", border="Interface\\AddOns\\EllesmereUI\\media\\portraits\\square_border.tga", inset=17 },
+        }
+    end
+    return EllesmereUI._ModuleNS[ADDON_NAME]._iconShapeData
+end
 
-local function ApplyIconShape(f, selectedShape)
+EllesmereUI._ModuleNS[ADDON_NAME].ApplyIconShape = function(f, selectedShape)
     if not (f and f._icon) then return end
     local p = db and db.profile.display
     local shape = selectedShape or (p and p.iconShape) or "none"
-    local shapeData = ICON_SHAPES[shape]
+    local shapeData
+    if shape ~= "none" and shape ~= "cropped" then
+        shapeData = EllesmereUI._ModuleNS[ADDON_NAME].GetIconShapeData()[shape]
+    end
     local maskPath = shapeData and shapeData.mask
     local PP = EllesmereUI and EllesmereUI.PP
     -- New icons already have the module's default texcoords and solid border.
@@ -2102,7 +2119,7 @@ local function ApplyIconShape(f, selectedShape)
     f._shapeBorder:SetVertexColor(0, 0, 0, 1)
     f._shapeBorder:Show()
 end
-_G._EABR_ApplyIconShape = ApplyIconShape
+_G._EABR_ApplyIconShape = EllesmereUI._ModuleNS[ADDON_NAME].ApplyIconShape
 
 -- Talent icon state moved to EllesmereUIABR_TalentReminders.lua
 
@@ -2164,7 +2181,7 @@ local function GetOrCreateCombatIcon(index)
     EABR.AttachIconHover(f)
     EABR.AttachIconTooltip(f)
     EABR.AttachCombatClickHint(f)
-    ApplyIconShape(f)
+    _G._EABR_ApplyIconShape(f)
     combatIconPool[index] = f
     return f
 end
@@ -2271,7 +2288,7 @@ local function GetOrCreateCursorIcon(index)
     EABR.AttachIconHover(f)
     EABR.AttachIconTooltip(f)
     EABR.AttachCombatClickHint(f)
-    ApplyIconShape(f)
+    _G._EABR_ApplyIconShape(f)
     cursorIconPool[index] = f
     return f
 end
@@ -2421,7 +2438,7 @@ function EABR.EnsureProviderCastButton()
     EABR.CreateIconBagCountOverlay(btn)
     EABR.AttachIconHover(btn)
     EABR.AttachIconTooltip(btn)
-    ApplyIconShape(btn)
+    _G._EABR_ApplyIconShape(btn)
     btn:Show()
     EABR._providerCastBtn = btn
     EABR._providerCastVisible = false
@@ -2915,7 +2932,7 @@ local function GetOrCreateIcon(index)
     EABR.CreateIconBagCountOverlay(btn)
     EABR.AttachIconHover(btn)
     EABR.AttachIconTooltip(btn)
-    ApplyIconShape(btn)
+    _G._EABR_ApplyIconShape(btn)
 
     iconPool[index] = btn
     return btn
@@ -4328,7 +4345,7 @@ local function BeaconMakeIcon(spellID)
     SetABRFont(text, ResolveFontPath(), 11)
     text:SetTextColor(1, 1, 1, 1)
     f._text = text
-    ApplyIconShape(f)
+    _G._EABR_ApplyIconShape(f)
     return f
 end
 
@@ -4682,11 +4699,11 @@ function EABR:OnEnable()
     _G._EABR_Known = Known
     _G._EABR_ICON_SIZE = ICON_SIZE
     _G._EABR_ApplyIconShapes = function(shape)
-        for _, f in pairs(iconPool) do ApplyIconShape(f, shape) end
-        for _, f in pairs(combatIconPool) do ApplyIconShape(f, shape) end
-        for _, f in pairs(cursorIconPool) do ApplyIconShape(f, shape) end
-        if EABR._providerCastBtn then ApplyIconShape(EABR._providerCastBtn, shape) end
-        for _, f in pairs(_B.icons) do ApplyIconShape(f, shape) end
+        for _, f in pairs(iconPool) do _G._EABR_ApplyIconShape(f, shape) end
+        for _, f in pairs(combatIconPool) do _G._EABR_ApplyIconShape(f, shape) end
+        for _, f in pairs(cursorIconPool) do _G._EABR_ApplyIconShape(f, shape) end
+        if EABR._providerCastBtn then _G._EABR_ApplyIconShape(EABR._providerCastBtn, shape) end
+        for _, f in pairs(_B.icons) do _G._EABR_ApplyIconShape(f, shape) end
         if _G._EABR_TR_ApplyIconShapes then _G._EABR_TR_ApplyIconShapes(shape) end
     end
     _G._EABR_FLASK_ITEMS = FLASK_ITEMS
