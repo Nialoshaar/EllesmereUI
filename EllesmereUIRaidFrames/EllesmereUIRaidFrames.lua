@@ -10,11 +10,6 @@ if not (EllesmereUI and EllesmereUI._ModuleNS) then EUI_CLIENT_BLOCKED = true; r
 EllesmereUI._ModuleNS[ADDON_NAME] = ns  -- LOD options files read this module ns via the registry
 
 local ERF = EllesmereUI.Lite.NewAddon(ADDON_NAME)
--- The group headers (initialConfigFunction) and click-casting are secure
--- handlers end to end: the enable drain stands the module down where snippets
--- cannot compile (WoW Forever beta) and Blizzard's raid frames stay
--- (EllesmereUI.SecureSnippetsOK).
-ERF.requiresSecureSnippets = true
 ns.ERF = ERF
 _G.EllesmereUIRaidFrames = ERF
 
@@ -30,6 +25,22 @@ ns.EllesmereUI = EllesmereUI
 -- the standalone token rename, so detection is rename-immune and the
 -- "EllesmereUI" literal is only reached in the suite. On ns (200-local cap).
 ns.NICK_ADDON = ADDON_NAME:find("Standalone") and ADDON_NAME or "EllesmereUI"
+
+-- Keep subgroup identity separate from its visual slot. Invalid imported
+-- orders fall back to the original layout without touching SavedVariables.
+function ns._RFValidatedGroupOrder(order)
+    if type(order) ~= "table" or #order ~= 8 then return nil end
+    for i = 1, 8 do
+        local group = order[i]
+        if type(group) ~= "number" or group < 1 or group > 8 or group % 1 ~= 0 then
+            return nil
+        end
+        for previous = 1, i - 1 do
+            if order[previous] == group then return nil end
+        end
+    end
+    return order
+end
 
 -------------------------------------------------------------------------------
 --  Frame-level layout (offsets above the button / preview-frame level).
@@ -314,6 +325,7 @@ local defaults = {
         showSelfFirst    = true,
         showSelfLast     = false,
         mergeGroups      = false,
+        customGroupOrder = false,
         visibleGroups    = { true, true, true, true, true, true, false, false },
         hideEmptyGroups  = true,     -- collapse subgroups with no members (raid only, real frames)
         excludeHiddenGroupsFromSize = true, -- hidden Show Groups don't count toward the raid-size breakpoint
@@ -627,8 +639,8 @@ local defaults = {
         defDurTextOffsetX = 0,
         defDurTextOffsetY = 0,
 
-        -- Buff Manager "Simple Setup": isolated namespace sharing no keys with
-        -- bmIndicators or def*. Mirrors the Defensives & Externals controls but drives the simple grid of the spec's tracked buffs.
+        -- Buff Manager "Simple Setup" (retired display): kept only as legacy
+        -- input for the v2 conversion and spec-override banking; nothing renders it.
         bmSimple = {
             showBuffs       = true,
             ownOnly         = true,
@@ -975,20 +987,7 @@ end
 -------------------------------------------------------------------------------
 --  Font helper (matches UF/CDM pattern)
 -------------------------------------------------------------------------------
-local function GetOutline()
-    -- Slug-gated at the source (GetFontOutlineFlag) by the global "Never Show Slug" toggle.
-    return (EllesmereUI and EllesmereUI.GetFontOutlineFlag and EllesmereUI.GetFontOutlineFlag("raidFrames")) or ""
-end
-local function GetUseShadow()
-    return not EllesmereUI or not EllesmereUI.GetFontUseShadow or EllesmereUI.GetFontUseShadow("raidFrames")
-end
-local function ApplyFont(fs, size)
-    if not (fs and fs.SetFont) then return end
-    local fontPath = (EllesmereUI.GetFontPath and EllesmereUI.GetFontPath("raidFrames")) or "Fonts\\FRIZQT__.TTF"
-    local outline = GetOutline()
-    if EllesmereUI and EllesmereUI.PrimeFontShadow then EllesmereUI.PrimeFontShadow(fs, outline == "" and GetUseShadow()) end
-    fs:SetFont(fontPath, size, outline)
-end
+local function ApplyFont(fs, size) EllesmereUI.ApplyModuleFont(fs, nil, size, "raidFrames") end
 
 -------------------------------------------------------------------------------
 --  Health bar texture helpers
@@ -1019,14 +1018,12 @@ local function InitHealthBarTextures()
     table.insert(healthBarTextureOrder, 2, "blizzardRaidModern")
 
     -- Append SharedMedia textures after built-ins
-    if EllesmereUI.AppendSharedMediaTextures then
-        EllesmereUI.AppendSharedMediaTextures(
-            healthBarTextureNames,
-            healthBarTextureOrder,
-            nil,
-            healthBarTextures
-        )
-    end
+    EllesmereUI.AppendSharedMediaTextures(
+        healthBarTextureNames,
+        healthBarTextureOrder,
+        nil,
+        healthBarTextures
+    )
 end
 
 local function ResolveHealthTexture()
@@ -1273,7 +1270,7 @@ end
 -- Caller-handled keys (blizzardModern / maxHealthStripes) never reach this.
 function ns.ResolveAbsorbStyleTex(style, fallback)
     return ABSORB_STYLE_TEX[style]
-        or (EllesmereUI.ResolveTexturePath and EllesmereUI.ResolveTexturePath(healthBarTextures, style, fallback))
+        or (EllesmereUI.ResolveTexturePath(healthBarTextures, style, fallback))
         or fallback
 end
 
@@ -1310,13 +1307,6 @@ end
 function ns.RF_HealthPowerInset(s, powerH)
     if s and s.extendHealthBehindPower then return 0 end
     return powerH
-end
-
--- Live-render convenience: resolves the button's settings source (party/extra
--- proxies) before delegating to ns.RF_AnchorHost.
-function ns.RF_AnchorHostFor(d)
-    local s = d._isParty and ns._scaledPartyProxy or (d._isExtra and ns._scaledExtraProxy) or ns._scaledProfile
-    return ns.RF_AnchorHost(d.health, s)
 end
 
 -- Role for POWER-BAR gating. Effective role (EllesmereUI.UnitEffectiveRole):
@@ -1697,7 +1687,8 @@ ns.RF_NAME_WIDTH_FRACTION = 1.0
 -- name when unset, falling through to the next source. Every source gates itself entirely (no
 -- EUI-side toggle); pcall keeps a misbehaving external API from breaking name rendering.
 local function ResolveDisplayName(unit, applyCap, s)
-    local name = UnitName(unit) or ""
+    local name, surname = UnitName(unit)
+    name = name or ""
     local display
     if NSAPI and NSAPI.GetName then
         local ok, dn = pcall(NSAPI.GetName, NSAPI, name, "EUI")
@@ -1715,7 +1706,7 @@ local function ResolveDisplayName(unit, applyCap, s)
                and not (issecretvalue and issecretvalue(dn)) and dn ~= "" then
                 display = dn
             else
-                display = name
+                display = EllesmereUI.WithSurname(name, surname)
             end
         end
     end
@@ -1760,7 +1751,7 @@ local function ResolveDisplayName(unit, applyCap, s)
     end
     if not display then
         if Ambiguate then name = Ambiguate(name, "short") end
-        display = name
+        display = EllesmereUI.WithSurname(name, surname)
     end
     -- Cap only the in-frame name (applyCap), not the top name bar banner.
     if applyCap then display = ns.CapName(display, s) end
@@ -3348,7 +3339,7 @@ function ns.DispellableDebuffSize(s)
     return s.debuffSize or 18
 end
 
--- Mirrors the Buff Manager's AnchorSimpleGrid. opts (optional) overrides pos/grow/ox/oy/size for a
+-- Grid placement for debuff icons. opts (optional) overrides pos/grow/ox/oy/size for a
 -- sub-group (e.g. dispellable debuffs on their own anchor); spacing/wrap/perRow stay shared.
 function ns.DebuffGridPoint(s, idx0, total, opts)
     local pos    = (opts and opts.pos)  or s.debuffPosition or "bottomleft"
@@ -4215,7 +4206,7 @@ local function StyleButton(button)
         -- Aura icons enable mouse and propagate motion up to this button, so entering an icon fires
         -- its OnEnter (aura tooltip) then bubbles here, clobbering it with the unit tooltip. Bail
         -- when the cursor is over one of our aura icons (stashed _tipIID).
-        local foci = (GetMouseFoci and GetMouseFoci()) or (GetMouseFocus and { GetMouseFocus() })
+        local foci = GetMouseFoci()
         if foci then
             for _, mf in ipairs(foci) do
                 if mf ~= self and mf._tipIID ~= nil then return end
@@ -4650,7 +4641,7 @@ ns._UpdateCombatIcon = function(d, s, unit)
         end
         local colorMode = s.combatIndicatorColor or "custom"
         if colorMode == "classcolor" then
-            local cc = (classToken and EllesmereUI.GetClassColor and EllesmereUI.GetClassColor(classToken)) or { r = 1, g = 1, b = 1 }
+            local cc = (classToken and EllesmereUI.GetClassColor(classToken)) or { r = 1, g = 1, b = 1 }
             icon:SetVertexColor(cc.r, cc.g, cc.b, 1)
         else
             local cc = s.combatIndicatorCustomColor or { r = 1, g = 1, b = 1 }
@@ -6231,14 +6222,17 @@ FB.Anchor = function(owner)
                 if sub then occupied[sub] = true end
             end
             local first, last
-            for gi = 1, 8 do
+            local groupOrder = s.customGroupOrder and ns._RFValidatedGroupOrder(s.groupOrder)
+            for slot = 1, 8 do
+                local gi = groupOrder and groupOrder[slot] or slot
                 if vg[gi] ~= false and separatedHdrs[gi] and occupied[gi] then
                     if not first then first = separatedHdrs[gi] end
                     last = separatedHdrs[gi]
                 end
             end
             if not first then
-                for gi = 1, 8 do
+                for slot = 1, 8 do
+                    local gi = groupOrder and groupOrder[slot] or slot
                     if vg[gi] ~= false and separatedHdrs[gi] then
                         if not first then first = separatedHdrs[gi] end
                         last = separatedHdrs[gi]
@@ -6384,11 +6378,9 @@ FB.SetMoverShown = function(owner, show, frameName, labelText)
         mbg:SetAllPoints()
         mbg:SetColorTexture(0.075, 0.113, 0.141, 0.95)
         local ar, ag, ab = EllesmereUI.ResolveActiveAccent()
-        if EllesmereUI.MakeBorder then
-            EllesmereUI.MakeBorder(m, ar or 1, ag or 1, ab or 1, 0.6)
-        end
+        EllesmereUI.MakeBorder(m, ar or 1, ag or 1, ab or 1, 0.6)
         local lbl = m:CreateFontString(nil, "OVERLAY")
-        if EllesmereUI and EllesmereUI.PrimeFontShadow then EllesmereUI.PrimeFontShadow(lbl, true) end
+        EllesmereUI.PrimeFontShadow(lbl, true)
         lbl:SetFont(EllesmereUI.GetFontPath("raidFrames"), 11, "")
         lbl:SetTextColor(1, 1, 1, 0.75)
         lbl:SetPoint("CENTER", m, "CENTER")
@@ -8198,7 +8190,9 @@ ns._LayoutGroupsImpl = function()
         end
 
         local visSlot = 0  -- running counter for visible groups (collapses gaps)
-        for group = 1, 8 do
+        local groupOrder = s.customGroupOrder and ns._RFValidatedGroupOrder(s.groupOrder)
+        for slot = 1, 8 do
+            local group = groupOrder and groupOrder[slot] or slot
             local hdr = separatedHdrs[group]
             if hdr then
                 if vg[group] == false or (occupied and not occupied[group]) then
@@ -8533,39 +8527,37 @@ ns._allButtons = allButtons
 -- party override (party_healthColorMode, present only when the party color
 -- section is decoupled) flips the same way. db is set at PLAYER_LOGIN; the
 -- closures read it lazily.
-if EllesmereUI.RegisterDarkModeToggle then
-    EllesmereUI.RegisterDarkModeToggle({
-        id = "raidFrames",
-        isOn = function()
-            return (db and db.profile and db.profile.healthColorMode == "dark") or false
-        end,
-        setOn = function(on)
-            if not (db and db.profile) then return end
-            local p = db.profile
-            if on then
-                if p.healthColorMode ~= "dark" then
-                    p._darkPrevHealthColorMode = p.healthColorMode or "class"
-                    p.healthColorMode = "dark"
-                end
-                if rawget(p, "party_healthColorMode") ~= nil and p.party_healthColorMode ~= "dark" then
-                    p._darkPrevPartyHealthColorMode = p.party_healthColorMode
-                    p.party_healthColorMode = "dark"
-                end
-            else
-                if p.healthColorMode == "dark" then
-                    p.healthColorMode = p._darkPrevHealthColorMode or "class"
-                end
-                p._darkPrevHealthColorMode = nil
-                if rawget(p, "party_healthColorMode") == "dark" then
-                    p.party_healthColorMode = p._darkPrevPartyHealthColorMode or "class"
-                end
-                p._darkPrevPartyHealthColorMode = nil
+EllesmereUI.RegisterDarkModeToggle({
+    id = "raidFrames",
+    isOn = function()
+        return (db and db.profile and db.profile.healthColorMode == "dark") or false
+    end,
+    setOn = function(on)
+        if not (db and db.profile) then return end
+        local p = db.profile
+        if on then
+            if p.healthColorMode ~= "dark" then
+                p._darkPrevHealthColorMode = p.healthColorMode or "class"
+                p.healthColorMode = "dark"
             end
-            if ns.ReloadFrames then ns.ReloadFrames() end
-            if ns.ReloadPartyFrames then ns.ReloadPartyFrames() end
-        end,
-    })
-end
+            if rawget(p, "party_healthColorMode") ~= nil and p.party_healthColorMode ~= "dark" then
+                p._darkPrevPartyHealthColorMode = p.party_healthColorMode
+                p.party_healthColorMode = "dark"
+            end
+        else
+            if p.healthColorMode == "dark" then
+                p.healthColorMode = p._darkPrevHealthColorMode or "class"
+            end
+            p._darkPrevHealthColorMode = nil
+            if rawget(p, "party_healthColorMode") == "dark" then
+                p.party_healthColorMode = p._darkPrevPartyHealthColorMode or "class"
+            end
+            p._darkPrevPartyHealthColorMode = nil
+        end
+        if ns.ReloadFrames then ns.ReloadFrames() end
+        if ns.ReloadPartyFrames then ns.ReloadPartyFrames() end
+    end,
+})
 
 -- Lightweight resize: only changes button/health/power dimensions + layout.
 -- No texture, border, font, or anchor changes. Safe for slider hot path.
@@ -9270,7 +9262,6 @@ local function GhostAuraCheck()
                     if d.rfcBmChain then
                         for _, cc in pairs(d.rfcBmChain) do cc:UpdateAllAuras() end
                     end
-                    if d.rfcBmSimple then d.rfcBmSimple:UpdateAllAuras() end
                     if d.dmTiles then
                         for _, c in pairs(d.dmTiles) do c:UpdateAllAuras() end
                     end
@@ -11542,8 +11533,8 @@ do
         local powerMode  = hm.colorMode == "power"
         local cc = hm.color
         local cr, cg, cb = (cc and cc.r) or 1, (cc and cc.g) or 1, (cc and cc.b) or 1
-        local fontPath = (EllesmereUI.GetFontPath and EllesmereUI.GetFontPath("raidFrames")) or "Fonts\\FRIZQT__.TTF"
-        local outline = (EllesmereUI.GetFontOutlineFlag and EllesmereUI.GetFontOutlineFlag("raidFrames")) or "OUTLINE"
+        local fontPath = (EllesmereUI.GetFontPath("raidFrames")) or "Fonts\\FRIZQT__.TTF"
+        local outline = (EllesmereUI.GetFontOutlineFlag("raidFrames")) or "OUTLINE"
         local rowH = size + spacing
         local map = {}
         local count, widest = 0, 40
@@ -11578,7 +11569,7 @@ do
                         token = select(2, UnitClass(unit))
                         if issecretvalue and issecretvalue(token) then token = nil end
                     end
-                    local col = token and ((EllesmereUI.GetClassColor and EllesmereUI.GetClassColor(token))
+                    local col = token and ((EllesmereUI.GetClassColor(token))
                         or (RAID_CLASS_COLORS and RAID_CLASS_COLORS[token]))
                     if col then nr, ng, nb = col.r, col.g, col.b end
                 elseif powerMode then
@@ -11589,7 +11580,7 @@ do
                     nameFS:SetText(fakeName)
                 else
                     -- Display sink: a secret name renders raw, never inspected.
-                    nameFS:SetFormattedText("%s", (unit and UnitName(unit)) or "")
+                    nameFS:SetFormattedText("%s", (unit and EllesmereUI.WithSurname(UnitName(unit))) or "")
                 end
                 nameFS:Show()
                 local w = nameFS:GetStringWidth()
@@ -11828,7 +11819,6 @@ do
 
     function ns._RebuildPvOverlay()
         local active = (db.profile.previewMode == "real")
-            and EllesmereUI.SpecOverrides_ViewActive
             and EllesmereUI.SpecOverrides_ViewActive()
             and EllesmereUI.SpecOverrides_PeekEffectiveValues
         local flat, specSrc, condSrc
@@ -12071,7 +12061,7 @@ local function PvAuraApply(frameIndex, auraType, slotIndex)
         if showDurText and dtColor then
             local cdText = icon._cooldown.GetCountdownFontString and icon._cooldown:GetCountdownFontString()
             if cdText then
-                local fontPath = (EllesmereUI.GetFontPath and EllesmereUI.GetFontPath("raidFrames")) or "Fonts\\FRIZQT__.TTF"
+                local fontPath = (EllesmereUI.GetFontPath("raidFrames")) or "Fonts\\FRIZQT__.TTF"
                 EllesmereUI.ApplyIconTextFont(cdText, fontPath, dtSize, "raidFrames")
                 cdText:SetTextColor(dtColor.r, dtColor.g, dtColor.b)
                 cdText:ClearAllPoints()
@@ -12263,7 +12253,7 @@ local function PvAuraTick()
                             local cdText = icon._cooldown.GetCountdownFontString and icon._cooldown:GetCountdownFontString()
                             if cdText then
                                 local dtc = s2.debuffDurTextColor or { r = 1, g = 1, b = 1 }
-                                local fp = (EllesmereUI.GetFontPath and EllesmereUI.GetFontPath("raidFrames")) or "Fonts\\FRIZQT__.TTF"
+                                local fp = (EllesmereUI.GetFontPath("raidFrames")) or "Fonts\\FRIZQT__.TTF"
                                 EllesmereUI.ApplyIconTextFont(cdText, fp, s2.debuffDurTextSize or 8, "raidFrames")
                                 cdText:SetTextColor(dtc.r, dtc.g, dtc.b)
                                 cdText:ClearAllPoints()
@@ -12360,7 +12350,7 @@ local function PvAuraTick()
                     local ic = f and f._pvDebuffs and f._pvDebuffs[info.slot]
                     if ic and ic._count then
                         local stc = s2.debuffStacksTextColor or { r = 1, g = 1, b = 1 }
-                        local fp = (EllesmereUI.GetFontPath and EllesmereUI.GetFontPath("raidFrames")) or "Fonts\\FRIZQT__.TTF"
+                        local fp = (EllesmereUI.GetFontPath("raidFrames")) or "Fonts\\FRIZQT__.TTF"
                         EllesmereUI.ApplyIconTextFont(ic._count, fp, s2.debuffStacksTextSize or 8, "raidFrames")
                         ic._count:SetTextColor(stc.r, stc.g, stc.b)
                         ic._count:ClearAllPoints()
@@ -12662,7 +12652,7 @@ ns.RefreshPvAuraVisuals = function()
     local _PP = EllesmereUI.PanelPP or EllesmereUI.PP
     local _pvFrames = PvFrames()
     local _reanchor = ns._PvAuraReanchorFrame
-    local fp = (EllesmereUI.GetFontPath and EllesmereUI.GetFontPath("raidFrames")) or "Fonts\\FRIZQT__.TTF"
+    local fp = (EllesmereUI.GetFontPath("raidFrames")) or "Fonts\\FRIZQT__.TTF"
 
     local dbZ = s2.debuffIconZoom or 0.08
     local defZ = s2.defIconZoom or 0.08
@@ -13311,7 +13301,7 @@ local function CreatePreviewFrame(index, party)
         local countCarrier = CreateFrame("Frame", nil, di)
         countCarrier:SetAllPoints()
         countCarrier:SetFrameLevel(math.max(cd:GetFrameLevel() + 2, dbdr:GetFrameLevel() + 1))
-        local fpInit = (EllesmereUI.GetFontPath and EllesmereUI.GetFontPath("raidFrames")) or "Fonts\\FRIZQT__.TTF"
+        local fpInit = (EllesmereUI.GetFontPath("raidFrames")) or "Fonts\\FRIZQT__.TTF"
         local countFS = countCarrier:CreateFontString(nil, "OVERLAY")
         countFS:SetPoint("BOTTOMRIGHT", di, "BOTTOMRIGHT", 1, -1)
         EllesmereUI.ApplyIconTextFont(countFS, fpInit, 8, "raidFrames")
@@ -14246,7 +14236,7 @@ local function ApplyPreviewData(f, index)
             f._power:SetValue(pwPct)
             f._powerPct = pwPct
             local pwToken = EllesmereUI.CLASS_POWER_MAP[classToken] or "MANA"
-            local pc = EllesmereUI.GetPowerColor and EllesmereUI.GetPowerColor(pwToken)
+            local pc = EllesmereUI.GetPowerColor(pwToken)
             if pc then
                 f._power:SetStatusBarColor(pc.r, pc.g, pc.b, 1)
             else
@@ -15215,11 +15205,28 @@ local function RefreshPreview()
     -- Hide all preview frames first
     for _, f in ipairs(previewFrames) do f:Hide() end
 
+    -- The 20-player preview keeps subgroup identities while moving each
+    -- group's five frames to its visual slot.
+    local groupOrder = s.customGroupOrder and not s.mergeGroups
+        and ns._RFValidatedGroupOrder(s.groupOrder)
+    local previewSlotByGroup
+    if groupOrder then
+        previewSlotByGroup = {}
+        local previewSlot = 0
+        for _, group in ipairs(groupOrder) do
+            if group <= 4 then
+                previewSlotByGroup[group] = previewSlot
+                previewSlot = previewSlot + 1
+            end
+        end
+    end
+
     -- Place 20 preview frames: 4 groups x 5 units
     local frameIdx = 0
     for g = 0, 3 do
-        local gx = rawGX[g] - minGX
-        local gy = rawGY[g] - maxGY
+        local displaySlot = previewSlotByGroup and previewSlotByGroup[g + 1] or g
+        local gx = rawGX[displaySlot] - minGX
+        local gy = rawGY[displaySlot] - maxGY
         local firstFrame
         for u = 0, 4 do
             frameIdx = frameIdx + 1
@@ -15448,7 +15455,7 @@ local function ShowPreview()
     -- preview parent with nothing left to restore them -- the root cause of "frames
     -- vanish after closing options". Reparenting secure-header containers is also
     -- blocked/taint-prone in combat, so bail there too.
-    if not ns._testMode and not (EllesmereUI.IsShown and EllesmereUI:IsShown()) then return end
+    if not ns._testMode and not (EllesmereUI:IsShown()) then return end
     if InCombatLockdown() then return end
     -- Kill any active size preview
     if ns._sizePreviewTier then
@@ -15712,7 +15719,7 @@ ns._ShowSizePreview = function(tier)
     end
 
     -- Font for the unit-number label
-    local fontPath = (EllesmereUI.GetFontPath and EllesmereUI.GetFontPath("raidFrames")) or "Fonts\\FRIZQT__.TTF"
+    local fontPath = (EllesmereUI.GetFontPath("raidFrames")) or "Fonts\\FRIZQT__.TTF"
     local nameSize = s.nameSize or 10
 
     -- Normalize origin over MOVER_GROUPS (matching real LayoutGroups container)
@@ -15722,6 +15729,20 @@ ns._ShowSizePreview = function(tier)
         local gy = g * stepY
         if gx < minX then minX = gx end
         if gy > maxY then maxY = gy end
+    end
+
+    local groupOrder = s.customGroupOrder and not s.mergeGroups
+        and ns._RFValidatedGroupOrder(s.groupOrder)
+    local sizePreviewSlotByGroup
+    if groupOrder then
+        sizePreviewSlotByGroup = {}
+        local sizePreviewSlot = 0
+        for _, group in ipairs(groupOrder) do
+            if group <= numGroups then
+                sizePreviewSlotByGroup[group] = sizePreviewSlot
+                sizePreviewSlot = sizePreviewSlot + 1
+            end
+        end
     end
 
     for i = 1, frameCount do
@@ -15816,11 +15837,7 @@ ns._ShowSizePreview = function(tier)
 
         -- Centered unit number.
         if f._nameText then
-            local nameOutline = GetOutline()
-            if EllesmereUI and EllesmereUI.PrimeFontShadow then
-                EllesmereUI.PrimeFontShadow(f._nameText, nameOutline == "" and GetUseShadow())
-            end
-            f._nameText:SetFont(fontPath, math.max(11, nameSize), nameOutline)
+            EllesmereUI.ApplyModuleFont(f._nameText, fontPath, math.max(11, nameSize), "raidFrames")
             f._nameText:SetText(tostring(i))
             f._nameText:SetTextColor(0.9, 0.9, 0.9)
             f._nameText:SetWidth(bw)
@@ -15834,8 +15851,9 @@ ns._ShowSizePreview = function(tier)
         local unitIdx  = (i - 1) % perGroup
 
         -- Group origin (TOPLEFT-relative, adjusted for growth direction)
-        local gx = groupIdx * stepX - minX
-        local gy = groupIdx * stepY - maxY
+        local displaySlot = sizePreviewSlotByGroup and sizePreviewSlotByGroup[groupIdx + 1] or groupIdx
+        local gx = displaySlot * stepX - minX
+        local gy = displaySlot * stepY - maxY
 
         -- Unit offset within group (TOPLEFT-normalized, matching RefreshPreview)
         local ux = unitIdx * uStepX - minUX
@@ -16357,7 +16375,7 @@ local function ShowPartyPreview()
     -- See ShowPreview: never engage the preview (which reparents the real
     -- containers under a hidden frame) unless the options window is open and we
     -- are out of combat. Guards against deferred post-close ShowPartyPreview.
-    if not ns._testMode and not (EllesmereUI.IsShown and EllesmereUI:IsShown()) then return end
+    if not ns._testMode and not (EllesmereUI:IsShown()) then return end
     if InCombatLockdown() then return end
     -- Kill any active size preview
     if ns._sizePreviewTier then
