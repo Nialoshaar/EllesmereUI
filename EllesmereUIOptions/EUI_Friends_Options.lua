@@ -89,6 +89,7 @@ initFrame:SetScript("OnEvent", function(self)
         blizzard = "Blizzard",
         modern   = "Modern",
         pixel    = "Pixel",
+        pixelsComic = "Pixels Comic",
         glyph    = "Glyph",
         arcade   = "Arcade",
         legend   = "Legend",
@@ -96,7 +97,7 @@ initFrame:SetScript("OnEvent", function(self)
         runic    = "Runic",
     }
     local ICON_STYLE_ORDER = {
-        "blizzard", "modern", "pixel", "glyph",
+        "blizzard", "modern", "pixel", "pixelsComic", "glyph",
         "arcade", "legend", "midnight", "runic",
     }
 

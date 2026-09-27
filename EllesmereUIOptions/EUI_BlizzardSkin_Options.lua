@@ -164,7 +164,7 @@ initFrame:SetScript("OnEvent", function(self)
             BorderOffsetRow("popupMenu",popupOff)
             local buttons
             buttons,h=W:DualRow(parent,y,
-                {type="dropdown",text="Button Border Style",disabled=popupOff,values=texValues,order=texOrder,getValue=function() return EllesmereUIDB.popupMenuButtonBorderTexture or "solid" end,setValue=function(v) EllesmereUIDB.popupMenuButtonBorderTexture=v; EllesmereUIDB.popupMenuButtonBorderOffsetX=nil; EllesmereUIDB.popupMenuButtonBorderOffsetY=nil; if EllesmereUIDB.popupMenuButtonBorderThicknessPx then EllesmereUIDB.popupMenuButtonBorderThicknessPx=false end; EllesmereUI:RefreshPage(true) end},
+                {type="dropdown",text="Button Border Style",disabled=popupOff,values=texValues,order=texOrder,getValue=function() return EllesmereUIDB.popupMenuButtonBorderTexture or "solid" end,setValue=function(v) EllesmereUIDB.popupMenuButtonBorderTexture=v; local sc=EllesmereUI.GetBorderSelectColor(v); if sc then EllesmereUIDB.popupMenuButtonBorderColor=sc end; EllesmereUIDB.popupMenuButtonBorderOffsetX=nil; EllesmereUIDB.popupMenuButtonBorderOffsetY=nil; if EllesmereUIDB.popupMenuButtonBorderThicknessPx then EllesmereUIDB.popupMenuButtonBorderThicknessPx=false end; EllesmereUI:RefreshPage(true) end},
                 BorderSizeSlider("popupMenuButton","Button Border Size",popupOff)); y=y-h
             AttachBorderControls(buttons,"popupMenuButton",popupOff)
             BorderOffsetRow("popupMenuButton",popupOff)
@@ -833,11 +833,12 @@ initFrame:SetScript("OnEvent", function(self)
         end
         -- Stock styles only: "Blizzard UI Color" (on unless turned off) paints
         -- every stat category in Blizzard's yellow, so the colour swatches
-        -- stand down while it is on.
+        -- stand down while it is on. On WoW Forever a stock style is
+        -- Blizzard's own sheet, colours included, so they always stand down.
         local function blizzColorsOn()
             local bs = EllesmereUI.BlizzStyle
             return bs and bs.Get("charsheet")
-                and not (EllesmereUIDB and EllesmereUIDB.charSheetBlizzColors == false)
+                and (EllesmereUI.IS_FOREVER or not (EllesmereUIDB and EllesmereUIDB.charSheetBlizzColors == false))
         end
 
         local function AttachDisabledOverlay(target)
@@ -928,6 +929,14 @@ initFrame:SetScript("OnEvent", function(self)
             if BS then BS.Gate("charsheet", cfg) end
             return cfg
         end
+        -- WoW Forever: Blizzard Style and Classic WoW UI keep Blizzard's sheet
+        -- untouched, so the slot text rows stand down there; the WoW Forever
+        -- style keeps the slot text, so they stay live under it.
+        local fvStock = EllesmereUI.IS_FOREVER and BS and BS.Get("charsheet") and not BS.Forever("charsheet") or false
+        local function fvGate(cfg)
+            if fvStock then csGate(cfg) end
+            return cfg
+        end
 
         ---------------------------------------------------------------------------
         --  CORE OPTIONS
@@ -963,7 +972,7 @@ initFrame:SetScript("OnEvent", function(self)
         -- WoW Forever has no upgrade tracks: the same key shows each item's
         -- main and secondary stat (or its armor when it has none) and each
         -- weapon's damage per second there.
-        local upgradeTrackCfg = { type="toggle", text=EllesmereUI.IS_FOREVER and "Show Item Stats" or "Upgrade Track",
+        local upgradeTrackCfg = fvGate({ type="toggle", text=EllesmereUI.IS_FOREVER and "Show Item Stats" or "Upgrade Track",
               tooltip=EllesmereUI.IS_FOREVER and "Show each item's main and secondary stat (or its armor) and each weapon's damage per second beside its slot."
                   or "Toggle visibility of upgrade track text on the character sheet.",
               getValue=function() return EllesmereUIDB and EllesmereUIDB.showUpgradeTrack ~= false end,
@@ -971,7 +980,7 @@ initFrame:SetScript("OnEvent", function(self)
                   if not EllesmereUIDB then EllesmereUIDB = {} end
                   EllesmereUIDB.showUpgradeTrack = v
                   if EllesmereUI._refreshUpgradeTrackVisibility then EllesmereUI._refreshUpgradeTrackVisibility() end
-              end }
+              end })
         local showGemsCfg = csGate({ type="toggle", text="Show Gems",
               tooltip="Toggle visibility of gem icons inside equipment slots.",
               getValue=function() return EllesmereUIDB and EllesmereUIDB.showGems ~= false end,
@@ -1015,7 +1024,7 @@ initFrame:SetScript("OnEvent", function(self)
 
         local enchGemRow
         enchGemRow, h = W:DualRow(parent, y,
-            { type="toggle", text="Enchants",
+            fvGate({ type="toggle", text="Enchants",
               tooltip="Toggle visibility of enchant text on the character sheet.",
               getValue=function() return EllesmereUIDB and EllesmereUIDB.showEnchants ~= false end,
               setValue=function(v)
@@ -1025,7 +1034,7 @@ initFrame:SetScript("OnEvent", function(self)
                   -- Refresh so the inline Enchant Settings cog updates its
                   -- disabled state in lockstep with this toggle.
                   EllesmereUI:RefreshPage()
-              end },
+              end }),
             { type="toggle", text="Show PvP Item Level",
               tooltip="Display your PvP item level above the Mythic+ rating on the character sheet.",
               getValue=function() return EllesmereUIDB and EllesmereUIDB.showPvpItemLevel or false end,
@@ -1043,8 +1052,9 @@ initFrame:SetScript("OnEvent", function(self)
         if not EllesmereUI._prebuilding then
             local rgn = enchGemRow._leftRegion
             EllesmereUI.BuildInlineCog(rgn, {
-                disabled = function() return not (EllesmereUIDB and EllesmereUIDB.showEnchants ~= false) end,
-                disabledTooltip = "Enchants",
+                disabled = function() return fvStock or not (EllesmereUIDB and EllesmereUIDB.showEnchants ~= false) end,
+                disabledTooltip = fvStock and BS.Label("charsheet") or "Enchants",
+                requireState = fvStock and "disabled" or nil,
                 title = "Enchant Settings",
                 rows = {
                     { type="toggle", label="Show Enchant Names",
@@ -1055,8 +1065,10 @@ initFrame:SetScript("OnEvent", function(self)
                           EllesmereUIDB.charSheetEnchantNames = v
                           if EllesmereUI._refreshCharSheetSlotLabels then EllesmereUI._refreshCharSheetSlotLabels() end
                       end },
+                    -- The WoW Forever style always shows the enchant as text,
+                    -- so its size applies with or without Show Enchant Names there.
                     { type="slider", label="Text Size", min=6, max=20, step=1,
-                      disabled=function() return not (EllesmereUIDB and EllesmereUIDB.charSheetEnchantNames) end,
+                      disabled=function() return not (EllesmereUI.IS_FOREVER and BS and BS.Forever("charsheet")) and not (EllesmereUIDB and EllesmereUIDB.charSheetEnchantNames) end,
                       disabledTooltip="Show Enchant Names",
                       get=function() return (EllesmereUIDB and EllesmereUIDB.charSheetEnchantSize) or 9 end,
                       set=function(v)
@@ -1224,8 +1236,10 @@ initFrame:SetScript("OnEvent", function(self)
 
         -- Stock styles only: "Blizzard UI Color" opens the section, paired with
         -- Show Diminishing Returns (so Show PvP takes the odd last slot). On
-        -- unless turned off; the EllesmereUI look never builds or reads it.
-        local stockCS = BS and BS.Get("charsheet")
+        -- unless turned off; the EllesmereUI look never builds or reads it,
+        -- and neither does WoW Forever (its sheet has no EllesmereUI stats
+        -- section to tint).
+        local stockCS = BS and BS.Get("charsheet") and not EllesmereUI.IS_FOREVER
         if stockCS then
             local colorRow
             colorRow, h = W:DualRow(parent, y,
@@ -2834,7 +2848,14 @@ initFrame:SetScript("OnEvent", function(self)
         local justifyValues = { LEFT = "Left", CENTER = "Center", RIGHT = "Right" }
         local justifyOrder  = { "LEFT", "CENTER", "RIGHT" }
 
+        -- The bar art is chosen on Global Settings > Style ("Skyriding HUD")
+        -- and latched for the session like every other module's style, so
+        -- the rows below are laid out for the look the HUD renders.
+        local BS = EllesmereUI.BlizzStyle
+        local edrStyle = BS.Active("dragonriding")
+
         _, h = W:SectionHeader(parent, "GENERAL", y); y = y - h
+        y = BS.Note(parent, y, "dragonriding")
         _, h = W:DualRow(parent, y,
             { type = "toggle", text = "Enable Dragon Riding Bar",
               getValue = function() return EDR_Cfg("enabled") == true end,
@@ -2853,6 +2874,98 @@ initFrame:SetScript("OnEvent", function(self)
         -- Everything below Row 1 (the rest of GENERAL plus the LAYOUT and
         -- SPEED BAR sections) is HIDDEN entirely while the bar is off.
         if EDR_Cfg("enabled") == true then
+        local function EDR_IsGems() return EDR_Cfg("vigorStyle") == "gems" end
+        local function EDR_ShowSpeed() return EDR_Cfg("showSpeed") ~= false end
+        local function EDR_ShowSW() return EDR_Cfg("showSecondWind") ~= false end
+        local function EDR_WSOff() return EDR_Cfg("showWhirlingSurge") == false end
+        -- The icon's automatic size, in the Icon Size slider's range.
+        local function EDR_AutoIconSize()
+            local v = math.floor(((ns.edrIconSize and ns.edrIconSize()) or 34) + 0.5)
+            return math.max(16, math.min(80, v))
+        end
+
+        -- The parts the HUD shows. The speed bar's and Second Wind's own
+        -- rows exist only while they are shown, so those two rebuild the page.
+        _, h = W:DualRow(parent, y,
+            { type = "toggle", text = "Show Speed Bar",
+              getValue = EDR_ShowSpeed,
+              setValue = EllesmereUI.DependentSetValue(EDR_ShowSpeed,
+                  function(v) EDR_Set("showSpeed", v); EDR_Rebuild() end) },
+            { type = "toggle", text = "Show Second Wind",
+              getValue = EDR_ShowSW,
+              setValue = EllesmereUI.DependentSetValue(EDR_ShowSW,
+                  function(v) EDR_Set("showSecondWind", v); EDR_Rebuild() end) }
+        ); y = y - h
+        local wsRow
+        wsRow, h = W:DualRow(parent, y,
+            { type = "toggle", text = "Show Whirling Surge",
+              getValue = function() return not EDR_WSOff() end,
+              setValue = function(v) EDR_Set("showWhirlingSurge", v); EDR_Rebuild() end },
+            { type = "toggle", text = "Show Icon Cooldown Text",
+              disabled = EDR_WSOff, disabledTooltip = "Show Whirling Surge",
+              getValue = function() return EDR_Cfg("whirlingSurgeText") and EDR_Cfg("whirlingSurgeText").enabled ~= false end,
+              setValue = function(v) EDR_SetField("whirlingSurgeText", "enabled", v); EDR_Redraw() end }
+        ); y = y - h
+        -- Icon size: automatic (as tall as the bars) while Auto Size is on;
+        -- turning it off hands the slider the current automatic size.
+        if not EllesmereUI._prebuilding then
+            EllesmereUI.BuildInlineCog(wsRow._leftRegion, {
+                icon = EllesmereUI.RESIZE_ICON,
+                title = "Whirling Surge Icon",
+                disabled = EDR_WSOff, disabledTooltip = "Show Whirling Surge",
+                rows = {
+                    { type = "toggle", label = "Auto Size",
+                      tooltip = "Keeps the icon as tall as the bars.",
+                      get = function() return EDR_Cfg("iconSize") == nil end,
+                      set = function(v)
+                          if v then
+                              EDR_Set("iconSize", nil)
+                          else
+                              EDR_Set("iconSize", EDR_AutoIconSize())
+                          end
+                          EDR_Rebuild()
+                      end },
+                    { type = "slider", label = "Icon Size", min = 16, max = 80, step = 1,
+                      disabled = function() return EDR_Cfg("iconSize") == nil end,
+                      disabledTooltip = "Auto Size", requireState = "disabled",
+                      get = function() return EDR_Cfg("iconSize") or EDR_AutoIconSize() end,
+                      set = function(v) EDR_Set("iconSize", v); EDR_Rebuild() end },
+                },
+            })
+        end
+        -- Classic Gems replaces the charge row with Blizzard's original gems
+        -- (the page rebuilds: the Charge row and the gem scale follow it).
+        -- The cog holds the full-charge chime and, for the gems, their scale.
+        local vigorRow
+        vigorRow, h = W:DualRow(parent, y,
+            { type = "dropdown", text = "Vigor Style",
+              values = { bars = "Bars", gems = "Classic Gems" },
+              order  = { "bars", "gems" },
+              tooltip = "Classic Gems brings back Blizzard's original vigor display above the bars.",
+              getValue = function() return EDR_Cfg("vigorStyle") or "bars" end,
+              setValue = EllesmereUI.DependentSetValue(EDR_IsGems,
+                  function(v) EDR_Set("vigorStyle", v); EDR_Rebuild() end) },
+            { type = "slider", pixel = true, text = "Stack Spacing", min = 0, max = 10, step = 1,
+              -- The gap between pips: nothing to space with no pip row shown.
+              disabled = function() return EDR_IsGems() and not EDR_ShowSW() end,
+              disabledTooltip = "This option requires the Bars vigor style or Show Second Wind",
+              getValue = function() return EDR_Cfg("stackSpacing") end,
+              setValue = function(v) EDR_Set("stackSpacing", v); EDR_Rebuild() end }
+        ); y = y - h
+        if not EllesmereUI._prebuilding then
+            local vigorRows = {
+                { type = "toggle", label = "Play Sound on Full Charge",
+                  tooltip = "Plays Blizzard's vigor chime each time a skyriding charge fills.",
+                  get = function() return EDR_Cfg("chargeSound") == true end,
+                  set = function(v) EDR_Set("chargeSound", v) end },
+            }
+            if EDR_IsGems() then
+                vigorRows[2] = { type = "slider", label = "Gem Scale", min = 0.5, max = 2.0, step = 0.05,
+                    get = function() return EDR_Cfg("classicScale") or 1 end,
+                    set = function(v) EDR_Set("classicScale", v); EDR_Rebuild() end }
+            end
+            EllesmereUI.BuildInlineCog(vigorRow._leftRegion, { title = "Vigor", rows = vigorRows })
+        end
         _, h = W:DualRow(parent, y,
             { type = "slider", text = "Width", min = 80, max = 600, step = 1,
               getValue = function() return EDR_Cfg("width") end,
@@ -2861,25 +2974,32 @@ initFrame:SetScript("OnEvent", function(self)
               getValue = function() return EDR_Cfg("gap") end,
               setValue = function(v) EDR_Set("gap", v); EDR_Rebuild() end }
         ); y = y - h
-        _, h = W:DualRow(parent, y,
-            { type = "slider", pixel = true, text = "Stack Spacing", min = 0, max = 10, step = 1,
-              getValue = function() return EDR_Cfg("stackSpacing") end,
-              setValue = function(v) EDR_Set("stackSpacing", v); EDR_Rebuild() end },
-            { type = "toggle", text = "Show Icon Cooldown Text",
-              getValue = function() return EDR_Cfg("whirlingSurgeText") and EDR_Cfg("whirlingSurgeText").enabled ~= false end,
-              setValue = function(v) EDR_SetField("whirlingSurgeText", "enabled", v); EDR_Redraw() end }
-        ); y = y - h
+        -- Border Size: the EllesmereUI border and its colour on the
+        -- EllesmereUI look; under Classic WoW UI the slot sizes the vanilla
+        -- frame, as the Resource Bars' Border Size does; Blizzard Style's
+        -- panel has no size to set.
+        local borderCfg
+        if edrStyle == "classic" then
+            borderCfg = BS.ClassicBorderSizeCfg(
+                function() return EDR_Cfg("classicFrameSize") end,
+                function(v) EDR_Set("classicFrameSize", v); EDR_Rebuild() end)
+        else
+            borderCfg = BS.Gate("dragonriding",
+                { type = "slider", text = "Border Size", min = 0, max = 4, step = 1,
+                  getValue = function() return EDR_Cfg("borderThickness") or 0 end,
+                  setValue = function(v)
+                      EDR_Set("borderThickness", v); EDR_Redraw()
+                      EllesmereUI:RefreshPage()
+                  end })
+        end
         local borderRow
-        borderRow, h = W:DualRow(parent, y,
-            { type = "slider", text = "Border Size", min = 0, max = 4, step = 1,
-              getValue = function() return EDR_Cfg("borderThickness") or 0 end,
-              setValue = function(v) EDR_Set("borderThickness", v); EDR_Redraw() end },
+        borderRow, h = W:DualRow(parent, y, borderCfg,
             { type = "dropdown", text = "Bar Texture",
               values = edrTexValues, order = edrTexOrder,
               getValue = function() return EDR_Cfg("barTexture") or "none" end,
               setValue = function(v) EDR_Set("barTexture", v); EDR_Redraw() end }
         ); y = y - h
-        if not EllesmereUI._prebuilding then
+        if not EllesmereUI._prebuilding and edrStyle == "eui" then
             local rgn = borderRow._leftRegion
             local ctrl = rgn._control
             local swatch, updateSwatch = EllesmereUI.BuildColorSwatch(
@@ -2888,49 +3008,78 @@ initFrame:SetScript("OnEvent", function(self)
                 function(r, g, b, a) local p = EDR_Cfg("borderColor"); p.r, p.g, p.b, p.a = r, g, b, a; EDR_Redraw() end,
                 true, 20)
             EllesmereUI.PanelPP.Point(swatch, "RIGHT", ctrl, "LEFT", -8, 0)
-            EllesmereUI.RegisterWidgetRefresh(updateSwatch)
+            rgn._lastInline = swatch
+            -- No border to colour at size 0: dimmed and blocked.
+            local block = CreateFrame("Frame", nil, swatch)
+            block:SetAllPoints()
+            block:SetFrameLevel(swatch:GetFrameLevel() + 10)
+            block:EnableMouse(true)
+            block:SetScript("OnEnter", function()
+                EllesmereUI.ShowWidgetTooltip(swatch, EllesmereUI.DisabledTooltip("This option requires a Border Size above 0."))
+            end)
+            block:SetScript("OnLeave", function() EllesmereUI.HideWidgetTooltip() end)
+            local function UpdateSwatchState()
+                if (EDR_Cfg("borderThickness") or 0) == 0 then
+                    swatch:SetAlpha(0.3); block:Show()
+                else
+                    swatch:SetAlpha(1); block:Hide()
+                end
+            end
+            EllesmereUI.RegisterWidgetRefresh(function() updateSwatch(); UpdateSwatchState() end)
+            UpdateSwatchState()
         end
         _, h = W:Spacer(parent, y, 20); y = y - h
 
-        _, h = W:SectionHeader(parent, "LAYOUT", y); y = y - h
-        _, h = W:DualRow(parent, y,
-            { type = "slider", text = "Charge Height", min = 2, max = 24, step = 1,
-              getValue = function() return EDR_Cfg("skyridingHeight") end,
-              setValue = function(v) EDR_Set("skyridingHeight", v); EDR_Rebuild() end },
-            { type = "multiSwatch", text = "Charge Color",
-              swatches = {
-                { text = "Background",
-                  getValue = function() local t = EDR_Cfg("skyridingBg"); return t.r, t.g, t.b, t.a end,
-                  setValue = function(r, g, b, a) local p = EDR_Cfg("skyridingBg"); p.r, p.g, p.b, p.a = r, g, b, a; EDR_Redraw() end,
-                  hasAlpha = true,
-                  tooltip = "Background" },
-                { text = "Stacks",
-                  getValue = function() local t = EDR_Cfg("skyridingFilled"); return t.r, t.g, t.b, t.a end,
-                  setValue = function(r, g, b, a) local p = EDR_Cfg("skyridingFilled"); p.r, p.g, p.b, p.a = r, g, b, a; EDR_Redraw() end,
-                  hasAlpha = true,
-                  tooltip = "Charges" },
-              } }
-        ); y = y - h
-        _, h = W:DualRow(parent, y,
-            { type = "slider", text = "Second Wind Height", min = 2, max = 24, step = 1,
-              getValue = function() return EDR_Cfg("secondWindHeight") end,
-              setValue = function(v) EDR_Set("secondWindHeight", v); EDR_Rebuild() end },
-            { type = "multiSwatch", text = "Second Wind Color",
-              swatches = {
-                { text = "Background",
-                  getValue = function() local t = EDR_Cfg("secondWindBg"); return t.r, t.g, t.b, t.a end,
-                  setValue = function(r, g, b, a) local p = EDR_Cfg("secondWindBg"); p.r, p.g, p.b, p.a = r, g, b, a; EDR_Redraw() end,
-                  hasAlpha = true,
-                  tooltip = "Background" },
-                { text = "Second Wind",
-                  getValue = function() local t = EDR_Cfg("secondWindFilled"); return t.r, t.g, t.b, t.a end,
-                  setValue = function(r, g, b, a) local p = EDR_Cfg("secondWindFilled"); p.r, p.g, p.b, p.a = r, g, b, a; EDR_Redraw() end,
-                  hasAlpha = true,
-                  tooltip = "Second Wind" },
-              } }
-        ); y = y - h
-        _, h = W:Spacer(parent, y, 20); y = y - h
+        -- Charge and Second Wind rows, each only while its part is shown
+        -- (Classic Gems replaces the charge row); no section without either.
+        local showCharges, showSW = not EDR_IsGems(), EDR_ShowSW()
+        if showCharges or showSW then
+            _, h = W:SectionHeader(parent, "LAYOUT", y); y = y - h
+            if showCharges then
+                _, h = W:DualRow(parent, y,
+                    { type = "slider", text = "Charge Height", min = 2, max = 24, step = 1,
+                      getValue = function() return EDR_Cfg("skyridingHeight") end,
+                      setValue = function(v) EDR_Set("skyridingHeight", v); EDR_Rebuild() end },
+                    { type = "multiSwatch", text = "Charge Color",
+                      swatches = {
+                        { text = "Background",
+                          getValue = function() local t = EDR_Cfg("skyridingBg"); return t.r, t.g, t.b, t.a end,
+                          setValue = function(r, g, b, a) local p = EDR_Cfg("skyridingBg"); p.r, p.g, p.b, p.a = r, g, b, a; EDR_Redraw() end,
+                          hasAlpha = true,
+                          tooltip = "Background" },
+                        { text = "Stacks",
+                          getValue = function() local t = EDR_Cfg("skyridingFilled"); return t.r, t.g, t.b, t.a end,
+                          setValue = function(r, g, b, a) local p = EDR_Cfg("skyridingFilled"); p.r, p.g, p.b, p.a = r, g, b, a; EDR_Redraw() end,
+                          hasAlpha = true,
+                          tooltip = "Charges" },
+                      } }
+                ); y = y - h
+            end
+            if showSW then
+                _, h = W:DualRow(parent, y,
+                    { type = "slider", text = "Second Wind Height", min = 2, max = 24, step = 1,
+                      getValue = function() return EDR_Cfg("secondWindHeight") end,
+                      setValue = function(v) EDR_Set("secondWindHeight", v); EDR_Rebuild() end },
+                    { type = "multiSwatch", text = "Second Wind Color",
+                      swatches = {
+                        { text = "Background",
+                          getValue = function() local t = EDR_Cfg("secondWindBg"); return t.r, t.g, t.b, t.a end,
+                          setValue = function(r, g, b, a) local p = EDR_Cfg("secondWindBg"); p.r, p.g, p.b, p.a = r, g, b, a; EDR_Redraw() end,
+                          hasAlpha = true,
+                          tooltip = "Background" },
+                        { text = "Second Wind",
+                          getValue = function() local t = EDR_Cfg("secondWindFilled"); return t.r, t.g, t.b, t.a end,
+                          setValue = function(r, g, b, a) local p = EDR_Cfg("secondWindFilled"); p.r, p.g, p.b, p.a = r, g, b, a; EDR_Redraw() end,
+                          hasAlpha = true,
+                          tooltip = "Second Wind" },
+                      } }
+                ); y = y - h
+            end
+            _, h = W:Spacer(parent, y, 20); y = y - h
+        end
 
+        -- The speed bar's own section only while the bar is shown.
+        if EDR_ShowSpeed() then
         _, h = W:SectionHeader(parent, "SPEED BAR", y); y = y - h
         _, h = W:DualRow(parent, y,
             { type = "slider", text = "Height", min = 4, max = 40, step = 1,
@@ -2997,6 +3146,7 @@ initFrame:SetScript("OnEvent", function(self)
         end
         y = y - h
         _, h = W:Spacer(parent, y, 20); y = y - h
+        end -- Show Speed Bar
         end   -- close Dragon Riding hidden-while-disabled gate
 
         -- The wrapper is SetAllPoints-anchored, so SetHeight on it is inert;
@@ -3167,6 +3317,7 @@ initFrame:SetScript("OnEvent", function(self)
                     if prof then
                         prof.charSheetUseBlizzardStyle = nil
                         prof.charSheetUseClassicStyle = nil
+                        prof.charSheetUseForeverStyle = nil
                     end
                 end
                 EllesmereUIDB.charSheetUseBlizzardStyle = nil

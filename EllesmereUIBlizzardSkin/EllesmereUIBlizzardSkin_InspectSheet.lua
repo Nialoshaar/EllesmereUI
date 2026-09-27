@@ -9,7 +9,6 @@ local ADDON_NAME, ns = ...
 local skinned = false
 local GetItemInfo = C_Item.GetItemInfo
 local GetItemInfoInstant = C_Item.GetItemInfoInstant
-local GetItemQualityColor = C_Item.GetItemQualityColor
 
 -- External weak-keyed lookup table for frame state (prevents tainting Blizzard frames)
 local FFD = setmetatable({}, { __mode = "k" })
@@ -101,7 +100,7 @@ local function EUI_UpdateSlotStyle(slotName, slotID, textOverlayFrame, isRightCo
 
     -- Item level label (font size matches CharacterSheet)
     if itemLink and not GetFFD(slot).iLvlText and not skipLabels then
-        local ilvl = select(4, GetItemInfo(itemLink))
+        local _, _, quality, ilvl = GetItemInfo(itemLink)
         if ilvl and ilvl > 0 then
             local itemLevelSize = EllesmereUIDB and EllesmereUIDB.charSheetItemLevelSize or 11
             local ilvlText = GetFFD(slot).cachedILvlText or textOverlayFrame:CreateFontString(nil, "OVERLAY")
@@ -122,20 +121,7 @@ local function EUI_UpdateSlotStyle(slotName, slotID, textOverlayFrame, isRightCo
 
             ilvlText:SetText(ilvl)
 
-            local upgradeTrackText, upgradeTrackColor = EllesmereUI.GetUpgradeTrack(itemLink)
-            local displayColor
-            if EllesmereUIDB and EllesmereUIDB.charSheetItemLevelUseColor and EllesmereUIDB.charSheetItemLevelColor then
-                displayColor = EllesmereUIDB.charSheetItemLevelColor
-            elseif upgradeTrackText ~= "" and upgradeTrackColor then
-                displayColor = upgradeTrackColor
-            elseif (not EllesmereUIDB or EllesmereUIDB.charSheetColorItemLevel ~= false) then
-                local _, _, quality = GetItemInfo(itemLink)
-                if quality then
-                    local r, g, b = GetItemQualityColor(quality)
-                    displayColor = { r = r, g = g, b = b }
-                end
-            end
-            displayColor = displayColor or { r = 1, g = 1, b = 1 }
+            local displayColor = EllesmereUI.GetItemLevelColor(itemLink, quality)
             ilvlText:SetTextColor(displayColor.r, displayColor.g, displayColor.b, 0.9)
             ilvlText:Show()
 

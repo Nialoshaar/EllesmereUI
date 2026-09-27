@@ -181,12 +181,15 @@ local function TileNameplates(parent, y, W, tile)
         ["stripes-small-spread"] = "Small Spread Stripes",
         ["striped-tiny"] = "Tiny Stripes",
         ["clean"] = "Clean (Flat)",
+        ["pixelsShield"] = "Pixels Shield",
+        ["pixelsShieldEdge"] = "Pixels Shield Edge",
+        ["pixelsShieldFill"] = "Pixels Shield Fill",
     }
     local absorbStyleOrder = {
         "blizzard", "striped",
         "striped-v2", "striped-wide-v2", "stripes-medium",
         "stripes-small-close", "stripes-small-spread", "striped-tiny",
-        "clean",
+        "clean", "pixelsShield", "pixelsShieldEdge", "pixelsShieldFill",
     }
     AppendSmTail(absorbStyleValues, { absorbStyleOrder }, ns.healthBarTextureNames, ns.healthBarTextureOrder)
     absorbStyleValues._menuOpts = {
@@ -290,21 +293,11 @@ local function TileUnitFrames(parent, y, W, tile)
     -- UF's own dropdown copy drops the separator.
     local hbtValues, hbtOrder = CopyBarDD(ns.healthBarTextureNames, ns.healthBarTextureOrder, ns.healthBarTextures, true)
 
-    local absorbStyleValues = {
-        ["none"]            = "None",
-        ["striped"]         = "Striped",
-        ["stripedReversed"] = "Striped Reversed",
-        ["stripedThick"]    = "Striped Thick",
-        ["stripedThickR"]   = "Striped Thick Reversed",
-        ["clean"]           = "Clean (Flat)",
-        ["blizzard"]        = "Blizzard",
-        ["largeOutlinedStripes"]  = "Large Outlined Stripes",
-        ["largeOutlinedStripesR"] = "Large Outlined Stripes R",
-        ["largeStripes"]          = "Large Stripes",
-        ["largeStripesR"]         = "Large Stripes R",
-    }
-    local absorbStyleOrder = { "none", "striped", "stripedReversed", "stripedThick", "stripedThickR", "clean", "blizzard", "largeStripes", "largeStripesR" }
-    local healAbsorbStyleOrder = { "none", "striped", "stripedReversed", "stripedThick", "stripedThickR", "clean", "blizzard", "largeOutlinedStripes", "largeOutlinedStripesR", "largeStripes", "largeStripesR" }
+    -- The module's own lists (ns, EllesmereUIUnitFrames.lua), copied: the
+    -- SharedMedia tail is appended into them.
+    local absorbStyleValues = CopyTable(ns.ABSORB_STYLE_NAMES)
+    local absorbStyleOrder = CopyTable(ns.ABSORB_STYLE_ORDER)
+    local healAbsorbStyleOrder = CopyTable(ns.HEAL_ABSORB_STYLE_ORDER)
     AppendSmTail(absorbStyleValues, { absorbStyleOrder, healAbsorbStyleOrder }, ns.healthBarTextureNames, ns.healthBarTextureOrder)
     absorbStyleValues._menuOpts = {
         itemHeight = 28,
@@ -425,10 +418,13 @@ local function TileRaidFrames(parent, y, W, tile)
         ["largeStripesR"]         = "Large Stripes R",
         ["maxHealthStripes"]      = "Max Health Stripes",
         ["blizzardRaid"]          = "Blizzard Raid Bar",
+        ["pixelsShield"]          = "Pixels Shield",
+        ["pixelsShieldEdge"]      = "Pixels Shield Edge",
+        ["pixelsShieldFill"]      = "Pixels Shield Fill",
     }
-    local absorbStyleOrder = { "none", "blizzardModern", "striped", "stripedReversed", "stripedThick", "stripedThickR", "clean", "blizzard", "largeStripes", "largeStripesR", "blizzardRaid" }
-    local healAbsorbStyleOrder = { "none", "healBlizzModern", "striped", "stripedReversed", "stripedThick", "stripedThickR", "clean", "blizzard", "largeOutlinedStripes", "largeOutlinedStripesR", "largeStripes", "largeStripesR", "blizzardRaid" }
-    local maxHealthStyleOrder = { "none", "maxHealthStripes", "striped", "stripedReversed", "stripedThick", "stripedThickR", "clean", "blizzard", "healBlizzModern", "largeOutlinedStripes", "largeOutlinedStripesR", "largeStripes", "largeStripesR", "blizzardRaid" }
+    local absorbStyleOrder = { "none", "blizzardModern", "striped", "stripedReversed", "stripedThick", "stripedThickR", "clean", "blizzard", "largeStripes", "largeStripesR", "blizzardRaid", "pixelsShield", "pixelsShieldEdge", "pixelsShieldFill" }
+    local healAbsorbStyleOrder = { "none", "healBlizzModern", "striped", "stripedReversed", "stripedThick", "stripedThickR", "clean", "blizzard", "largeOutlinedStripes", "largeOutlinedStripesR", "largeStripes", "largeStripesR", "blizzardRaid", "pixelsShield" }
+    local maxHealthStyleOrder = { "none", "maxHealthStripes", "striped", "stripedReversed", "stripedThick", "stripedThickR", "clean", "blizzard", "healBlizzModern", "largeOutlinedStripes", "largeOutlinedStripesR", "largeStripes", "largeStripesR", "blizzardRaid", "pixelsShield" }
     AppendSmTail(absorbStyleValues, { absorbStyleOrder, healAbsorbStyleOrder, maxHealthStyleOrder }, ns.healthBarTextureNames, ns.healthBarTextureOrder)
     -- Default Blizz Frames' swatch draws its in-game compound (see the Raid Frames page).
     local modernSwatch = { base = { 0.776, 0.784, 1.0 }, tint = { 0.569, 0.588, 1.0 }, tile = true }

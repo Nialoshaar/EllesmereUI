@@ -1234,6 +1234,13 @@ local function BuildStyle(isBuff, cfg)
             style.dispelBorderPx = solidPx or borderSize
             style.dispelColorMap = dcMap
             style.dispelColorFP = dcFP
+            -- Textured Dispel Ring (per bar, opt-in): AuraKit draws the ring in
+            -- this bar's border art on the geometry its border lane draws that
+            -- border with (style.border), tinted by the engine from the palette
+            -- above. Solid, shaped or size-0 bars keep the strips/shape ring.
+            if cfg.borderDispelTextured == true and border and border.texture then
+                style.dispelBorderTexture = border.texture
+            end
         end
 
         -- Dispel-type indicator icon (AK's one-hot engine channel; default off).

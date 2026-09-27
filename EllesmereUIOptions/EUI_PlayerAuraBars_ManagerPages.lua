@@ -1149,9 +1149,7 @@ local function BuildDisplayFields(frame, fontPath, sy, cfg, apply, isBuff)
     ); sy = sy - hh
     do
         local rgn = styleRow._leftRegion
-        local cogBtn = EllesmereUI.BuildInlineCog(rgn, {
-            title = "Border Options",
-            rows = {
+        local borderCogRows = {
                 { type = "slider", label = "Shift X", min = -10, max = 10, step = 1,
                   get = function()
                       if cfg.borderTextureShiftX ~= nil then return cfg.borderTextureShiftX end
@@ -1175,7 +1173,17 @@ local function BuildDisplayFields(frame, fontPath, sy, cfg, apply, isBuff)
                 { type = "toggle", label = "Show Behind",
                   get = function() return cfg.borderBehind == true end,
                   set = function(v) cfg.borderBehind = v; apply() end },
-            },
+        }
+        -- Debuff bars only: their engine dispel ring can take this border's art.
+        if not isBuff then
+            borderCogRows[#borderCogRows + 1] = { type = "toggle", label = "Textured Dispel Ring",
+                tooltip = "Draws the dispel-colored ring in this border style's shape instead of flat lines.",
+                get = function() return cfg.borderDispelTextured == true end,
+                set = function(v) cfg.borderDispelTextured = v and true or false; apply() end }
+        end
+        local cogBtn = EllesmereUI.BuildInlineCog(rgn, {
+            title = "Border Options",
+            rows = borderCogRows,
         })
         local function UpdateBorderCogVisibility()
             if cogBtn then cogBtn:SetShown((cfg.borderTexture or "solid") ~= "solid"
@@ -1198,6 +1206,11 @@ local function BuildDisplayFields(frame, fontPath, sy, cfg, apply, isBuff)
             target.borderTextureShiftX = cfg.borderTextureShiftX
             target.borderTextureShiftY = cfg.borderTextureShiftY
             target.borderBehind = cfg.borderBehind
+            -- Textured Dispel Ring is a debuff-bar setting: it travels only from
+            -- a debuff bar to debuff bars.
+            if not isBuff and not entry.isBuff then
+                target.borderDispelTextured = cfg.borderDispelTextured
+            end
             target.borderR, target.borderG, target.borderB, target.borderA =
                 cfg.borderR, cfg.borderG, cfg.borderB, cfg.borderA
             -- Border textures and custom shape masks are mutually exclusive in
@@ -1226,7 +1239,9 @@ local function BuildDisplayFields(frame, fontPath, sy, cfg, apply, isBuff)
                         or c.borderTextureOffsetY ~= cfg.borderTextureOffsetY
                         or c.borderTextureShiftX ~= cfg.borderTextureShiftX
                         or c.borderTextureShiftY ~= cfg.borderTextureShiftY
-                        or (c.borderBehind == true) ~= (cfg.borderBehind == true) then
+                        or (c.borderBehind == true) ~= (cfg.borderBehind == true)
+                        or (not isBuff and not entry.isBuff
+                            and (c.borderDispelTextured == true) ~= (cfg.borderDispelTextured == true)) then
                         return false
                     end
                 end

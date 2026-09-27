@@ -279,7 +279,8 @@ initFrame:SetScript("OnEvent", function(self)
     ---------------------------------------------------------------------------
     local _edbPopout
     local function PreviewPopoutAllowed()
-        if not (EllesmereUI:IsShown()) then return false end
+        -- Folded to the mini window counts as closed (the page is off screen).
+        if not (EllesmereUI:IsShown()) or EllesmereUI._panelCollapsed then return false end
         -- nil = mid-build (page state not stamped yet); only a definite
         -- mismatch blocks, mirroring the TBB popout gate.
         local am = EllesmereUI:GetActiveModule()
@@ -324,6 +325,19 @@ initFrame:SetScript("OnEvent", function(self)
         _edbPopout = oc
         return oc
     end
+
+    -- The popout sits on UIParent beside the panel: it folds away with the panel
+    -- and comes back with it while a vertical bar is still the one selected (the
+    -- header's own condition for showing it).
+    EllesmereUI:RegisterOnCollapse(function(on)
+        if not _edbPopout then return end
+        if on then
+            _edbPopout:Hide()
+        elseif _edbPopout._strip and PreviewPopoutAllowed() then
+            local cfg = SelectedBar()
+            if cfg and cfg.orientation == "V" then _edbPopout:Show() end
+        end
+    end)
 
     _edbHeaderBuilder = function(hdr, hdrW)
         local PAD = EllesmereUI.CONTENT_PAD
@@ -2427,7 +2441,7 @@ initFrame:SetScript("OnEvent", function(self)
             -- to the block's themed default (ns.BlockIconDefault).
             -- Deliberately absent: crests. Its icons are inline |T|t escapes
             -- inside one FontString, which cannot be vertex-tinted (see the
-            -- note by ICON_DEFAULTS in the blocks file).
+            -- note by ICON_DEFAULTS in Blocks\Shared.lua).
             local ICON_COLOR_BLOCKS = {
                 durability = true, gold = true, travel = true, spec = true,
                 profession = true, profession2 = true, currency = true,
@@ -3322,6 +3336,15 @@ initFrame:SetScript("OnEvent", function(self)
                     { key = "shop",    label = "Shop" },
                     { key = "help",    label = "Help" },
                 }
+                -- WoW Forever has a separate Talents button, right after the Spellbook.
+                if EllesmereUI.IS_FOREVER then
+                    for i, el in ipairs(MM_ELEMENTS) do
+                        if el.key == "spell" then
+                            table.insert(MM_ELEMENTS, i + 1, { key = "talent", label = "Talents" })
+                            break
+                        end
+                    end
+                end
                 local mmRow
                 mmRow, h = W:DualRow(parent, y,
                     { type = "dropdown", text = "Menu Elements",

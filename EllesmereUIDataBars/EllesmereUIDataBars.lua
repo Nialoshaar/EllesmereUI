@@ -13,7 +13,8 @@ if EUI_CLIENT_BLOCKED then return end -- pre-12.1 client failsafe (EllesmereUI_C
 --
 -- Block factories (clock, fps, ms, location, coords, gold, xprep, spec,
 -- profession, travel, micromenu, currency, spacer) live in
--- EllesmereUIDataBars_Blocks.lua and attach themselves to ns.BlockFactories.
+-- Blocks\*.lua (one file per block, shared helpers in Blocks\Shared.lua) and
+-- attach themselves to ns.BlockFactories.
 --
 -- API HANDOFF (everything the options file may call; nothing else):
 --   ns.GetProfile() -> profile
@@ -62,7 +63,7 @@ EllesmereUI._ModuleNS[ADDON_NAME] = ns  -- LOD options files read this module ns
 local WB = EllesmereUI.Lite.NewAddon("EllesmereUIDataBars")
 ns.WB = WB
 
--- Localized-ish string table shared with the blocks file.
+-- Localized-ish string table shared with the Blocks\ files (ns.L).
 local L = {
     LEFT_CLICK           = "|cffFFFFFFLeft Click:|r",
     RIGHT_CLICK          = "|cffFFFFFFRight Click:|r",
@@ -239,7 +240,7 @@ ns.BLOCK_DEFAULTS = {
                    pvp = true, housing = true, journal = true, pet = true, shop = true, help = true },
     currency   = { currencyId = nil, showIcon = true, showDescription = true },
     -- t1..t5 are TIER slots, not currency ids: a season swap replaces the ids
-    -- in the blocks file and the player's checklist selection still applies.
+    -- in Blocks\Shared.lua (CRESTS) and the player's checklist selection still applies.
     crests     = { t1 = true, t2 = true, t3 = true, t4 = true, t5 = true,
                    showIcons = true, separator = "slash", showSeasonProgress = false,
                    hideEmpty = false, reverse = false },
@@ -255,12 +256,12 @@ ns.BLOCK_DEFAULTS = {
     spacer     = {},
 }
 
--- Factories are registered by EllesmereUIDataBars_Blocks.lua.
+-- Factories are registered by Blocks\*.lua.
 ns.BlockFactories = {}
 
 -- WoW Forever has no Great Vault: the block leaves the picker (BLOCK_TYPES),
--- the add path refuses it (no default) and the blocks file registers no
--- factory, so a bar saved with one shows an empty slot there instead of erroring.
+-- the add path refuses it (no default) and Blocks\GreatVault.lua returns before
+-- registering its factory, so a bar saved with one shows an empty slot there instead of erroring.
 if EllesmereUI.IS_FOREVER then
     for i = #ns.BLOCK_TYPES, 1, -1 do
         if ns.BLOCK_TYPES[i].key == "greatvault" then table.remove(ns.BLOCK_TYPES, i) end

@@ -315,6 +315,21 @@ local function Release()
     FinishRelease(bar)
 end
 
+-- Draw Above Other Bars moves the slot's level: the host follows at slot + 2
+-- and the held frame at host + 2, as Claim and Seat level them. A compare while
+-- nothing moved (the default: slot 10, host 12). Skipped while the held frame
+-- is Blocked, like Seat; the regen rebuild runs it again.
+local function Relevel(slot)
+    local want = slot:GetFrameLevel() + 2
+    if host:GetFrameLevel() == want then return end
+    local bar = heldBar
+    local held = bar ~= nil and bar:GetParent() == host
+    if held and Blocked(bar) then return end
+    if InCombatLockdown() and host:IsProtected() then QueueRegen(); return end
+    host:SetFrameLevel(want)
+    if held then bar:SetFrameLevel(want + 2) end
+end
+
 local function Claim(bar, slot, sp, info)
     if not host then
         host = CreateFrame("Frame", nil, UIParent)
@@ -361,6 +376,12 @@ function ns.ERB_BlizzArtSync(sp, info, slot)
     ns._erbArtOn = (held and ResourceOK(info) and Showable(bar)) and true or false
     ns._erbArtHost = heldBar and host or nil
     if held or lvlWatch then WatchLevel(held and bar or nil) end
+    if host then Relevel(slot) end
+end
+
+-- The end-of-ApplyAll layering pass (ns.ERB_ClassRaise): the same re-level.
+function ns.ERB_BlizzArtLevel(slot)
+    if host and slot then Relevel(slot) end
 end
 
 -- The Scale cog: live, no rebuild.

@@ -45,12 +45,12 @@ local EDGE        = 10                    -- distance from the screen edges
 local GAP         = 8                     -- between stacked pieces
 local XP_WIDTH_PCT = 75                   -- Blizzard's experience bar, Edit Mode size (percent)
 local XP_BAR_H    = 14                    -- its height, flush with the bottom edge
-local BAR_BOTTOM  = XP_BAR_H + 12         -- action bar 1 sits above the experience bar
+local BAR_BOTTOM  = XP_BAR_H + 12         -- the bottom stack's base, above the experience bar
 local BAR_HEIGHT  = 45                    -- one row of default-size buttons
-local MICRO_H     = 40                    -- micro menu, for the chat above it
+local MAINBAR_Y   = BAR_BOTTOM + 8        -- action bar 1's bottom edge, a little clear of the experience bar
 local BAGS_H      = 46                    -- bag bar, for the meter above it
-local CHAT_LEFT    = EDGE + 45                -- chat starts in from the corner
-local CHAT_BOTTOM  = GAP + MICRO_H + GAP + 40
+local CHAT_LEFT    = 63.33                -- chat's left edge in from the screen's left
+local CHAT_BOTTOM  = 108.17               -- its bottom edge up from the screen's bottom (the micro menu below)
 local METER_BOTTOM = GAP + BAGS_H + GAP
 local METER_H      = 150                  -- the meter window's default height
 -- The tooltip's fixed anchor box (the Blizz UI Enhanced mover, 280 x 165,
@@ -73,7 +73,7 @@ local TOT_DX       = (TARGET_W - TOT_W) / 2   -- centre offset that aligns the r
 local STANCE_RIGHT  = -UF_SPREAD + TARGET_W / 2   -- the player frame's right edge
 local STANCE_BOTTOM = UF_BOTTOM + TARGET_H + GAP
 -- Pet bar: centred just above action bar 1.
-local PET_BOTTOM    = BAR_BOTTOM + BAR_HEIGHT + GAP
+local PET_BOTTOM    = MAINBAR_Y + BAR_HEIGHT + GAP
 -- The unit frames' vertical centre: the Resource Bars cast bar sits there,
 -- centred between the player and target frames.
 local UF_MID        = UF_BOTTOM + TARGET_H / 2
@@ -88,6 +88,8 @@ local BREZ_GAP      = GAP + 20                  -- a little more room than the s
 local BREZ_CX       = -UF_SPREAD - TARGET_W / 2 - BREZ_GAP - BREZ_SIZE / 2
 local MINIMAP_SIZE = 200
 EllesmereUI.FOREVER_MINIMAP_SIZE = MINIMAP_SIZE   -- the minimap's own first-activation default there
+local MINIMAP_RIGHT = 23.33               -- minimap's right edge in from the screen's right
+local MINIMAP_TOP   = 62.5                -- its top edge down from the screen's top
 
 -- The Edit Mode layout carries a version in its name from v2 on ("EllesmereUI
 -- Forever v2"); the first shipped without one. A newer version UPGRADES the
@@ -159,16 +161,18 @@ function EllesmereUI.SeedForeverBaseLayout()
 
     -- Minimap: top-right, 200 wide.
     local mm = Sub(Sub(addons, "EllesmereUIMinimap"), "minimap")
-    mm.position = Pos("TOPRIGHT", -EDGE, -EDGE)
+    mm.position = Pos("TOPRIGHT", -MINIMAP_RIGHT, -MINIMAP_TOP)
     mm.mapSize = MINIMAP_SIZE
     mm._capturedOnce = true
 
     -- Unit frames: player left, target right, above action bar 1; target of
-    -- target right-aligned just above the target.
+    -- target right-aligned just above the target; pet centred just below the
+    -- player.
     local uf = Sub(Sub(addons, "EllesmereUIUnitFrames"), "positions")
     uf.player = Pos("BOTTOM", -UF_SPREAD, UF_BOTTOM)
     uf.target = Pos("BOTTOM", UF_SPREAD, UF_BOTTOM)
     uf.targettarget = Pos("BOTTOM", UF_SPREAD + TOT_DX, UF_BOTTOM + TARGET_H + TOT_GAP)
+    uf.pet = { point = "TOP", relPoint = "BOTTOM", x = -UF_SPREAD, y = UF_BOTTOM - GAP }
 
     -- Resource Bars cast bar (the cast bar shown by default): centred between
     -- the player and target frames.
@@ -192,7 +196,7 @@ function EllesmereUI.SeedForeverBaseLayout()
     local ab = Sub(addons, "EllesmereUIActionBars")
     ab.useBlizzardDataBars = true
     local barPos = Sub(ab, "barPositions")
-    barPos.MainBar = Pos("BOTTOM", 0, BAR_BOTTOM)
+    barPos.MainBar = Pos("BOTTOM", 0, MAINBAR_Y)
     barPos.PetBar = Pos("BOTTOM", 0, PET_BOTTOM)
     barPos.StanceBar = { point = "BOTTOMRIGHT", relPoint = "BOTTOM", x = STANCE_RIGHT, y = STANCE_BOTTOM }
     local bars = Sub(ab, "bars")
@@ -209,16 +213,51 @@ function EllesmereUI.SeedForeverBaseLayout()
     -- Screen-edge anchors, keyed by unlock element.
     local anchors = Sub(EllesmereUIDB, "unlockAnchors")
     anchors.ECHAT_MainChat = EdgeAnchor("SCREEN_LEFT", "RIGHT", CHAT_LEFT, 0, "SCREEN_BOTTOM", "TOP", CHAT_BOTTOM)
-    anchors.EBS_Minimap    = EdgeAnchor("SCREEN_RIGHT", "LEFT", -EDGE, 0, "SCREEN_TOP", "BOTTOM", -EDGE)
+    anchors.EBS_Minimap    = EdgeAnchor("SCREEN_RIGHT", "LEFT", -MINIMAP_RIGHT, 0, "SCREEN_TOP", "BOTTOM", -MINIMAP_TOP)
     anchors.EDM_Win1       = EdgeAnchor("SCREEN_RIGHT", "LEFT", -EDGE, 0, "SCREEN_BOTTOM", "TOP", METER_BOTTOM)
-    anchors.MainBar        = EdgeAnchor("SCREEN_BOTTOM", "TOP", 0, BAR_BOTTOM)
+    anchors.MainBar        = EdgeAnchor("SCREEN_BOTTOM", "TOP", 0, MAINBAR_Y)
     anchors.player         = EdgeAnchor("SCREEN_BOTTOM", "TOP", -UF_SPREAD, UF_BOTTOM)
     anchors.target         = EdgeAnchor("SCREEN_BOTTOM", "TOP", UF_SPREAD, UF_BOTTOM)
     -- An element link has the same record shape: the target of target rides
     -- the target frame's top edge, its centre offset keeping the right edges flush.
     anchors.targettarget   = EdgeAnchor("target", "TOP", TOT_DX, TOT_GAP)
+    -- The pet rides the player frame's bottom edge the same way, centred, so
+    -- it clears whatever that look hangs below the frame (a level badge).
+    anchors.pet            = EdgeAnchor("player", "BOTTOM", 0, -GAP)
 
     EllesmereUI._foreverLayoutFresh = true
+end
+
+-- The seed fits the EllesmereUI frames. The WoW Forever look's player frame
+-- is the 232 x 100 stock box with its art inset (the top and right insets of
+-- the Unit Frames kit), so when a whole-UI look switch at first install (the
+-- module picker's reload, the style picker) applies it, the stance bar moves
+-- up to clear that art, right edges flush; a switch to any other look puts
+-- it back on the seed's spot, where Blizzard Style and Classic WoW UI always
+-- have it. Only ever from a spot this layout placed it on: a bar the player
+-- moved stays put.
+local STOCK_BOX_W, STOCK_BOX_H = 232, 100
+local STOCK_PLAYER_ART = {
+    forever = { t = 16.5, r = 18 },
+}
+local function StanceSpot(styleKey)
+    local art = STOCK_PLAYER_ART[styleKey]
+    if not art then return STANCE_RIGHT, STANCE_BOTTOM end
+    return -UF_SPREAD + STOCK_BOX_W / 2 - art.r, UF_BOTTOM + STOCK_BOX_H - art.t + GAP
+end
+function EllesmereUI.ForeverLayoutForLook(styleKey)
+    local barPos = EllesmereUI._abBarPositions
+        or Sub(Sub(ProfileAddons(), "EllesmereUIActionBars"), "barPositions")
+    local sb = barPos.StanceBar
+    if not (type(sb) == "table" and sb.point == "BOTTOMRIGHT" and sb.relPoint == "BOTTOM") then return end
+    local placed = sb.x == STANCE_RIGHT and sb.y == STANCE_BOTTOM
+    if not placed then
+        for key in pairs(STOCK_PLAYER_ART) do
+            local x, y = StanceSpot(key)
+            if sb.x == x and sb.y == y then placed = true; break end
+        end
+    end
+    if placed then sb.x, sb.y = StanceSpot(styleKey) end
 end
 
 --------------------------------------------------------------------------------
@@ -384,7 +423,7 @@ local function WriteEditModeLayout()
         local AB = Enum.EditModeSystem.ActionBar
         local idx = Enum.EditModeActionBarSystemIndices or {}
         local main = FindSystem(layout, AB, idx.MainBar)
-        if main then AnchorSystem(main, "BOTTOM", 0, BAR_BOTTOM) end
+        if main then AnchorSystem(main, "BOTTOM", 0, MAINBAR_Y) end
         local micro = Enum.EditModeSystem.MicroMenu and FindSystem(layout, Enum.EditModeSystem.MicroMenu, nil)
         if micro then AnchorSystem(micro, "BOTTOMLEFT", EDGE, GAP) end
         local bags = Enum.EditModeSystem.Bags and FindSystem(layout, Enum.EditModeSystem.Bags, nil)

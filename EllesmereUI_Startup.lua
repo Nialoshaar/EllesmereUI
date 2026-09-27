@@ -512,6 +512,17 @@ if C_AddOns and C_AddOns.DoesAddOnExist and C_AddOns.DoesAddOnExist("EllesmereUI
     C_AddOns.DisableAddOn("EllesmereUIBasics")
 end
 
+-- Forever Essentials ships only a _Camelot TOC, which no other client reads, so
+-- a clean install is not listed outside Forever. A copy extracted over an older
+-- build keeps its stale plain TOC and shows as an out-of-date, incompatible row;
+-- disable it there (next session) so the login warning stops. Never on Forever,
+-- where the module is live. Zero cost once the stale TOC is gone.
+if EUI_CLIENT_FOREVER ~= true and C_AddOns and C_AddOns.DoesAddOnExist
+   and C_AddOns.DoesAddOnExist("EllesmereUIForeverEssentials")
+   and C_AddOns.GetAddOnEnableState("EllesmereUIForeverEssentials") > 0 then
+    C_AddOns.DisableAddOn("EllesmereUIForeverEssentials")
+end
+
 -- /rl reload shortcut -- only
 if not SlashCmdList["RL"] then
     SlashCmdList["RL"] = function()

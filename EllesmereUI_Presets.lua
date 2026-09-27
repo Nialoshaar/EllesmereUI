@@ -398,8 +398,9 @@ do
                 defFlashFrame:Show()
             end
 
-            -- Default dropdown menu (popout list)
-            local defMenu = CreateFrame("Frame", nil, UIParent)
+            -- Default dropdown menu (popout list). Controller cursor: overlay
+            -- parent (UIParent unless a controller cursor is loaded).
+            local defMenu = CreateFrame("Frame", nil, EllesmereUI.OverlayParent())
             defMenu:SetFrameStrata("FULLSCREEN_DIALOG")
             defMenu:SetFrameLevel(300)
             defMenu:SetClampedToScreen(true)
@@ -440,6 +441,8 @@ do
                 if defMenu:IsShown() then defMenu:Hide() else
                     if popup._rebuildDefMenu then popup._rebuildDefMenu() end
                     defMenu:Show()
+                    -- Controller cursor: move it into the list.
+                    EllesmereUI.PadFocus(defMenu)
                 end
             end)
             defDDBtn:HookScript("OnHide", function() defMenu:Hide() end)
@@ -466,6 +469,10 @@ do
                     for _, e in ipairs(popup._defBrdEdges) do e:SetColorTexture(1, 1, 1, 0.20) end
                 end
             end)
+            EllesmereUI.TrackOverlay(defMenu)
+            -- Controller cursor: its cancel press clicks the dropdown button,
+            -- which folds the list.
+            if EllesmereUI.PadCP() then defMenu.CloseButton = defDDBtn end
 
             -- Done button
             local EG = ELLESMERE_GREEN
@@ -541,6 +548,20 @@ do
                     self:SetPropagateKeyboardInput(true)
                 end
             end)
+
+            -- Controller Back takes the same route as Escape. It counts only when
+            -- a controller is in use at the show, so the keyboard path never changes.
+            if EllesmereUI.RegisterEscapeClose then
+                EllesmereUI.RegisterEscapeClose(dimmer, {
+                    padOnly = true,
+                    onEscape = function()
+                        dimmer:Hide()
+                        if popup._onCancel then popup._onCancel() end
+                    end,
+                })
+            end
+            -- Controller cursor: the panel is a blocker, not a stop.
+            EllesmereUI.PadHint(popup, "nodepass")
 
             popup._CLASS_H = CLASS_H
             popup._CLASS_PAD_TOP = CLASS_PAD_TOP
@@ -937,6 +958,10 @@ do
             specPopup._closeBtn:ClearAllPoints()
             PP.Point(specPopup._closeBtn, "BOTTOM", specPopup, "BOTTOM", 0, 38)
         end
+        -- Controller cursor: its cancel press backs out through a visible Cancel.
+        if EllesmereUI.PadCP() then
+            specPopup.CloseButton = opts.onCancel and specPopup._cancelBtn or nil
+        end
 
         -- Done button: validate default selection if spec feature is active
         specPopup._closeBtn:SetScript("OnClick", function()
@@ -957,5 +982,7 @@ do
         end)
 
         specPopup._dimmer:Show()
+        -- Controller cursor: move it into the popup.
+        EllesmereUI.PadFocus(specPopup)
     end
 end

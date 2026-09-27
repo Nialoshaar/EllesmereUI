@@ -573,13 +573,13 @@ local function ParkEater(e)
 end
 
 -- Is any debuff display actually in the "Shown on Modifier" mode? Base row
--- plus enabled icon tiles' overrides (nil override inherits the base).
+-- plus enabled grid tiles' overrides (nil override inherits the base).
 local function TipModeInUse()
     local p = ns.db and ns.db.profile
     if not p then return false end
     if p.debuffHideTooltips == "modifier" then return true end
-    local dm = DM()
-    local tiles = dm and dm.tiles
+    -- The tiles the current spec renders (every bucket), as the apply pass sees them.
+    local tiles = ns.DM_ActiveTiles()
     if tiles then
         for i = 1, #tiles do
             local t = tiles[i]
@@ -721,6 +721,8 @@ end
 -- reload re-runs this ensure. An unchanged eater costs a few compares and
 -- never touches the frame.
 local tipEaterCount = 0
+-- Ensure-pass stamp: a tile eater the current pass did not ensure is parked at its end.
+local tipPass = 0
 local function EnsureEater(d, slot, host, container, active, pinHost, point, corner, offX, offY, w, h)
     local map = d.tipModEaters
     local e = map and map[slot]
@@ -801,7 +803,7 @@ end
 -- Per-unit ensure, called from the containers reload loop and from the tail
 -- of every DM_ApplyDebuffConfig (fresh footprint inputs; tile containers
 -- built on the deferred lanes re-enter through that apply): base container
--- plus every icon tile whose effective tooltip mode (own override, else the
+-- plus every rendered grid tile whose effective tooltip mode (own override, else the
 -- base mode) is "modifier". Cheap when the feature is off -- a few reads and
 -- existing eaters just park hidden.
 function ns.DM_TipModEnsure(button, d, s)
@@ -826,18 +828,19 @@ function ns.DM_TipModEnsure(button, d, s)
         EnsureEater(d, "base", button, d.rfcDebuffs, active and point ~= nil,
             pinHost, point, corner, offX, offY, w, h)
     end
+    tipPass = tipPass + 1
     local hosts = d.dmTiles
     if hosts then
-        local dm = DM()
-        local list = dm and dm.tiles
+        local list = ns.DM_ActiveTiles()
         if list then
             for i = 1, #list do
                 local t = list[i]
                 local c = hosts[t.id]
-                if c and t.type == "icons" then
+                if c and (t.type == "icons" or t.type == "square") and c._dmType == t.type then
                     local eff = t.hideTooltips
                     if eff == nil then eff = baseMode end
-                    local active = t.enabled ~= false and eff == "modifier"
+                    -- IsShown: the apply hides a grid tile with no records, so nothing renders under the eater.
+                    local active = t.enabled ~= false and eff == "modifier" and c:IsShown()
                     local point, corner, offX, offY, w, h
                     if active and pinHost then
                         point, corner, offX, offY = TilePin(t, s, d)
@@ -849,7 +852,18 @@ function ns.DM_TipModEnsure(button, d, s)
                     end
                     EnsureEater(d, t.id, button, c, active and point ~= nil,
                         pinHost, point, corner, offX, offY, w, h)
+                    local e = d.tipModEaters and d.tipModEaters[t.id]
+                    if e then e._euiPass = tipPass end
                 end
+            end
+        end
+    end
+    -- Tile eaters this pass did not reach (tile deleted, disabled for this spec, or its id now another type) park.
+    local map = d.tipModEaters
+    if map then
+        for slot, e in pairs(map) do
+            if slot ~= "base" and e._euiActive and e._euiPass ~= tipPass then
+                if InCombatLockdown() then d.rfcBmPending = true else ParkEater(e) end
             end
         end
     end
@@ -2298,10 +2312,33 @@ end
 
 -- Ensures one tile's container exists for this button (queued: container shells are combat-illegal). Effect tiles
 -- declare their single slot at build; icon tiles get record groups from the apply pass (combat-legal adds on existing containers).
+-- A container is built for one tile TYPE (effect slots vs record groups) and carries its own declared keys (_dmDecl).
+-- Override layers fork the whole tile list, so a tile id can come back as another type: the built container parks
+-- hidden (dmTilesParked[id][type]) and a parked container of the right type is restored before anything is built.
 local function EnsureTileContainer(d, t)
     local tiles = d.dmTiles
     if not tiles then tiles = {}; d.dmTiles = tiles end
-    if tiles[t.id] then return tiles[t.id] end
+    local c = tiles[t.id]
+    if c then
+        if c._dmType == t.type then return c end
+        c:Hide()
+        local parked = d.dmTilesParked
+        if not parked then parked = {}; d.dmTilesParked = parked end
+        local byType = parked[t.id]
+        if not byType then byType = {}; parked[t.id] = byType end
+        byType[c._dmType] = c
+        tiles[t.id] = nil
+        -- Its bar tints stay registered: parked containers are bounded (one per id and type) and come back as they were.
+    end
+    local byType = d.dmTilesParked and d.dmTilesParked[t.id]
+    local back = byType and byType[t.type]
+    if back then
+        byType[t.type] = nil
+        tiles[t.id] = back
+        -- A stale-tile sweep may have dropped its healthcolor tints meanwhile; the apply restyles it once.
+        if back._dmType == "healthcolor" then back._dmRestyle = true end
+        return back
+    end
     local pend = d.dmTilePend
     if not pend then pend = {}; d.dmTilePend = pend end
     if pend[t.id] then return nil end
@@ -2327,6 +2364,16 @@ local function EnsureTileContainer(d, t)
         if not t2 then return end
         local s2 = SettingsFor(d)
         if not s2 then return end
+        -- A container parked for this type (the tile flipped back while this job waited) is restored, not rebuilt.
+        local parkedT = d.dmTilesParked and d.dmTilesParked[tileId]
+        local back = parkedT and parkedT[t2.type]
+        if back then
+            parkedT[t2.type] = nil
+            d.dmTiles[tileId] = back
+            if back._dmType == "healthcolor" then back._dmRestyle = true end
+            if d.rfcDebuffs then ns.DM_ApplyDebuffConfig(d.rfcDebuffs, d, s2, StyleKeyFor(d)) end
+            return
+        end
         -- EffectFilterFor below reads dm (dispelMode); the active-union
         -- re-resolve above no longer carries it.
         local dm2 = DM() or {}
@@ -2342,14 +2389,13 @@ local function EnsureTileContainer(d, t)
         else
             container:SetFrameLevel(button:GetFrameLevel() + (ns.LVL_AURA or 13))
         end
+        local tDecl = {}
+        container._dmType = t2.type
+        container._dmDecl = tDecl
         if t2.type ~= "icons" and t2.type ~= "square" then
             -- One slot PER checked filter category; later checks add slots on the live lane, gate silences unchecked ones.
             local host = button
             local hp = health
-            local tGroups = d.dmTileGroups
-            if not tGroups then tGroups = {}; d.dmTileGroups = tGroups end
-            local tDecl = tGroups[tileId]
-            if not tDecl then tDecl = {}; tGroups[tileId] = tDecl end
             local tileKind = t2.type
             local cs = EffectCatSet(t2)
             if cs then
@@ -2607,10 +2653,12 @@ function ns.DM_ApplyDebuffConfig(container, d, s, styleKey)
                 local tc = EnsureTileContainer(d, t)
                 if tc then
                     local tStyleKey = EnsureTileStyle(d, s, t)
-                    local tGroups = d.dmTileGroups
-                    if not tGroups then tGroups = {}; d.dmTileGroups = tGroups end
-                    local tDecl = tGroups[t.id]
-                    if not tDecl then tDecl = {}; tGroups[t.id] = tDecl end
+                    if tc._dmRestyle then
+                        -- Restored healthcolor container: repaint re-registers its overlays on the bar.
+                        tc._dmRestyle = nil
+                        AK.RestyleSoon(tStyleKey)
+                    end
+                    local tDecl = tc._dmDecl
 
                     if isEffect then
                         -- One live-settable slot PER CHECKED category: filter setter takes the NORMALIZED string,
@@ -2643,8 +2691,8 @@ function ns.DM_ApplyDebuffConfig(container, d, s, styleKey)
                                 AK.QueueLiveBuildJob(function()
                                     d.dmTilePend[pendKey] = nil
                                     local tc2 = d.dmTiles and d.dmTiles[tileId]
-                                    local decl2 = d.dmTileGroups and d.dmTileGroups[tileId]
-                                    if not (tc2 and decl2 and ns.DM_Active()) then return end
+                                    local decl2 = tc2 and tc2._dmDecl
+                                    if not (decl2 and ns.DM_Active()) then return end
                                     local s2 = SettingsFor(d)
                                     local dm2 = DM() or {}
                                     if not s2 then return end
@@ -2660,7 +2708,10 @@ function ns.DM_ApplyDebuffConfig(container, d, s, styleKey)
                                     end
                                     local host = d.dmHost
                                     local hp = d.rfcHealth
-                                    if not (t2 and host and hp) then return end
+                                    -- Effect slots only ever go on an effect container of the tile's current type; a flip
+                                    -- to a grid tile (its icons container restored meanwhile) was configured by that apply.
+                                    if not (t2 and host and hp and tc2._dmType == t2.type) then return end
+                                    if t2.type == "icons" or t2.type == "square" then return end
                                     local styleKey2 = EnsureTileStyle(d, s2, t2)
                                     local tileKind = t2.type
                                     local cs2 = EffectCatSet(t2)
@@ -2701,7 +2752,7 @@ function ns.DM_ApplyDebuffConfig(container, d, s, styleKey)
                             if not tDecl[r.gkey] then tMissing = true end
                         end
                         for k in pairs(tDecl) do
-                            if tWanted[k] == nil and k ~= "fxFilter" then
+                            if tWanted[k] == nil then
                                 tc:SetAuraGroupMaxFrameCount(k, 0)
                             end
                         end
@@ -2763,15 +2814,15 @@ function ns.DM_ApplyDebuffConfig(container, d, s, styleKey)
                                 AK.QueueLiveBuildJob(function()
                                     d.dmTilePend[pendKey] = nil
                                     local tc2 = d.dmTiles and d.dmTiles[tileId]
-                                    local decl2 = d.dmTileGroups and d.dmTileGroups[tileId]
-                                    if not (tc2 and decl2 and ns.DM_Active()) then return end
+                                    local decl2 = tc2 and tc2._dmDecl
+                                    if not (decl2 and ns.DM_Active()) then return end
                                     local s2 = SettingsFor(d)
                                     local dm2 = DM() or {}
                                     if not s2 then return end
                                     local recs2 = BuildRecords(s2, dm2)
                                     for ri = 1, #recs2 do
                                         local r = recs2[ri]
-                                        if r.tile and r.tile.id == tileId then
+                                        if r.tile and r.tile.id == tileId and r.tile.type == tc2._dmType then
                                             local gkey = GroupKey(AK, r)
                                             if not decl2[gkey] then
                                                 local catKey = r.cats or r.key
@@ -2886,7 +2937,9 @@ function ns.DM_DeadEdge(d, unit)
     local dead = UnitIsDeadOrGhost(unit) and true or false
     if d.dmDead == dead then return end
     d.dmDead = dead
-    local c = swap.tileId and (d.dmTiles and d.dmTiles[swap.tileId]) or d.rfcDebuffs
+    -- A tile swap never falls back to the base container: its keys are tile group keys.
+    local c
+    if swap.tileId then c = d.dmTiles and d.dmTiles[swap.tileId] else c = d.rfcDebuffs end
     if not c then return end
     if dead then
         for k in pairs(swap.park) do c:SetAuraGroupMaxFrameCount(k, 0) end

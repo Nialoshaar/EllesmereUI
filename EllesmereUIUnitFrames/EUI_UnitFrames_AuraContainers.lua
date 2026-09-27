@@ -1335,7 +1335,10 @@ local function StyleTableFP(st, font)
         b and b.texture, b and b.size, b and b.edgePx, b and b[1], b and b[2], b and b[3], b and b[4],
         b and b.offsetX, b and b.offsetY, b and b.shiftX, b and b.shiftY,
         b and b.behind, b and b.behindUnitFrame, b and b.unitFrameLevel,
-        st.noTooltips, st.blizzBorder, st.dispelBorder)
+        st.noTooltips, st.blizzBorder, st.dispelBorder,
+        -- Textured Dispel Ring (the ring's art key) and Use Dispel Colors (the
+        -- palette fingerprint the colour map was built from).
+        st.dispelBorderTexture, st.dispelColorFP)
 end
 
 -- Declares one chain group and records it in the element's declared-set
@@ -1392,6 +1395,11 @@ local function ElementSize(unit, base, s)
     return size, h, cropped
 end
 
+-- Use Dispel Colors (player debuffs): the Dispel Colors palette as the engine's
+-- customDispelColorMap plus its fingerprint. Assigned below the dispel slot table
+-- it reads.
+local PlayerDispelPalette
+
 local function BuildStyle(unit, base, s, unitFrame)
     local isBuff = (base == "HELPFUL")
     local size, h, cropped = ElementSize(unit, base, s)
@@ -1410,7 +1418,7 @@ local function BuildStyle(unit, base, s, unitFrame)
     -- Blizzard Style: buffs borderless like the stock frames, debuffs on the
     -- engine-stamped stock dispel border (AuraKit blizzBorder); no EUI ring.
     local blizz = ns.UF_Blizz and ns.UF_Blizz() or false
-    local border, dispel, blizzBorder
+    local border, dispel, blizzBorder, dispelTex, dcMap, dcFP
     if blizz then
         if not isBuff then dispel = true; blizzBorder = true end
     else
@@ -1430,14 +1438,25 @@ local function BuildStyle(unit, base, s, unitFrame)
             unitFrameLevel = unitFrame and unitFrame:GetFrameLevel() or 1,
         }
         -- Dispel-type border recolor (per-unit debuffDispelBorder): the engine
-        -- shows the ring only on typed (dispellable) debuffs and picks the
-        -- dispel color itself -- the user palette cannot apply under secrecy
-        -- (same documented delta as the RF debuff border).
+        -- shows the ring only on typed (dispellable) debuffs and tints it per
+        -- dispel type, in its own colours or, with the player's Use Dispel
+        -- Colors, in the Dispel Colors palette handed over as
+        -- customDispelColorMap (below). No aura data is read either way.
         dispel = (not isBuff and s.debuffDispelBorder) and true or nil
         -- Buffs on target/focus/boss (opt-in): the same engine ring, tinted by
         -- the buff's dispel type (Magic blue). Untyped buffs get no ring.
         if isBuff and unit ~= "player" and s.buffDispelBorder == true then
             dispel = true
+        end
+        -- Textured Dispel Ring (per-unit, player/target): AuraKit draws the ring
+        -- in the aura border's own art on the aura border's geometry (style.border)
+        -- instead of flat strips, and keeps the strips by itself for a size-0 border.
+        if dispel and s.auraBorderDispelTextured == true
+            and border.texture ~= "solid" and border.texture ~= "" then
+            dispelTex = border.texture
+        end
+        if dispel and not isBuff and unit == "player" and s.debuffDispelUsePalette == true then
+            dcMap, dcFP = PlayerDispelPalette()
         end
     end
 
@@ -1471,6 +1490,9 @@ local function BuildStyle(unit, base, s, unitFrame)
         noTooltips = (s.showAuraTooltips == false) or nil,
         dispelBorder = dispel,
         dispelHelpful = (isBuff and dispel) or nil,
+        dispelBorderTexture = dispelTex,
+        dispelColorMap = dcMap,
+        dispelColorFP = dcFP,
         -- Resolved once per (fingerprint-gated) style rebuild instead of on
         -- every ApplyUFText call -- GetFontPath's result only changes when
         -- font settings change, which already forces a fresh style table.
@@ -2319,6 +2341,38 @@ local DISPEL_SLOTS = {
 }
 local DISPEL_TYPE_TOKENS = { magic = "Magic", curse = "Curse", disease = "Disease", poison = "Poison", bleed = "Bleed" }
 
+-- Use Dispel Colors: the player's Dispel Colors (profile root, the palette the
+-- dispel overlay uses) as a customDispelColorMap (dispel type -> Color) for the
+-- player's debuff rings, plus its fingerprint, which BuildStyle hands on as
+-- style.dispelColorFP (AuraKit re-registers the ring options when it moves).
+-- Memoised on the five resolved colours, its only inputs: an unchanged palette
+-- hands back the same map.
+do
+    local memoFP, memoMap
+    PlayerDispelPalette = function()
+        local p = ns.UF_GetProfile and ns.UF_GetProfile()
+        if not p then return nil, nil end
+        local fp = ""
+        for i = 1, #DISPEL_SLOTS do
+            local slot = DISPEL_SLOTS[i]
+            local c = p[slot.colorKey]
+            fp = fp .. string.format("%.3f,%.3f,%.3f;", (c and c.r) or slot.fallback[1],
+                (c and c.g) or slot.fallback[2], (c and c.b) or slot.fallback[3])
+        end
+        if memoFP ~= fp then
+            local map = {}
+            for i = 1, #DISPEL_SLOTS do
+                local slot = DISPEL_SLOTS[i]
+                local c = p[slot.colorKey]
+                map[DISPEL_TYPE_TOKENS[slot.key]] = CreateColor((c and c.r) or slot.fallback[1],
+                    (c and c.g) or slot.fallback[2], (c and c.b) or slot.fallback[3], 1)
+            end
+            memoFP, memoMap = fp, map
+        end
+        return memoMap, memoFP
+    end
+end
+
 -- A dispel type RAID_PLAYER_DISPELLABLE can never match (bleeds via the dwarf
 -- racial, poison on a shaman via Poison Cleansing Totem -- the token knows class
 -- and spec dispels only) is handled here by keeping the PLAIN slot lit for such
@@ -2364,11 +2418,17 @@ local function ApplyDispelSlotStyle(button, d, style)
     end
 
     tex:ClearAllPoints()
-    if style.mode == "gradient" or style.mode == "gradient_sharp" then
+    if style.mode == "none" then
+        -- Overlay None with Color Custom Borders on: the slots show for the
+        -- border copy alone.
+        tex:Hide()
+    elseif style.mode == "gradient" or style.mode == "gradient_sharp" then
+        tex:Show()
         tex:SetAllPoints(health)
         tex:SetTexture(style.mode == "gradient_sharp" and GRADIENT_SHARP_TEXTURE or GRADIENT_TEXTURE)
         tex:SetVertexColor(c.r, c.g, c.b, alpha)
     elseif style.mode == "fill" then
+        tex:Show()
         local fillTex = health.GetStatusBarTexture and health:GetStatusBarTexture()
         -- Both corners come off the fill texture so the overlay follows vertical and
         -- reverse fills; anchoring TOPLEFT to the bar only tracks left-to-right.
@@ -2380,9 +2440,82 @@ local function ApplyDispelSlotStyle(button, d, style)
         tex:SetColorTexture(c.r, c.g, c.b, alpha)
         tex:SetVertexColor(1, 1, 1, 1)
     else -- "full"
+        tex:Show()
         tex:SetAllPoints(health)
         tex:SetColorTexture(c.r, c.g, c.b, alpha)
         tex:SetVertexColor(1, 1, 1, 1)
+    end
+
+    -- Color Custom Borders: a copy of the player frame's own border (same style,
+    -- size, exact pixels, offsets and shifts) in this type's Dispel Color at full
+    -- opacity. It rides the slot's engine visibility, so it covers the normal
+    -- border only while the type is present; only the active "by me" twin carries
+    -- style.customBorder. One level over the unified border's current level
+    -- (frame+10, frame+20 over an inside 3D portrait, frame-1 under Show Behind).
+    -- Every type's copy shares that level, so two types present at once stack in
+    -- no fixed order, as on Raid Frames. The secret-safe renderer needs no size
+    -- reads and no scripts (scripts never run under a slot button). State lives
+    -- in d, never on the button.
+    local cb = style.customBorder
+    local uf = style.unitFrame
+    local ub = cb and uf and uf.unifiedBorder
+    if ub then
+        if not d.ufCbHost then
+            -- Published only once anchored: a denied write leaves no half-built
+            -- host, and the next restyle simply tries again.
+            local host = CreateFrame("Frame", nil, button)
+            host:SetAllPoints(ub)
+            d.ufCbState = {}
+            d.ufCbHost = host
+        end
+        -- Armed before the first write on the host: a draw that throws partway
+        -- still leaves the off branch able to clear whatever it drew.
+        d.ufCbOn = true
+        d.ufCbHost:SetFrameLevel(ub:GetFrameLevel() + 1)
+        EllesmereUI.ApplySecretSafeBorderStyle(d.ufCbHost, d.ufCbState, cb.size, c.r, c.g, c.b, 1,
+            cb.tex, cb.offX, cb.offY, cb.shX, cb.shY, "unitframes", cb.size, nil, cb.px)
+        d.ufCbHost:Show()
+    elseif d.ufCbOn then
+        -- Size 0 hides every piece and drops the UI-scale re-apply registration.
+        EllesmereUI.ApplySecretSafeBorderStyle(d.ufCbHost, d.ufCbState, 0, 0, 0, 0, 0, "solid")
+        d.ufCbHost:Hide()
+        -- Disarmed only once the hide landed: a denied call re-runs this at the lift.
+        d.ufCbOn = nil
+    end
+
+    -- The portrait's Outer Ring (its texture on the backdrop, backdrop._outerRing)
+    -- gets the same copy while it shows: the ring's own art laid on the ring's own
+    -- rect (anchor-derived, so size and position follow it), on a holder one level
+    -- over the portrait backdrop (a detached backdrop sits at frame+15, over the
+    -- unified border and its copy).
+    local bd = ub and uf.Portrait and uf.Portrait.backdrop
+    local ring = bd and bd._outerRing
+    if ring and ring:IsShown() and bd:IsShown() then
+        if not d.ufRingHost then
+            local host = CreateFrame("Frame", nil, button)
+            local rt = host:CreateTexture(nil, "OVERLAY", nil, 7)
+            rt:SetAllPoints(host)
+            d.ufRingTex = rt
+            d.ufRingHost = host
+        end
+        local host = d.ufRingHost
+        if d.ufRingAnchor ~= ring then
+            host:ClearAllPoints()
+            host:SetAllPoints(ring)
+            d.ufRingAnchor = ring
+        end
+        d.ufRingOn = true
+        host:SetFrameLevel(bd:GetFrameLevel() + 1)
+        local art = ring:GetTexture()
+        if d.ufRingArt ~= art then
+            d.ufRingTex:SetTexture(art)
+            d.ufRingArt = art
+        end
+        d.ufRingTex:SetVertexColor(c.r, c.g, c.b, 1)
+        host:Show()
+    elseif d.ufRingOn then
+        d.ufRingHost:Hide()
+        d.ufRingOn = nil
     end
 end
 
@@ -2390,9 +2523,22 @@ local function DispelStyleKey(slotKey)
     return "uf:player:dispel:" .. slotKey
 end
 
+-- Color Custom Borders is live: the toggle, over a custom border (runtime twin
+-- of the options gate; a saved true stands down under a stock style, a Solid
+-- Border Style or Border Size 0).
+local function DispelCustomBorderOn(p)
+    return p.dispelCustomBorder == true and ns.UF_CustomBorderOn(p.player)
+end
+
+-- The slots show while the overlay or Color Custom Borders needs them; both off
+-- (the default), the container stays hidden and parses nothing.
+local function DispelSlotsShown(p)
+    return (p.dispelOverlay or "none") ~= "none" or DispelCustomBorderOn(p)
+end
+
 local function BuildDispelStyles(frame)
     local p = ns.UF_GetProfile and ns.UF_GetProfile()
-    if not p then return "none" end
+    if not p then return false end
     local mode = p.dispelOverlay or "none"
     -- "Only Dispellable by You": slot filters are fixed at declaration and
     -- containers are never swapped (engine buttons leak), so BOTH filter
@@ -2400,22 +2546,42 @@ local function BuildDispelStyles(frame)
     -- styled to opacity 0. Toggling the option only restyles.
     local byMe = p.dispelOverlayByMe == true
     local op = p.dispelOverlayOpacity or 100
+    -- Color Custom Borders: the player frame border's own ApplyBorderStyle
+    -- inputs, so each type's copy matches it (read-only, shared by the slots).
+    local customBorder
+    if DispelCustomBorderOn(p) then
+        local s = p.player
+        local bs = s.borderSize or 1
+        local btex = s.borderTexture
+        customBorder = {
+            size = bs, tex = btex,
+            offX = s.borderTextureOffset, offY = s.borderTextureOffsetY,
+            shX = s.borderTextureShiftX, shY = s.borderTextureShiftY,
+            px = EllesmereUI.BorderPx(s.borderSizePx, bs, btex),
+        }
+    end
     for i = 1, #DISPEL_SLOTS do
         local slot = DISPEL_SLOTS[i]
         -- A type the engine token can never match keeps using the PLAIN slot in
         -- "by me" mode: its by-me twin stays dark and would swallow the setting
         -- entirely.
         local tokenBlind = TokenBlindDispelSlot(slot.key)
+        local byMeLive = byMe and not tokenBlind
         local col = p[slot.colorKey]
         local color = { r = col and col.r or slot.fallback[1], g = col and col.g or slot.fallback[2], b = col and col.b or slot.fallback[3] }
+        -- The border copy rides the live twin only; the inactive one draws nothing.
+        local plainCB, byMeCB
+        if byMeLive then byMeCB = customBorder else plainCB = customBorder end
         AK.styles[DispelStyleKey(slot.key)] = {
             width = 1, height = 1,
             noRegions = true,
             mode = mode,
             color = color,
-            opacity = (byMe and not tokenBlind) and 0 or op,
+            opacity = byMeLive and 0 or op,
             level = slot.level,
             healthFrame = frame.Health,
+            unitFrame = frame,
+            customBorder = plainCB,
             applyExtra = ApplyDispelSlotStyle,
         }
         AK.styles[DispelStyleKey(slot.key .. "_byme")] = {
@@ -2423,17 +2589,19 @@ local function BuildDispelStyles(frame)
             noRegions = true,
             mode = mode,
             color = color,
-            opacity = (byMe and not tokenBlind) and op or 0,
+            opacity = byMeLive and op or 0,
             level = slot.level,
             healthFrame = frame.Health,
+            unitFrame = frame,
+            customBorder = byMeCB,
             applyExtra = ApplyDispelSlotStyle,
         }
     end
-    return mode
+    return DispelSlotsShown(p)
 end
 
 local function CreateDispelSlots(frame, entry)
-    local mode = BuildDispelStyles(frame)
+    local shown = BuildDispelStyles(frame)
 
     local container = entry.dispel
     if not container then
@@ -2487,16 +2655,29 @@ local function CreateDispelSlots(frame, entry)
     end
     AK.FinishContainer(container, "player")
 
-    container:SetShown(mode ~= "none")
+    container:SetShown(shown)
 end
 
 local function DispelFP(p)
     -- The poison capability is a talent (Poison Cleansing Totem), so it rides
     -- the fingerprint; race can't change mid-session.
+    -- Color Custom Borders copies the frame border, so while it is on every input
+    -- the copy reads counts too: the border keys; the strata (a strata change
+    -- re-stacks child levels); the portrait mode and side (an inside 3D portrait
+    -- lifts the unified border to frame+20); and the portrait and Outer Ring keys
+    -- that decide whether the ring copy shows and which art it takes.
+    local s = p.player
+    local cb = p.dispelCustomBorder == true and s ~= nil
     return FP(p.dispelOverlay, p.dispelOverlayOpacity, p.dispelOverlayByMe == true,
         TokenBlindDispelSlot("poison") and 1 or 0,
         CK(p.dispelColorMagic), CK(p.dispelColorCurse),
-        CK(p.dispelColorDisease), CK(p.dispelColorPoison), CK(p.dispelColorBleed))
+        CK(p.dispelColorDisease), CK(p.dispelColorPoison), CK(p.dispelColorBleed),
+        cb, cb and FP(s.borderSize, s.borderTexture, s.borderSizePx,
+            s.borderTextureOffset, s.borderTextureOffsetY, s.borderTextureShiftX,
+            s.borderTextureShiftY, s.borderBehind, p.frameStrata, s.frameStrata,
+            s.portraitMode, s.portraitSide, p.portraitStyle, s.portraitStyle, s.showPortrait,
+            s.portraitSize, s.detachedPortraitShape, s.detachedPortraitOuterRing,
+            s.detachedPortraitOuterRingScale) or false)
 end
 
 local function ReloadDispelSlots(frame, entry)
@@ -2512,7 +2693,7 @@ local function ReloadDispelSlots(frame, entry)
             AK.RestyleSoon(DispelStyleKey(DISPEL_SLOTS[i].key .. "_byme"))
         end
     end
-    entry.dispel:SetShown((p.dispelOverlay or "none") ~= "none")
+    entry.dispel:SetShown(DispelSlotsShown(p))
 end
 
 -- Options-panel poke (via ns.UpdatePlayerDispelOverlay): re-run the

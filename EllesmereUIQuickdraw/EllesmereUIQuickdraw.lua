@@ -1100,7 +1100,8 @@ end
 --  fits on a ring and costs one keybind. A panel with a micro button fires as
 --  "/click <button>", the click Blizzard's own menu makes: the macro runs
 --  untainted from the secure button, where an addon opening the frame from its
---  own Lua taints what it draws (EllesmereUIDataBars_Blocks.lua:4138). The five
+--  own Lua taints what it draws (see MM_MICRO_BUTTON_NAMES in
+--  EllesmereUIDataBars/Blocks/MicroMenu.lua). The five
 --  with no button to click fire from FireInsecure, out of combat only.
 -------------------------------------------------------------------------------
 do
@@ -1116,8 +1117,9 @@ do
     --   no English one is baked in; first that answers wins, `default` last.
     -- minor: left out of the preset menu. The Shop and Customer Support are
     --   the two a ring is worth the least; the preset stays at the sixteen a
-    --   ring reads best at even though MAX_SLOTS now seats the full set. Both
-    --   are still in the picker.
+    --   ring reads best at (seventeen on WoW Forever, where Talents has its
+    --   own entry) even though MAX_SLOTS now seats the full set. Both are
+    --   still in the picker.
     local PANELS = {
         { key = "character",   icon = ART .. "menu-character.png",
           button = "CharacterMicroButton",
@@ -1210,6 +1212,23 @@ do
           button = "HelpMicroButton",
           label = "HELP_BUTTON",                default = "Customer Support" },
     }
+
+    -- WoW Forever splits the spellbook and the talents into two micro buttons.
+    -- Its combined button still exists but opens on whichever tab was last
+    -- shown, so there the spellbook entry clicks the spellbook's own button
+    -- and a Talents entry follows it.
+    if EllesmereUI.IS_FOREVER then
+        for i, def in ipairs(PANELS) do
+            if def.key == "spellbook" then
+                def.button, def.label, def.default = "SpellbookMicroButton", "SPELLBOOK", "Spellbook"
+                tinsert(PANELS, i + 1, { key = "talents",
+                    icon = ART .. "menu-achievements.png",
+                    button = "TalentMicroButton",
+                    label = "TALENTS",                  default = "Talents" })
+                break
+            end
+        end
+    end
 
     local byKey = {}
     for _, def in ipairs(PANELS) do byKey[def.key] = def end

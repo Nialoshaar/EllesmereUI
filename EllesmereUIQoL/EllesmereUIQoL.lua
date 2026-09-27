@@ -1323,9 +1323,11 @@ qolFrame:SetScript("OnEvent", function(self)
     end
 
     ---------------------------------------------------------------------------
-    --  Quick Signup (double-click to sign up)
+    --  Quick Signup (double-click to sign up; not on WoW Forever: Blizzard's
+    --  premade-group list does not load there, so the block and its options
+    --  row do not exist)
     ---------------------------------------------------------------------------
-    do
+    if not EllesmereUI.IS_FOREVER then
         local lastClickTime  = 0
         local lastClickEntry = nil
         local DOUBLE_CLICK_THRESHOLD = 0.4
@@ -1411,9 +1413,10 @@ qolFrame:SetScript("OnEvent", function(self)
     end
 
     ---------------------------------------------------------------------------
-    --  Persistent LFG Signup Note
+    --  Persistent LFG Signup Note (not on WoW Forever: no premade Sign Up dialog
+    --  there, so the block and its options row do not exist)
     ---------------------------------------------------------------------------
-    do
+    if not EllesmereUI.IS_FOREVER then
         local vanilla = LFGListApplicationDialog_Show
         local patched = false
         local copyHooked = false
@@ -2015,6 +2018,11 @@ do
         crit = true, haste = true, mastery = true, vers = true,
         leech = true, avoidance = true, speed = true,
     }
+    -- WoW Forever has no Mastery or Versatility.
+    if EllesmereUI.IS_FOREVER then
+        DEFAULT_STAT_ORDER = { "crit", "haste", "leech", "avoidance", "speed" }
+        VALID_STAT.mastery, VALID_STAT.vers = nil, nil
+    end
 
     local function SecondaryStatsOrder()
         local saved = EllesmereUI.QoLExtrasGet("secondaryStatsOrder")
@@ -2158,8 +2166,14 @@ do
             customHex = statsFrame._classHex or "ffffff"
         end
 
-        local crit = GetCritChance("player")
-        local haste = UnitSpellHaste("player")
+        local crit, critCR, haste, hasteCR
+        if EllesmereUI.IS_FOREVER then
+            crit, critCR = EllesmereUI.ForeverCritChance()
+            haste, hasteCR = EllesmereUI.ForeverHaste()
+        else
+            crit, critCR = EllesmereUI.PlayerCritChance()
+            haste, hasteCR = UnitSpellHaste("player"), CR_HASTE_MELEE
+        end
         local mastery = GetMasteryEffect()
         -- Versatility is the only row built by ADDING two getters, and addition
         -- is what a secret refuses -- so under restriction the real total is
@@ -2182,8 +2196,8 @@ do
         local showRawValues = showRawOnly or showBoth
         local critRaw, hasteRaw, masteryRaw, versRaw
         if showRawValues then
-            critRaw = GetCombatRating(CR_CRIT_MELEE)
-            hasteRaw = GetCombatRating(CR_HASTE_MELEE)
+            critRaw = GetCombatRating(critCR)
+            hasteRaw = GetCombatRating(hasteCR)
             masteryRaw = GetCombatRating(CR_MASTERY)
             versRaw = GetCombatRating(CR_VERSATILITY_DAMAGE_DONE)
         end
@@ -2420,6 +2434,11 @@ do
             "UNIT_SPELL_HASTE",
         }) do
             statsFrame:RegisterUnitEvent(ev, "player")
+        end
+        -- Forever can show melee or ranged haste, which change without UNIT_SPELL_HASTE.
+        if EllesmereUI.IS_FOREVER then
+            statsFrame:RegisterUnitEvent("UNIT_ATTACK_SPEED", "player")
+            statsFrame:RegisterUnitEvent("UNIT_RANGEDDAMAGE", "player")
         end
         for _, ev in ipairs({
             "COMBAT_RATING_UPDATE", "PLAYER_EQUIPMENT_CHANGED",
@@ -4906,7 +4925,7 @@ do
         fs = EnsureText(button)
         if ilvl and ilvl > 0 then
             fs:SetText(ilvl)
-            -- Match the character sheet: custom color > upgrade track > rarity.
+            -- Match the character sheet: custom color > upgrade/crafted track > rarity.
             local c
             if EllesmereUI.GetItemLevelColor then
                 c = EllesmereUI.GetItemLevelColor(link, quality)

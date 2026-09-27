@@ -210,9 +210,14 @@ local DASH_V = [[Interface\AddOns\EllesmereUI\media\glow-dash-v.tga]]
 -- tick. Shared by the animated (_AntsOnUpdate) and static (_AntsStaticSettle) paths.
 local function _AntsResolveSize(self, d)
     local w, h = self:GetSize()
-    -- Taint-strip (reparented frames can return secret-number sizes).
-    w = tonumber(tostring(w)) or 0
-    h = tonumber(tostring(h)) or 0
+    -- A secret size (the wrapper sits in a restricted layout) never reaches tostring or
+    -- arithmetic: it takes the start-time fallback. Plain sizes keep the taint strip.
+    if issecretvalue(w) or issecretvalue(h) then
+        w, h = 0, 0
+    else
+        w = tonumber(tostring(w)) or 0
+        h = tonumber(tostring(h)) or 0
+    end
     if w * h == 0 and d.fallbackW and d.fallbackW > 0 then
         w = d.fallbackW; h = d.fallbackH or d.fallbackW
     end
@@ -520,10 +525,14 @@ local function _AutoCastOnUpdate(self, elapsed)
     local w, h = d.w, d.h
     if w * h == 0 then
         w, h = self:GetSize()
-        -- Strip taint from size values (reparented buttons can return
-        -- "secret number" tainted dimensions from GetSize).
-        w = tonumber(tostring(w)) or 0
-        h = tonumber(tostring(h)) or 0
+        -- A secret size never reaches tostring or arithmetic: it takes the
+        -- start-time fallback below. Plain sizes keep the taint strip.
+        if issecretvalue(w) or issecretvalue(h) then
+            w, h = 0, 0
+        else
+            w = tonumber(tostring(w)) or 0
+            h = tonumber(tostring(h)) or 0
+        end
         -- Fallback to the w/h passed at start time (SetAllPoints wrappers
         -- may return 0 before layout resolves)
         if w * h == 0 and d.fallbackW and d.fallbackW > 0 then

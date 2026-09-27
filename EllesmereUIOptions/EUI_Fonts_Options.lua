@@ -1007,8 +1007,7 @@ local function TileBlizzardSkin(parent, y, W, tile)
               if not EllesmereUIDB then EllesmereUIDB = {} end
               EllesmereUIDB.tooltipFontScale = v
           end });  y = y - h
-    _, h = W:DualRow(parent, y,
-        { type = "slider", text = "Enchant Text Size", min = 6, max = 20, step = 1,
+    local enchSizeCfg = { type = "slider", text = "Enchant Text Size", min = 6, max = 20, step = 1,
           getValue = function()
               return (EllesmereUIDB and EllesmereUIDB.charSheetEnchantSize) or 9
           end,
@@ -1016,7 +1015,14 @@ local function TileBlizzardSkin(parent, y, W, tile)
               if not EllesmereUIDB then EllesmereUIDB = {} end
               EllesmereUIDB.charSheetEnchantSize = v
               if EllesmereUI._refreshCharSheetSlotLabels then EllesmereUI._refreshCharSheetSlotLabels() end
-          end },
+          end }
+    -- WoW Forever: the slot text belongs to the EllesmereUI look and the WoW
+    -- Forever style there, so Blizzard Style and Classic WoW UI leave this
+    -- size nothing to drive.
+    local BS = EllesmereUI.BlizzStyle
+    if EllesmereUI.IS_FOREVER and BS and not BS.Forever("charsheet") then BS.Gate("charsheet", enchSizeCfg) end
+    _, h = W:DualRow(parent, y,
+        enchSizeCfg,
         { type = "slider", text = "Dragonriding Speed Text Size", min = 6, max = 32, step = 1,
           getValue = function()
               local p = ns.edrDB and ns.edrDB.profile and ns.edrDB.profile.speedText

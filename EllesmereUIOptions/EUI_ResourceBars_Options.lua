@@ -77,6 +77,23 @@ end
 function ns.ERB_SameBorderPx(a, b)
     return (a.borderSizePx or false) == (b.borderSizePx or false)
 end
+-- Separator Art dropdown values / order (fresh tables, page build only):
+-- "match" (the bar's own style, see ns.ERB_SeparatorArt) first, then every
+-- built-in border style with a horizontal companion strip, named from the
+-- catalogue, so a later style with separator art joins with no change here.
+-- withNone puts a "none" entry first for a dropdown whose None turns it off.
+function ns.ERB_SeparatorArtValues(withNone)
+    local values, order = {}, {}
+    if withNone then values.none = "None"; order[1] = "none" end
+    values.match = "Match Border"; order[#order + 1] = "match"
+    for _, entry in ipairs(EllesmereUI._builtinBorderTextures) do
+        if EllesmereUI.GetBorderCompanion(entry.key, "sepH") then
+            values[entry.key] = entry.name
+            order[#order + 1] = entry.key
+        end
+    end
+    return values, order
+end
 -- Which of the three bars carry a textured border, as one string. A cross-bar
 -- border sync that changes it rebuilds the page (each section's Width Offset |
 -- Height Offset row exists only while its style is textured); otherwise the
@@ -419,6 +436,9 @@ initFrame:SetScript("OnEvent", function(self)
                     end
                 end
 
+                -- Separators: the bottom-edge line (bar types have no gaps), as live.
+                ns.ERB_Separators(pc, sp, (sp.edgeSep and sp.edgeSepH ~= false and ns.ERB_Textured(sp)
+                    and not EllesmereUI.BlizzStyle.Get("resourcebars")) and true or false, pc:GetFrameLevel() + 5)
                 -- Bar-type has no pips: hide pips and gap fills from a prior build
                 for _, pip in ipairs(_previewFrames.pips) do pip:Hide() end
                 if pc._gapFills then for i = 1, #pc._gapFills do pc._gapFills[i]:Hide() end end
@@ -487,6 +507,7 @@ initFrame:SetScript("OnEvent", function(self)
                 -- Read by the count-text block so the number matches the lit segments
                 pc._pvShownCount = filledCount
                 local useThresh = _pvTsEnabled
+                local pvPipBg = ns.ERB_PipBgOn(sp, false)  -- Background on individual pips, as live
 				-- current spec threshold color if configured
 				local tr = _pvTsEntry2 and _pvTsEntry2.thresholdR or sp.thresholdR
 				local tg = _pvTsEntry2 and _pvTsEntry2.thresholdG or sp.thresholdG
@@ -518,7 +539,9 @@ initFrame:SetScript("OnEvent", function(self)
                         pip:ClearAllPoints()
                         pip:SetPoint("LEFT", pc, "LEFT", pipX[i], 0)
                     end
-                    if sp.darkTheme then
+                    if pvPipBg then
+                        pip._bg:SetColorTexture(ns.ERB.PipBgColor(sp, true))
+                    elseif sp.darkTheme then
                         local _dbr, _dbg, _dbb = EllesmereUI.GetDarkModeBg()
                         pip._bg:SetColorTexture(_dbr, _dbg, _dbb, 1)
                     elseif sp.classColored then
@@ -580,7 +603,7 @@ initFrame:SetScript("OnEvent", function(self)
                     -- Fill Opacity: translucent fill; active pips hide their bg so the fill reveals what's behind (mirrors live pips)
                     local _pvPipOp = (sp.fillOpacity or 100) / 100
                     pip._fill:SetAlpha(_pvPipOp)
-                    pip._bg:SetAlpha((active and _pvPipOp < 1) and 0 or 1)
+                    pip._bg:SetAlpha((active and (_pvPipOp < 1 or pvPipBg)) and 0 or 1)
 
                     -- DK rune durations: fake cooldown numbers on unfilled pips
                     if cf == "DEATHKNIGHT" and sp.showText then
@@ -645,6 +668,13 @@ initFrame:SetScript("OnEvent", function(self)
                     else
                         for i = 1, #pvFills do pvFills[i]:Hide() end
                     end
+                end
+
+                -- Separators: the bottom-edge line and one line per gap, as live.
+                do
+                    local on = sp.edgeSep and ns.ERB_Textured(sp) and not EllesmereUI.BlizzStyle.Get("resourcebars")
+                    ns.ERB_Separators(pc, sp, (on and sp.edgeSepH ~= false) and true or false, pc:GetFrameLevel() + 5,
+                        (on and sp.edgeSepV ~= false) and slots or nil, numPips, false, false)
                 end
 
                 -- Hide bar fill / ticks left from a previous build
@@ -727,6 +757,8 @@ initFrame:SetScript("OnEvent", function(self)
             elseif sp.borderOnPips and not isBar then
                 pc._barBorderFrame:Hide()
             else
+                -- Extend Top / Extend Bottom, as the live full-bar border draws them.
+                ns.ERB_AnchorBorderHost(pc._barBorderFrame, pc, ns.ERB_BorderExtents(sp))
                 EllesmereUI.ApplyBorderStyle(pc._barBorderFrame, sp.borderSize or 1,
                     sp.borderR or 0, sp.borderG or 0, sp.borderB or 0, sp.borderA or 1,
                     sp.borderTexture or "solid", sp.borderTextureOffset, sp.borderTextureOffsetY,
@@ -735,8 +767,9 @@ initFrame:SetScript("OnEvent", function(self)
                 pc._barBorderFrame:Show()
             end
 
-            -- Full-bar background for pips only; bar-type uses _barBg
-            if not isBar then
+            -- Full-bar background for pips only; bar-type uses _barBg. Background on
+            -- individual pips drops it, as on the live bar.
+            if not isBar and not ns.ERB_PipBgOn(sp, false) then
                 if not pc._pipBarBg then
                     pc._pipBarBg = pc:CreateTexture(nil, "BACKGROUND", nil, -1)
                     UnsnapTex(pc._pipBarBg)
@@ -2022,6 +2055,9 @@ initFrame:SetScript("OnEvent", function(self)
         local function BuildSpecItems_L()
             local items = {}
             items[#items + 1] = { key = 0, label = "All Specs", isAction = true, lockedFn = HasAllSpecsEntry }
+            -- WoW Forever: thresholds resolve through All Specs cards only there, so
+            -- the role shortcuts and the per-class spec rows are left out.
+            if EllesmereUI.IS_FOREVER then return items end
             items[#items + 1] = { key = ROLE_ALL_HEALERS, label = "All Healers", isAction = true, lockedFn = HasAllSpecsEntry }
             items[#items + 1] = { key = ROLE_ALL_TANKS, label = "All Tanks", isAction = true, lockedFn = HasAllSpecsEntry }
             items[#items + 1] = { key = ROLE_ALL_DPS, label = "All DPS", isAction = true, lockedFn = HasAllSpecsEntry }
@@ -2040,7 +2076,6 @@ initFrame:SetScript("OnEvent", function(self)
             local healers, tanks, dps = {}, {}, {}
             for _, cls in ipairs(classList) do
                 items[#items + 1] = { isHeader = true, label = cls.className }
-                -- No per-class spec API on WoW Forever: the list stays at its headers.
                 local numSpecs = GetNumSpecializationsForClassID and GetNumSpecializationsForClassID(cls.classID) or 0
                 for specIndex = 1, numSpecs do
                     local specID, specName, _, _, role = GetSpecializationInfoForClassID(cls.classID, specIndex)
@@ -3954,6 +3989,7 @@ initFrame:SetScript("OnEvent", function(self)
             end
             if not EllesmereUI._prebuilding then
                 local rgn = pwrBsRow._leftRegion
+                local sepValues, sepOrder = ns.ERB_SeparatorArtValues(true)
                 local cogBtn = EllesmereUI.BuildInlineCog(rgn, { icon = EllesmereUI.DIRECTIONS_ICON,
                     title = "Border Options",
                     rows = {
@@ -3986,6 +4022,69 @@ initFrame:SetScript("OnEvent", function(self)
                           set = function(v)
                               local c = cfg(); if not c then return end
                               c.borderBehind = v == false and nil or v; RebuildPower(); EllesmereUI:RefreshPage()
+                          end },
+                        -- Draw Above GCD Bar: this border over a GCD bar that overlaps the power
+                        -- bar (ns.ERB_PowerLift). Kept out of the Border Style syncs. Show
+                        -- Behind keeps the border under its own fill, so it greys this out.
+                        { type = "toggle", label = "Draw Above GCD Bar",
+                          tooltip = "Draws the power bar's border above the GCD bar where the two overlap.",
+                          disabled = function()
+                              local p, c = DB(), cfg()
+                              return (powerOff() or not (p and p.gcdBar.enabled) or (c and c.borderBehind)) and true or false
+                          end,
+                          disabledTooltip = function()
+                              if powerOff() then return powerDisTip end
+                              local p = DB(); if not (p and p.gcdBar.enabled) then return "GCD Bar" end
+                              return "This option can't be used while Show Behind is enabled."
+                          end,
+                          rawTooltip = function()
+                              local p = DB()
+                              return not powerOff() and (p and p.gcdBar.enabled) and true or false
+                          end,
+                          get = function() local c = cfg(); return c and c.borderAboveGCD or false end,
+                          set = function(v)
+                              local c = cfg(); if not c then return end
+                              c.borderAboveGCD = v and true or false; RebuildPower(); EllesmereUI:RefreshPage()
+                          end },
+                        -- Extend Top / Extend Bottom: 0 = off, stored explicitly (mirror sync
+                        -- never carries a nil). Screen axes, so a vertical bar too.
+                        { type = "slider", label = "Extend Top", min = 0, max = 50, step = 1,
+                          tooltip = "Grows the border past the bar's top edge on screen without resizing the bar.",
+                          disabled = powerOff, disabledTooltip = powerDisTip,
+                          get = function() local c = cfg(); return c and c.borderExtendTop or 0 end,
+                          set = function(v)
+                              local c = cfg(); if not c then return end
+                              c.borderExtendTop = v; RebuildPower(); EllesmereUI:RefreshPage()
+                          end },
+                        { type = "slider", label = "Extend Bottom", min = 0, max = 50, step = 1,
+                          tooltip = "Grows the border past the bar's bottom edge on screen without resizing the bar.",
+                          disabled = powerOff, disabledTooltip = powerDisTip,
+                          get = function() local c = cfg(); return c and c.borderExtendBottom or 0 end,
+                          set = function(v)
+                              local c = cfg(); if not c then return end
+                              c.borderExtendBottom = v; RebuildPower(); EllesmereUI:RefreshPage()
+                          end },
+                        -- Bottom Separator: None = off (edgeSep false); an art entry turns it
+                        -- on with that art (edgeSepArt). Out of the Border Style syncs.
+                        { type = "dropdown", label = "Bottom Separator", values = sepValues, order = sepOrder,
+                          tooltip = "Draws a separator line along the bar's bottom edge.",
+                          disabled = powerOff, disabledTooltip = powerDisTip,
+                          get = function()
+                              local c = cfg(); if not (c and c.edgeSep) then return "none" end
+                              return c.edgeSepArt or "match"
+                          end,
+                          set = function(v)
+                              local c = cfg(); if not c then return end
+                              if v == "none" then c.edgeSep = false else c.edgeSep = true; c.edgeSepArt = v end
+                              RebuildPower(); EllesmereUI:RefreshPage()
+                          end },
+                        { type = "slider", label = "Separator Y Offset", min = -50, max = 50, step = 1,
+                          disabled = function() local c = cfg(); return powerOff() or not (c and c.edgeSep) end,
+                          disabledTooltip = function() return powerOff() and powerDisTip or "Bottom Separator" end,
+                          get = function() local c = cfg(); return c and c.edgeSepY or 0 end,
+                          set = function(v)
+                              local c = cfg(); if not c then return end
+                              c.edgeSepY = v; RebuildPower(); EllesmereUI:RefreshPage()
                           end },
                     },
                 })
@@ -4719,6 +4818,15 @@ initFrame:SetScript("OnEvent", function(self)
                               local c = cfg(); if not c then return end
                               c.hidePowerIfResource = v; RebuildClass()
                           end },
+                        -- Draw Above Other Bars: the class resource slot above the health,
+                        -- power and GCD borders (ns.ERB_ClassRaise).
+                        { type = "toggle", label = "Draw Above Other Bars",
+                          tooltip = "Draws the class resource bar above the health, power and GCD bar borders.",
+                          get = function() local c = cfg(); return c and c.raiseLevel or false end,
+                          set = function(v)
+                              local c = cfg(); if not c then return end
+                              c.raiseLevel = v and true or false; RebuildClass()
+                          end },
                     },
                 })
             end
@@ -4889,6 +4997,7 @@ initFrame:SetScript("OnEvent", function(self)
             end
             if not EllesmereUI._prebuilding then
                 local rgn = classBsRow._leftRegion
+                local sepValues, sepOrder = ns.ERB_SeparatorArtValues(true)
                 local cogBtn = EllesmereUI.BuildInlineCog(rgn, { icon = EllesmereUI.DIRECTIONS_ICON,
                     title = "Border Options",
                     rows = {
@@ -4921,6 +5030,70 @@ initFrame:SetScript("OnEvent", function(self)
                           set = function(v)
                               local c = cfg(); if not c then return end
                               c.borderBehind = v == false and nil or v; RebuildClass(); EllesmereUI:RefreshPage()
+                          end },
+                        -- Extend Top / Extend Bottom: the full-bar border only, which pip and
+                        -- rune resources drop under Border on individual pips (bar types keep it).
+                        { type = "slider", label = "Extend Top", min = 0, max = 50, step = 1,
+                          tooltip = "Grows the border past the bar's top edge on screen without resizing the bar.",
+                          disabled = function() local c = cfg(); return (c and c.borderOnPips and not ns.IsBarTypeSecondary()) and true or false end,
+                          disabledTooltip = "This option can't be used while Border on individual pips is enabled.", rawTooltip = true,
+                          get = function() local c = cfg(); return c and c.borderExtendTop or 0 end,
+                          set = function(v)
+                              local c = cfg(); if not c then return end
+                              c.borderExtendTop = v; RebuildClass(); EllesmereUI:RefreshPage()
+                          end },
+                        { type = "slider", label = "Extend Bottom", min = 0, max = 50, step = 1,
+                          tooltip = "Grows the border past the bar's bottom edge on screen without resizing the bar.",
+                          disabled = function() local c = cfg(); return (c and c.borderOnPips and not ns.IsBarTypeSecondary()) and true or false end,
+                          disabledTooltip = "This option can't be used while Border on individual pips is enabled.", rawTooltip = true,
+                          get = function() local c = cfg(); return c and c.borderExtendBottom or 0 end,
+                          set = function(v)
+                              local c = cfg(); if not c then return end
+                              c.borderExtendBottom = v; RebuildClass(); EllesmereUI:RefreshPage()
+                          end },
+                        -- Separators: None = off (edgeSep false); an art entry turns them on
+                        -- with that art. The rows below pick its lines; Bar Spacing and the
+                        -- gap colour stay the user's own (never written here).
+                        { type = "dropdown", label = "Separators", values = sepValues, order = sepOrder,
+                          tooltip = "Draws separator lines along the bar edge and between the pips.",
+                          get = function()
+                              local c = cfg(); if not (c and c.edgeSep) then return "none" end
+                              return c.edgeSepArt or "match"
+                          end,
+                          set = function(v)
+                              local c = cfg(); if not c then return end
+                              if v == "none" then c.edgeSep = false else c.edgeSep = true; c.edgeSepArt = v end
+                              RebuildClass(); EllesmereUI:RefreshPage()
+                          end },
+                        { type = "toggle", label = "Horizontal Separator",
+                          tooltip = "Draws the line along the bar's bottom edge.",
+                          disabled = function() local c = cfg(); return not (c and c.edgeSep) end,
+                          disabledTooltip = "Separators",
+                          get = function() local c = cfg(); return c and c.edgeSepH ~= false end,
+                          set = function(v)
+                              local c = cfg(); if not c then return end
+                              c.edgeSepH = v and true or false; RebuildClass(); EllesmereUI:RefreshPage()
+                          end },
+                        { type = "slider", label = "Separator Y Offset", min = -50, max = 50, step = 1,
+                          disabled = function() local c = cfg(); return not (c and c.edgeSep and c.edgeSepH ~= false) end,
+                          disabledTooltip = function() local c = cfg(); return (c and c.edgeSep) and "Horizontal Separator" or "Separators" end,
+                          get = function() local c = cfg(); return c and c.edgeSepY or 0 end,
+                          set = function(v)
+                              local c = cfg(); if not c then return end
+                              c.edgeSepY = v; RebuildClass(); EllesmereUI:RefreshPage()
+                          end },
+                        { type = "toggle", label = "Vertical Separators",
+                          tooltip = "Draws a line in each gap between the pips.",
+                          disabled = function() local c = cfg(); return (not (c and c.edgeSep)) or ns.IsBarTypeSecondary() end,
+                          disabledTooltip = function()
+                              local c = cfg(); if not (c and c.edgeSep) then return "Separators" end
+                              return "This option applies to pip and rune resources only."
+                          end,
+                          rawTooltip = function() local c = cfg(); return (c and c.edgeSep) and true or false end,
+                          get = function() local c = cfg(); return c and c.edgeSepV ~= false end,
+                          set = function(v)
+                              local c = cfg(); if not c then return end
+                              c.edgeSepV = v and true or false; RebuildClass(); EllesmereUI:RefreshPage()
                           end },
                     },
                 })
@@ -5009,6 +5182,25 @@ initFrame:SetScript("OnEvent", function(self)
                           set = function(v)
                               local c = cfg(); if not c then return end
                               c.borderOnPips = v; RebuildClass(); EllesmereUI:RefreshPage()
+                          end },
+                        -- Background on individual pips: each pip's own backdrop in place of
+                        -- the full-bar one, so the gaps stay clear (pip and rune resources;
+                        -- Blizzard Style stands it down at runtime).
+                        { type = "toggle", label = "Background on individual pips",
+                          tooltip = "Draws the class resource background inside each pip so the gaps between pips stay clear.",
+                          disabled = function()
+                              local c = cfg()
+                              return (not (c and c.borderOnPips)) or ns.IsBarTypeSecondary()
+                          end,
+                          disabledTooltip = function()
+                              if ns.IsBarTypeSecondary() then return "This option applies to pip and rune resources only." end
+                              return "Border on individual pips"
+                          end,
+                          rawTooltip = function() return ns.IsBarTypeSecondary() and true or false end,
+                          get = function() local c = cfg(); return c and c.pipBgOnPips or false end,
+                          set = function(v)
+                              local c = cfg(); if not c then return end
+                              c.pipBgOnPips = v and true or false; RebuildClass(); EllesmereUI:RefreshPage()
                           end },
                     },
                 })
@@ -5610,7 +5802,10 @@ initFrame:SetScript("OnEvent", function(self)
 
             local function BuildSpecItems()
                 local items = {}
-                items[#items + 1] = { key = 0, label = "All Specs", isAction = true, lockedFn = HasCRAllSpecs }
+                items[#items + 1] = { key = 0, label = "All Specs", isAction = true, lockedFn = ns.HasCRAllSpecs }
+                -- WoW Forever: thresholds resolve through All Specs cards only there, so
+                -- All Specs is the one entry.
+                if EllesmereUI.IS_FOREVER then return items end
 
                 local classList = {}
                 for classID = 1, (GetNumClasses and GetNumClasses() or 13) do
@@ -5624,7 +5819,6 @@ initFrame:SetScript("OnEvent", function(self)
                 local healers, tanks, dps = {}, {}, {}
                 for _, cls in ipairs(classList) do
                     items[#items + 1] = { isHeader = true, label = cls.className }
-                    -- No per-class spec API on WoW Forever: the list stays at its headers.
                     local numSpecs = GetNumSpecializationsForClassID and GetNumSpecializationsForClassID(cls.classID) or 0
                     for specIndex = 1, numSpecs do
                         local specID, specName, _, _, role = GetSpecializationInfoForClassID(cls.classID, specIndex)
@@ -7996,7 +8190,8 @@ initFrame:SetScript("OnEvent", function(self)
                 EVOKER = { [3] = { "Ebon Might", "Mana" } },
             }
             local classAlts = SPEC_POWER_ALTS[playerClass]
-            if classAlts then
+            -- Retail only: WoW Forever has no specs (see the druid row below).
+            if classAlts and not EllesmereUI.IS_FOREVER then
                 local spec = GetSpecialization and GetSpecialization()
                 local data = spec and classAlts[spec]
                 if data then
@@ -8049,6 +8244,47 @@ initFrame:SetScript("OnEvent", function(self)
                     end
                     EllesmereUI.RegisterWidgetRefresh(UpdatePowerTypeRow)
                     UpdatePowerTypeRow()
+                end
+            end
+            -- WoW Forever: Mana Regen Spark (EllesmereUI_ManaRegenSpark.lua),
+            -- the section's last row; warriors and rogues get no spark engine,
+            -- so no row. A druid's Power Type shares it: one choice for every
+            -- form, stored under a string key so it can never meet a retail
+            -- spec ID in the table.
+            if EllesmereUI.IS_FOREVER then
+                local sparkCfg = { type="toggle", text="Mana Regen Spark",
+                      tooltip="Sweeps a spark across the bar for 5 seconds after you spend mana, then every 2 seconds while mana regenerates.",
+                      getValue = function()
+                          local p = DB(); return p and p.primary.manaRegenSpark or false
+                      end,
+                      setValue = function(v)
+                          local p = DB(); if not p then return end
+                          p.primary.manaRegenSpark = v
+                          RebuildPower()
+                      end }
+                if playerClass == "DRUID" then
+                    _, h = W:DualRow(parent, y,
+                        { type="dropdown", text="Power Type",
+                          tooltip="Mana keeps the bar on Mana in Bear and Cat Form.",
+                          values = { ["default"] = "Match Form", ["alt"] = "Mana" },
+                          order = { "default", "alt" },
+                          getValue = function()
+                              local p = DB(); local ov = p and p.primary.powerTypeOverride
+                              return (ov and ov.foreverDruid) and "alt" or "default"
+                          end,
+                          setValue = function(v)
+                              local p = DB(); if not p then return end
+                              if v == "alt" then
+                                  if not p.primary.powerTypeOverride then p.primary.powerTypeOverride = {} end
+                                  p.primary.powerTypeOverride.foreverDruid = true
+                              elseif p.primary.powerTypeOverride then
+                                  p.primary.powerTypeOverride.foreverDruid = nil
+                              end
+                              RebuildPower()
+                          end },
+                        sparkCfg); y = y - h
+                elseif EllesmereUI.ManaRegenSpark then
+                    _, h = W:DualRow(parent, y, sparkCfg, EllesmereUI.BlankRowCfg()); y = y - h
                 end
             end
         end
@@ -8375,7 +8611,7 @@ initFrame:SetScript("OnEvent", function(self)
         end
         local frameAtlas = ns.ERB_BlizzAtlas("frame")
         if frameAtlas then
-            fr:SetAtlas(frameAtlas)
+            ns.ERB_StockAtlas(fr, frameAtlas)
             fr:ClearAllPoints()
             fr:SetPoint("TOPLEFT", pf.barFrame, "TOPLEFT", -2, 2)
             fr:SetPoint("BOTTOMRIGHT", pf.barFrame, "BOTTOMRIGHT", 2, -2)
@@ -8385,7 +8621,7 @@ initFrame:SetScript("OnEvent", function(self)
         end
         local boxAtlas = cb.showSpellText and ns.ERB_BlizzAtlas("textbox")
         if boxAtlas then
-            tb:SetAtlas(boxAtlas)
+            ns.ERB_StockAtlas(tb, boxAtlas)
             tb:ClearAllPoints()
             tb:SetPoint("TOPLEFT", pf.barFrame, "BOTTOMLEFT", 0, 3)
             tb:SetPoint("BOTTOMRIGHT", pf.barFrame, "BOTTOMRIGHT", 0, -13)
@@ -8463,9 +8699,10 @@ initFrame:SetScript("OnEvent", function(self)
         -- Background
         local texKey = cb.texture
         if blizzKit then
+            -- The retail background under WoW Forever too, as live.
             local bgAtlas = ns.ERB_BlizzAtlas("bg")
             if bgAtlas then
-                pf.bg:SetAtlas(bgAtlas)
+                EllesmereUI.StockAtlas(pf.bg, bgAtlas)
             else
                 pf.bg:SetTexture(nil)
                 pf.bg:SetColorTexture(0, 0, 0, 0.7)
@@ -8474,7 +8711,12 @@ initFrame:SetScript("OnEvent", function(self)
             pf.bg:SetPoint("TOPLEFT", pf.barFrame, "TOPLEFT", -1, 1)
             pf.bg:SetPoint("BOTTOMRIGHT", pf.barFrame, "BOTTOMRIGHT", 1, -1)
         elseif texKey == "blizzard" then
-            pf.bg:SetAtlas("UI-CastingBar-Background", true)
+            -- As live: Classic WoW UI takes the retail background on WoW Forever.
+            if classic then
+                ns.ERB_StockAtlas(pf.bg, "UI-CastingBar-Background", true)
+            else
+                pf.bg:SetAtlas("UI-CastingBar-Background", true)
+            end
             pf.bg:ClearAllPoints()
             pf.bg:SetAllPoints(pf.barFrame)
         else
@@ -8489,11 +8731,16 @@ initFrame:SetScript("OnEvent", function(self)
             pf.container._border:SetFrameLevel(cb.borderBehind and math.max(0, pf.container:GetFrameLevel() - 1) or (pf.container:GetFrameLevel() + 5))
             local pbs = blizz and 0 or (cb.borderSize or 0)
             local pbpx = (not blizz) and EllesmereUI.BorderPx(cb.borderSizePx, pbs, cb.borderTexture or "solid") or nil
+            -- Extend Top / Extend Bottom, as the live bar draws them (none under a stock style).
+            ns.ERB_AnchorBorderHost(pf.container._border, pf.container, ns.ERB_BorderExtents((not blizz) and cb or nil))
             EllesmereUI.ApplyBorderStyle(pf.container._border, pbs,
                 cb.borderR or 0, cb.borderG or 0, cb.borderB or 0, cb.borderA or 1,
                 cb.borderTexture or "solid", cb.borderTextureOffset, cb.borderTextureOffsetY,
                 cb.borderTextureShiftX, cb.borderTextureShiftY, "resourcebars", pbs, nil, pbpx)
         end
+        -- Bottom Separator, as the live bar draws it (none under a stock style or a Solid border).
+        ns.ERB_Separators(pf.container, cb, (cb.edgeSep and not blizz and ns.ERB_Textured(cb)) and true or false,
+            pf.container:GetFrameLevel() + 7)
 
         -- Status bar: full bar frame, no inset
         pf.bar:ClearAllPoints()
@@ -8611,7 +8858,10 @@ initFrame:SetScript("OnEvent", function(self)
         -- shared PP system (ApplyBorderStyle -> SnapBorderTextures), so the
         -- divider has to match it, not the panel's own pixel grid.
         if pf.iconDivider then
-            if hasIcon and cb.showIconDivider then
+            -- Border Art Divider, as the live bar draws it.
+            if ns.ERB_CastDividerArt(pf.iconDivider, hasIcon and cb.showIconDivider, pf.iconFrame, iconOnRight, cb, blizz) then
+                pf.iconDivider:Show()
+            elseif hasIcon and cb.showIconDivider then
                 local PPp = EllesmereUI.PP
                 local des = pf.container:GetEffectiveScale()
                 local onePixel = (PPp and des > 0) and (PPp.perfect / des) or 1
@@ -8656,6 +8906,7 @@ initFrame:SetScript("OnEvent", function(self)
                 pf.timerText:SetText(string.format("%.1f", 3.0 * (1 - _castBarPreviewFill)))
             end
             pf.timerText:Show()
+            ns.ERB_CastTextColor(pf.timerText, cb.timerR, cb.timerG, cb.timerB, cb.timerA)
         else
             pf.timerText:Hide()
         end
@@ -8678,6 +8929,7 @@ initFrame:SetScript("OnEvent", function(self)
             end
             pf.spellText:SetText(EllesmereUI.L("Spell Name"))
             pf.spellText:Show()
+            ns.ERB_CastTextColor(pf.spellText, cb.spellTextR, cb.spellTextG, cb.spellTextB, cb.spellTextA)
         else
             pf.spellText:Hide()
         end
@@ -8744,18 +8996,26 @@ initFrame:SetScript("OnEvent", function(self)
         bdrFrame:SetAllPoints(container)
         bdrFrame:SetFrameLevel(container:GetFrameLevel() + 5)
         container._border = bdrFrame
+        ns.ERB_AnchorBorderHost(bdrFrame, container, ns.ERB_BorderExtents((not ns.ERB_CastBlizz()) and cb or nil))
         EllesmereUI.ApplyBorderStyle(bdrFrame, cb.borderSize or 0,
             cb.borderR or 0, cb.borderG or 0, cb.borderB or 0, cb.borderA or 1,
             cb.borderTexture or "solid", cb.borderTextureOffset, cb.borderTextureOffsetY,
             cb.borderTextureShiftX, cb.borderTextureShiftY, "resourcebars", cb.borderSize or 0,
             nil, EllesmereUI.BorderPx(cb.borderSizePx, cb.borderSize or 0, cb.borderTexture or "solid"))
+        -- Bottom Separator, as the live bar draws it.
+        ns.ERB_Separators(container, cb, (cb.edgeSep and not ns.ERB_CastBlizz() and ns.ERB_Textured(cb)) and true or false,
+            container:GetFrameLevel() + 7)
 
         -- Background (full bar area, no inset)
         local bg = barFrame:CreateTexture(nil, "BACKGROUND")
         bg:SetAllPoints()
         local texKey = cb.texture
         if texKey == "blizzard" then
-            bg:SetAtlas("UI-CastingBar-Background", true)
+            if ns.ERB_CastClassic() then
+                ns.ERB_StockAtlas(bg, "UI-CastingBar-Background", true)
+            else
+                bg:SetAtlas("UI-CastingBar-Background", true)
+            end
         else
             bg:SetColorTexture(cb.bgR, cb.bgG, cb.bgB, cb.bgA)
         end
@@ -8838,6 +9098,7 @@ initFrame:SetScript("OnEvent", function(self)
         else
             timerText:Hide()
         end
+        ns.ERB_CastTextColor(timerText, cb.timerR, cb.timerG, cb.timerB, cb.timerA)
         _castBarPreviewFrames.timerText = timerText
 
         -- Spell name text
@@ -8850,6 +9111,7 @@ initFrame:SetScript("OnEvent", function(self)
         else
             spellText:Hide()
         end
+        ns.ERB_CastTextColor(spellText, cb.spellTextR, cb.spellTextG, cb.spellTextB, cb.spellTextA)
         _castBarPreviewFrames.spellText = spellText
 
         -- Create hit overlays for preview click-to-scroll
@@ -9052,6 +9314,34 @@ initFrame:SetScript("OnEvent", function(self)
                           local p = DB(); if not p then return end
                           p.castBar.showIconDivider = v; RefreshCast()
                       end },
+                    -- Border Art Divider: the divider in the border style's own art (the
+                    -- Pixels styles); any other style keeps the solid line.
+                    { type = "toggle", label = "Border Art Divider",
+                      tooltip = "Draws the icon divider in the border style's art instead of a solid line.",
+                      disabled = function()
+                          local p = DB(); if not p then return true end
+                          local cb = p.castBar
+                          return (not cb.showIconDivider) or EllesmereUI.BlizzStyle.Get("castbar")
+                              or not EllesmereUI.GetBorderCompanion(cb.borderTexture, "sepV")
+                      end,
+                      disabledTooltip = function()
+                          if EllesmereUI.BlizzStyle.Get("castbar") then
+                              return EllesmereUI.DisabledTooltip(EllesmereUI.BlizzStyle.Label("castbar"), "disabled")
+                          end
+                          local p = DB()
+                          if not (p and p.castBar.showIconDivider) then return "Show Icon Divider" end
+                          return "This option requires a border style with matching art, such as Pixels."
+                      end,
+                      rawTooltip = function()
+                          if EllesmereUI.BlizzStyle.Get("castbar") then return true end
+                          local p = DB()
+                          return (p and p.castBar.showIconDivider) and true or false
+                      end,
+                      get = function() local p = DB(); return p and p.castBar.iconDividerArt or false end,
+                      set = function(v)
+                          local p = DB(); if not p then return end
+                          p.castBar.iconDividerArt = v and true or false; RefreshCast()
+                      end },
                 },
             })
         end
@@ -9192,6 +9482,7 @@ initFrame:SetScript("OnEvent", function(self)
             end
             if not EllesmereUI._prebuilding then
                 local rgn = cbBsRow._leftRegion
+                local sepValues, sepOrder = ns.ERB_SeparatorArtValues(true)
                 local cogBtn = EllesmereUI.BuildInlineCog(rgn, { icon = EllesmereUI.DIRECTIONS_ICON,
                     title = "Border Options",
                     rows = {
@@ -9224,6 +9515,46 @@ initFrame:SetScript("OnEvent", function(self)
                           set = function(v)
                               local p = DB(); if not p then return end
                               p.castBar.borderBehind = v == false and nil or v; RefreshCast(); EllesmereUI:RefreshPage()
+                          end },
+                        -- Extend Top / Extend Bottom: the whole border host (bar + icon). This cog
+                        -- has no bar-off block, so the rows carry their own.
+                        { type = "slider", label = "Extend Top", min = 0, max = 50, step = 1,
+                          tooltip = "Grows the border past the bar's top edge on screen without resizing the bar.",
+                          disabled = castOff, disabledTooltip = "Player Cast Bar",
+                          get = function() local p = DB(); return p and p.castBar.borderExtendTop or 0 end,
+                          set = function(v)
+                              local p = DB(); if not p then return end
+                              p.castBar.borderExtendTop = v; RefreshCast(); EllesmereUI:RefreshPage()
+                          end },
+                        { type = "slider", label = "Extend Bottom", min = 0, max = 50, step = 1,
+                          tooltip = "Grows the border past the bar's bottom edge on screen without resizing the bar.",
+                          disabled = castOff, disabledTooltip = "Player Cast Bar",
+                          get = function() local p = DB(); return p and p.castBar.borderExtendBottom or 0 end,
+                          set = function(v)
+                              local p = DB(); if not p then return end
+                              p.castBar.borderExtendBottom = v; RefreshCast(); EllesmereUI:RefreshPage()
+                          end },
+                        -- Bottom Separator: None = off (edgeSep false); an art entry turns it
+                        -- on with that art. Across the whole bar, icon included.
+                        { type = "dropdown", label = "Bottom Separator", values = sepValues, order = sepOrder,
+                          tooltip = "Draws a separator line along the bar's bottom edge.",
+                          disabled = castOff, disabledTooltip = "Player Cast Bar",
+                          get = function()
+                              local p = DB(); if not (p and p.castBar.edgeSep) then return "none" end
+                              return p.castBar.edgeSepArt or "match"
+                          end,
+                          set = function(v)
+                              local p = DB(); if not p then return end
+                              if v == "none" then p.castBar.edgeSep = false else p.castBar.edgeSep = true; p.castBar.edgeSepArt = v end
+                              RefreshCast(); EllesmereUI:RefreshPage()
+                          end },
+                        { type = "slider", label = "Separator Y Offset", min = -50, max = 50, step = 1,
+                          disabled = function() local p = DB(); return castOff() or not (p and p.castBar.edgeSep) end,
+                          disabledTooltip = function() return castOff() and "Player Cast Bar" or "Bottom Separator" end,
+                          get = function() local p = DB(); return p and p.castBar.edgeSepY or 0 end,
+                          set = function(v)
+                              local p = DB(); if not p then return end
+                              p.castBar.edgeSepY = v; RefreshCast(); EllesmereUI:RefreshPage()
                           end },
                     },
                 })
@@ -9439,6 +9770,30 @@ initFrame:SetScript("OnEvent", function(self)
                   RefreshCast(); EllesmereUI:RefreshPage()
               end }
         );  y = y - h
+        -- Spell Text colour (RGBA; white = the untinted text), left of the dropdown;
+        -- the Spell Text Settings cog below chains left of it. Dimmed and blocked
+        -- while the cast bar is off or Spell Text is None.
+        if not EllesmereUI._prebuilding then
+            EllesmereUI.BuildInlineSwatches(textRow._rightRegion, {
+                { tooltip = "Spell Text Color", hasAlpha = true,
+                  disabled = function()
+                      local p = DB()
+                      return not (p and p.castBar.enabled and p.castBar.showSpellText)
+                  end,
+                  disabledTooltip = function() return castOff() and "Player Cast Bar" or "Spell Text" end,
+                  getValue = function()
+                      local p = DB(); if not p then return 1, 1, 1, 1 end
+                      local c = p.castBar
+                      return c.spellTextR or 1, c.spellTextG or 1, c.spellTextB or 1, c.spellTextA or 1
+                  end,
+                  setValue = function(r, g, b, a)
+                      local p = DB(); if not p then return end
+                      local c = p.castBar
+                      c.spellTextR, c.spellTextG, c.spellTextB, c.spellTextA = r, g, b, a
+                      RefreshCast(); EllesmereUI:RefreshPage()
+                  end },
+            }, { size = 20 })
+        end
         -- Inline cog (RESIZE) on Spell Text for text size + x/y
         if not EllesmereUI._prebuilding then
             local rgn = textRow._rightRegion
@@ -9503,6 +9858,30 @@ initFrame:SetScript("OnEvent", function(self)
                   p.castBar.showTotalDuration = v; RefreshCast()
               end }
         );  y = y - h
+        -- Duration Text colour (RGBA; white = the untinted text), left of the
+        -- dropdown; the Timer Settings cog below chains left of it. Dimmed and
+        -- blocked while the cast bar is off or Duration Text is None.
+        if not EllesmereUI._prebuilding then
+            EllesmereUI.BuildInlineSwatches(timerRow._leftRegion, {
+                { tooltip = "Duration Text Color", hasAlpha = true,
+                  disabled = function()
+                      local p = DB()
+                      return not (p and p.castBar.enabled and p.castBar.showTimer)
+                  end,
+                  disabledTooltip = function() return castOff() and "Player Cast Bar" or "Duration Text" end,
+                  getValue = function()
+                      local p = DB(); if not p then return 1, 1, 1, 1 end
+                      local c = p.castBar
+                      return c.timerR or 1, c.timerG or 1, c.timerB or 1, c.timerA or 1
+                  end,
+                  setValue = function(r, g, b, a)
+                      local p = DB(); if not p then return end
+                      local c = p.castBar
+                      c.timerR, c.timerG, c.timerB, c.timerA = r, g, b, a
+                      RefreshCast(); EllesmereUI:RefreshPage()
+                  end },
+            }, { size = 20 })
+        end
         -- Inline cog (RESIZE) on Duration Text for timer size + x/y
         if not EllesmereUI._prebuilding then
             local rgn = timerRow._leftRegion
@@ -10289,6 +10668,7 @@ initFrame:SetScript("OnEvent", function(self)
             -- Offset cog on Border Style (left region), hidden for "solid"
             if not EllesmereUI._prebuilding then
                 local rgn = bsRow._leftRegion
+                local sepValues, sepOrder = ns.ERB_SeparatorArtValues(true)
                 local cogBtn = EllesmereUI.BuildInlineCog(rgn, { icon = EllesmereUI.DIRECTIONS_ICON,
                     title = "Border Options",
                     rows = {
@@ -10301,6 +10681,33 @@ initFrame:SetScript("OnEvent", function(self)
                         { type = "toggle", label = "Show Behind",
                           get = function() local p = DB(); return p and p.gcdBar.borderBehind or false end,
                           set = function(v) local p = DB(); if not p then return end; p.gcdBar.borderBehind = v == false and nil or v; RefreshGCD(); EllesmereUI:RefreshPage() end },
+                        -- Extend Top / Extend Bottom (0 = off); the cog has no bar-off block.
+                        { type = "slider", label = "Extend Top", min = 0, max = 50, step = 1,
+                          tooltip = "Grows the border past the bar's top edge on screen without resizing the bar.",
+                          disabled = gcdOff, disabledTooltip = "GCD Bar",
+                          get = function() local p = DB(); return p and p.gcdBar.borderExtendTop or 0 end,
+                          set = function(v) local p = DB(); if not p then return end; p.gcdBar.borderExtendTop = v; RefreshGCD(); EllesmereUI:RefreshPage() end },
+                        { type = "slider", label = "Extend Bottom", min = 0, max = 50, step = 1,
+                          tooltip = "Grows the border past the bar's bottom edge on screen without resizing the bar.",
+                          disabled = gcdOff, disabledTooltip = "GCD Bar",
+                          get = function() local p = DB(); return p and p.gcdBar.borderExtendBottom or 0 end,
+                          set = function(v) local p = DB(); if not p then return end; p.gcdBar.borderExtendBottom = v; RefreshGCD(); EllesmereUI:RefreshPage() end },
+                        -- Bottom Separator: None = off (edgeSep false); an art entry turns it
+                        -- on with that art.
+                        { type = "dropdown", label = "Bottom Separator", values = sepValues, order = sepOrder,
+                          tooltip = "Draws a separator line along the bar's bottom edge.",
+                          disabled = gcdOff, disabledTooltip = "GCD Bar",
+                          get = function() local p = DB(); if not (p and p.gcdBar.edgeSep) then return "none" end; return p.gcdBar.edgeSepArt or "match" end,
+                          set = function(v)
+                              local p = DB(); if not p then return end
+                              if v == "none" then p.gcdBar.edgeSep = false else p.gcdBar.edgeSep = true; p.gcdBar.edgeSepArt = v end
+                              RefreshGCD(); EllesmereUI:RefreshPage()
+                          end },
+                        { type = "slider", label = "Separator Y Offset", min = -50, max = 50, step = 1,
+                          disabled = function() local p = DB(); return gcdOff() or not (p and p.gcdBar.edgeSep) end,
+                          disabledTooltip = function() return gcdOff() and "GCD Bar" or "Bottom Separator" end,
+                          get = function() local p = DB(); return p and p.gcdBar.edgeSepY or 0 end,
+                          set = function(v) local p = DB(); if not p then return end; p.gcdBar.edgeSepY = v; RefreshGCD(); EllesmereUI:RefreshPage() end },
                     },
                 })
                 local function UpdateCogVis()

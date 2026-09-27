@@ -1255,7 +1255,9 @@ initFrame:SetScript("OnEvent", function(self)
         local row4
         row4, h = W:DualRow(parent, y,
             { type="toggle", text="Secondary Stat Display",
-              tooltip="Displays secondary stat percentages (Crit, Haste, Mastery, Vers) at the top left of the screen.",
+              tooltip=EllesmereUI.IS_FOREVER
+                  and "Displays secondary stat percentages (Crit, Haste) at the top left of the screen."
+                  or "Displays secondary stat percentages (Crit, Haste, Mastery, Vers) at the top left of the screen.",
               getValue=function()
                 return EllesmereUI.QoLExtrasGet("showSecondaryStats") or false
               end,
@@ -2057,9 +2059,8 @@ initFrame:SetScript("OnEvent", function(self)
         _, h = W:SectionHeader(parent, "GROUP FINDER", y);  y = y - h
 
         -- Auto Insert Keystone | Announce Instance Reset, then Quick Signup |
-        -- Persistent Signup Note. WoW Forever has no keystones: the first slot goes
-        -- and the other three fill in sequence, so the note lands alone on the
-        -- second row and its cog follows it there.
+        -- Persistent Signup Note. WoW Forever has no keystones and no premade
+        -- group list, so only Announce Instance Reset is built there.
         local autoKeyCfg = { type="toggle", text="Auto Insert Keystone",
               tooltip="Automatically inserts your key into the Font of Power.",
               getValue=function()
@@ -2107,19 +2108,16 @@ initFrame:SetScript("OnEvent", function(self)
                   end
                   EllesmereUI:RefreshPage()
               end }
-        local noteRow, noteRgnKey
+        local noteRow
         if EllesmereUI.IS_FOREVER then
-            _, h = W:DualRow(parent, y, announceCfg, quickCfg);  y = y - h
-            noteRow, h = W:DualRow(parent, y, persistCfg, { type="label", text="" });  y = y - h
-            noteRgnKey = "_leftRegion"
+            _, h = W:DualRow(parent, y, announceCfg, EllesmereUI.BlankRowCfg());  y = y - h
         else
             _, h = W:DualRow(parent, y, autoKeyCfg, announceCfg);  y = y - h
             noteRow, h = W:DualRow(parent, y, quickCfg, persistCfg);  y = y - h
-            noteRgnKey = "_rightRegion"
         end
 
-        if not EllesmereUI._prebuilding then
-            local rightRgn = noteRow[noteRgnKey]
+        if noteRow and not EllesmereUI._prebuilding then
+            local rightRgn = noteRow._rightRegion
             local function persistOff()
                 return not (EllesmereUIDB and EllesmereUIDB.persistSignupNote)
             end

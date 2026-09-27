@@ -98,9 +98,13 @@ local CHANNEL_EVENTS = {
 -- only while a setting turns them on. healpred = incoming heals: its own
 -- event plus the range and heal-absorb edges that change what it draws. The
 -- calculator clamps to maximum health, so current health is not an input.
+-- absglow = the Blizzard Glow Line's overshield flip: whether the shield
+-- exceeds missing health moves with current health too, so while a frame
+-- draws the line in a placement that reads it, health changes repaint the flip.
 local OPTIN_EVENTS = {
     healpred = { "UNIT_HEAL_PREDICTION", "UNIT_MAXHEALTH",
                  "UNIT_HEAL_ABSORB_AMOUNT_CHANGED", "UNIT_MAX_HEALTH_MODIFIERS_CHANGED" },
+    absglow  = { "UNIT_HEALTH" },
 }
 
 -- Events consumed by the castbar channel; routed raw (event identity matters

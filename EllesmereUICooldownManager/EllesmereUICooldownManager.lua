@@ -155,6 +155,9 @@ function ns.CdmIconStyle()
         if not p then return "eui" end
         v = (p.useClassicStyle and "classic") or (p.useBlizzardStyle and "blizzard") or "eui"
         ns._cdmIconStyle = v
+        -- The WoW Forever variant of Blizzard Style, latched with it.
+        ns._cdmFvIcons = v == "blizzard" and EllesmereUI.IS_FOREVER == true
+            and p.useForeverStyle == true
     end
     return v
 end
@@ -169,6 +172,8 @@ function ns.CdmBarStyle()
         if not p then return "eui" end
         v = (p.useClassicStyleBars and "classic") or (p.useBlizzardStyleBars and "blizzard") or "eui"
         ns._cdmBarStyle = v
+        ns._cdmFvBars = v == "blizzard" and EllesmereUI.IS_FOREVER == true
+            and p.useForeverStyleBars == true
     end
     return v
 end
@@ -179,6 +184,26 @@ function ns.CdmClassicBars() return ns.CdmBarStyle() == "classic" end
 ns.CDM_BLIZZ_MASK    = "UI-HUD-CoolDownManager-Mask"
 ns.CDM_BLIZZ_OVERLAY = "UI-HUD-CoolDownManager-IconOverlay"
 ns.CDM_BLIZZ_SWIPE   = "Interface\\HUD\\UI-HUD-CoolDownManager-Icon-Swipe"
+-- WoW Forever variant of Blizzard Style on the icons / the tracked buff bars
+-- (latched with the style; false off Forever).
+function ns.CdmIconsForever()
+    if ns._cdmIconStyle == nil then ns.CdmIconStyle() end
+    return ns._cdmFvIcons == true
+end
+function ns.CdmBarsForever()
+    if ns._cdmBarStyle == nil then ns.CdmBarStyle() end
+    return ns._cdmFvBars == true
+end
+-- Blizzard Style ring art: tex:SetAtlas(name) on every client but WoW Forever,
+-- which draws a name it swapped for its own art from the retail sheet
+-- (EllesmereUI.StockAtlas) unless the WoW Forever look renders (`bars` = the
+-- tracked buff bars' row).
+function ns.CdmStockAtlas(tex, name, bars)
+    local fv
+    if bars then fv = ns.CdmBarsForever() else fv = ns.CdmIconsForever() end
+    if fv then return tex:SetAtlas(name) end
+    return EllesmereUI.StockAtlas(tex, name)
+end
 -- Ring inset as a fraction of the icon size (the viewer anchors its 50px
 -- essential icons at -9/+8, i.e. the ring sits proportionally outside the icon).
 ns.CDM_BLIZZ_RING_X  = 0.18
@@ -251,6 +276,23 @@ ns.CDM_SHAPE_MASKS   = CDM_SHAPES.masks
 ns.CDM_SHAPE_BORDERS = CDM_SHAPES.borders
 ns.CDM_SHAPE_ZOOM_DEFAULTS = CDM_SHAPES.zoomDefaults
 ns.CDM_SHAPE_EDGE_SCALES = CDM_SHAPES.edgeScales
+-- Cropped shape, per-bar Adjust Crop (mirrors Nameplates' ns.GetAuraCrop). iconCropPercent is the
+-- per-side trim %, 5-25; unset = 10, which yields exactly the classic fixed crop (height factor
+-- 0.80, 0.10 texcoord trim per side), so bars that never touch it are unchanged. Only called from
+-- "cropped" branches. do/end + ns functions: no new main-chunk locals.
+do
+    local CROP_DEFAULT_PCT = 10
+    local function CropPercent(bd)
+        local pct = tonumber(bd and bd.iconCropPercent) or CROP_DEFAULT_PCT
+        if pct < 5 then pct = 5 elseif pct > 25 then pct = 25 end
+        return pct
+    end
+    ns.CdmCropPercent = CropPercent
+    -- Icon height as a fraction of width.
+    function ns.CdmCropFactor(bd) return 1 - 2 * (CropPercent(bd) / 100) end
+    -- Vertical texcoord trim per side, added on top of the bar's zoom.
+    function ns.CdmCropTrim(bd) return CropPercent(bd) / 100 end
+end
 -- Forward declarations for glow helpers (defined later, used by consolidated helpers)
 local StartNativeGlow, StopNativeGlow
 
@@ -580,6 +622,11 @@ local CDM_ITEM_PRESETS = {
         name     = "Healthstone",
         icon     = 538745,
         itemID   = 5512,
+        -- Pact of Gluttony turns self-conjured stones into Demonic Healthstones. Both
+        -- share one unique slot, so a warlock holds one or the other and the
+        -- primary-then-alts count shows whichever is owned. The lockout stays keyed
+        -- to 6262 only: Demonic stones are reusable in combat.
+        altItemIDs = { 224464 },
         spellID  = 6262,
         combatLockout = true,
     },
@@ -1578,6 +1625,24 @@ function ns.RescanCustomForceCountFlag()
                     return
                 end
             end
+        end
+    end
+end
+
+-- "Out of Range Coloring" (spells added by Spell ID) gate. Same contract as the flags above;
+-- lives in the profile customActiveStates. Zero cost in the preset pass (and no range check
+-- armed, no listener events) unless a custom spell opted in.
+function ns.RescanCustomRangeColorFlag()
+    if ns._cdmAnyCustomRangeColor or ns._customRangeColorScanned then return end
+    local cas = ns.GetCustomActiveStates()
+    if not cas then return end
+    ns._customRangeColorScanned = true
+    for _, e in pairs(cas) do
+        if type(e) == "table" and e.outOfRangeColoring then
+            ns._cdmAnyCustomRangeColor = true
+            -- Arming rides the Show edge; icons already shown missed it.
+            ns.RefreshCustomSpellRange()
+            return
         end
     end
 end
@@ -4215,7 +4280,7 @@ local function ComputeCDMBarSize(barData, count)
     local iW = barData.iconSize or 36
     local iH = iW
     if (barData.iconShape or "none") == "cropped" then
-        iH = math.floor((barData.iconSize or 36) * 0.70 + 0.5)
+        iH = math.floor((barData.iconSize or 36) * ns.CdmCropFactor(barData) + 0.5)
     end
     local sp = barData.spacing or 2
     -- EFFECTIVE row count from ComputeTopRowStride: collapses to 1 while a
@@ -4464,7 +4529,7 @@ LayoutCDMBar = function(barKey)
         local curDim = CurHeightDim()
         if targetH > 1 and curDim and curDim > 0 then
             local shape = barData.iconShape or "none"
-            local cropFactor = (shape == "cropped") and 0.70 or 1.0
+            local cropFactor = (shape == "cropped") and ns.CdmCropFactor(barData) or 1.0
             local physTarget = math.floor(targetH / onePx + 0.5)
             -- The match's Extra Height, as for width.
             local mx = EllesmereUI.GetMatchExtra and EllesmereUI.GetMatchExtra("h", ns._cdmUKey[barKey])
@@ -4492,15 +4557,15 @@ LayoutCDMBar = function(barKey)
     if shape == "cropped" then
         if widthMatchApplied then
             -- Width-matched: cropped height from the MATCHED icon width, so the icon keeps the
-            -- same ~0.70 aspect as the non-matched path. Computed in physical px to stay on the
-            -- pixel grid (matched iconW is already a clean pixel multiple). Aspect intent, not exact value: the non-matched branch rounds 0.70 in coord space, so the two can differ 1px at non-perfect scales.
+            -- same crop aspect as the non-matched path. Computed in physical px to stay on the
+            -- pixel grid (matched iconW is already a clean pixel multiple). Aspect intent, not exact value: the non-matched branch rounds the crop factor in coord space, so the two can differ 1px at non-perfect scales.
             local wPx = math.floor(iconW / onePx + 0.5)
-            iconH = math.floor(wPx * 0.70 + 0.5) * onePx
+            iconH = math.floor(wPx * ns.CdmCropFactor(barData) + 0.5) * onePx
         elseif heightMatchIconHPx then
             -- Height-matched: the EXACT basePhysIconH the height-match math computed. MUST match precisely so per-icon height stays in lockstep with the container's extraPixelsH distribution.
             iconH = heightMatchIconHPx * onePx
         else
-            iconH = math.floor((barData.iconSize or 36) * 0.70 + 0.5)
+            iconH = math.floor((barData.iconSize or 36) * ns.CdmCropFactor(barData) + 0.5)
         end
     end
 
@@ -4562,7 +4627,7 @@ LayoutCDMBar = function(barKey)
         local function RowSizePx(sz)
             if sz < 16 then sz = 16 end          -- clamp to the Icon Scale minimum
             local wpx = math.floor(sz / onePx + 0.5)
-            local hCoord = (shape == "cropped") and math.floor(sz * 0.70 + 0.5) or sz
+            local hCoord = (shape == "cropped") and math.floor(sz * ns.CdmCropFactor(barData) + 0.5) or sz
             local hpx = math.floor(hCoord / onePx + 0.5)
             return wpx, hpx
         end
@@ -5176,7 +5241,8 @@ ApplyShapeToCDMIcon = function(icon, shape, barData, ssb)
                 -- the unsnapped cooldown swipe (1px swipe/icon split at some effective scales), so snapping is disabled to render the exact rect. No size change.
                 if tex.SetSnapToPixelGrid then tex:SetSnapToPixelGrid(false) end
                 if tex.SetTexelSnappingBias then tex:SetTexelSnappingBias(0) end
-                tex:SetTexCoord(zoom, 1 - zoom, zoom + 0.15 + extraCrop, 1 - zoom - 0.15 - extraCrop)
+                local trim = ns.CdmCropTrim(barData)
+                tex:SetTexCoord(zoom, 1 - zoom, zoom + trim + extraCrop, 1 - zoom - trim - extraCrop)
             else
                 -- Restore default grid snapping so an icon switched away from cropped stays crisp.
                 if tex.SetSnapToPixelGrid then tex:SetSnapToPixelGrid(true) end
@@ -7836,10 +7902,12 @@ BuildAllCDMBars = function()
     ns.RescanBuffReplaceFlag()    -- set the Replace with Buff gate (once) before the route map
     ns.RescanCustomItemFlag()     -- set the custom-item buff-injection gate (once)
     ns.RescanCustomForceCountFlag() -- set the "Show Charges" custom-spell gate (once)
+    ns.RescanCustomRangeColorFlag() -- set the "Out of Range Coloring" custom-spell gate (once)
     ns.RescanReverseSwipeFlag()   -- set the Reverse Swipe gate (once) before refresh
     ns.RescanThresholdTextFlag()  -- set the Threshold Text gate (once) before refresh
     ns.RescanCustomIconFlag()     -- set the per-spell Custom Icon gate (once) before refresh
     ns.RescanActiveGlowFlag()     -- set the Active State Glow gate (once) before refresh
+    ns.RescanTalentCondFlag()     -- set the Talent Conditions gate (once) before refresh
 
     local p = ECME.db.profile
 
@@ -8374,7 +8442,14 @@ function ns.ReseedAssignedSpellsFromLiveIcons(cdUtilOnly)
                 or MAIN_BAR_KEYS[barData.key]) then
             local sd = ns.GetBarSpellData(barData.key)
             local icons = ns.cdmBarIcons and ns.cdmBarIcons[barData.key]
-            if sd and icons then
+            -- Talent Conditions: the frames the reanchor filter dropped from this bar are
+            -- present, only hidden. They walk after the live icons, so a hidden spell keeps
+            -- (or regains) its slot and its conditions stay reachable from the preview.
+            local tcHidden = ns._cdmAnyTalentCond and ns.TalentCondHiddenFrames(barData.key)
+            local nLive = 0
+            if icons then while icons[nLive + 1] do nLive = nLive + 1 end end
+            local nWalk = nLive + (tcHidden and #tcHidden or 0)
+            if sd and (icons or nWalk > 0) then
                 if not sd.assignedSpells then sd.assignedSpells = {} end
                 -- Insert each missing spell right after its left neighbour in the live icon order
                 -- (already Blizzard-layout order from CollectAndReanchor) instead of appending, so
@@ -8386,7 +8461,39 @@ function ns.ReseedAssignedSpellsFromLiveIcons(cdUtilOnly)
                 -- options normalize pass wrote). Each reload then re-inserts the live form at
                 -- Blizzard's position and the next normalize dedupes in its favor -- permanently snapping the user's saved order back to Blizzard order. A by-value cursor lookup fails the same way and dumps inserts at slot 1.
                 local insertPos = nil
-                for _, icon in ipairs(icons) do
+                for walk = 1, nWalk do
+                    local icon
+                    if walk <= nLive then
+                        icon = icons[walk]
+                    else
+                        icon = tcHidden[walk - nLive]
+                        -- A hidden frame has no on-screen neighbour, so place it beside its
+                        -- live neighbours in Blizzard's layout: after the nearest same-viewer
+                        -- icon below its layoutIndex, else before the nearest one above, else
+                        -- after the last live slot (the cursor as it stands).
+                        local L, vf = icon.layoutIndex, icon.viewerFrame
+                        if L and vf and FindVar then
+                            local predLI, predAt, succLI, succAt
+                            for j = 1, nLive do
+                                local ic = icons[j]
+                                local li = ic.viewerFrame == vf and ic.layoutIndex
+                                local fcJ = li and ns._ecmeFC[ic]
+                                local at = fcJ and fcJ.spellID and FindVar(sd.assignedSpells, fcJ.spellID)
+                                if at then
+                                    if li < L then
+                                        if not predLI or li > predLI then predLI, predAt = li, at end
+                                    elseif not succLI or li < succLI then
+                                        succLI, succAt = li, at
+                                    end
+                                end
+                            end
+                            if predAt then
+                                insertPos = predAt
+                            elseif succAt then
+                                insertPos = succAt - 1
+                            end
+                        end
+                    end
                     local fc = ns._ecmeFC and ns._ecmeFC[icon]
                     local sid = fc and fc.spellID
                     -- Skip hosted-buff frames and their placeholders: their bar membership is the
@@ -9935,7 +10042,7 @@ function ECME:CDMFinishSetup()
                             local iconW = barData.iconSize or 36
                             local iconH = iconW
                             if (barData.iconShape or "none") == "cropped" then
-                                iconH = math.floor((barData.iconSize or 36) * 0.70 + 0.5)
+                                iconH = math.floor((barData.iconSize or 36) * ns.CdmCropFactor(barData) + 0.5)
                             end
                             local spacing = barData.spacing or 2
                             local grow = barData.growDirection or "CENTER"
@@ -10470,7 +10577,8 @@ function ns.ArmOverrideRange(baseSpellID, overrideSpellID)
     local prev = armed[baseSpellID]
     if prev == overrideSpellID then return end
     if prev then
-        if not ns.BlizzardArmsRange(prev) then
+        -- Also left armed while a custom spell icon holds it (CdmHooks, Out of Range Coloring).
+        if not ns.BlizzardArmsRange(prev) and not ns.CustomSpellRangeHolds(prev) then
             C_Spell.EnableSpellRangeCheck(prev, false)
         end
         armed[baseSpellID] = nil
@@ -10487,7 +10595,7 @@ function ns.DisarmOverrideRanges()
     local armed = ns._oorArmed
     if not armed then return end
     for base, ov in pairs(armed) do
-        if not ns.BlizzardArmsRange(ov) then
+        if not ns.BlizzardArmsRange(ov) and not ns.CustomSpellRangeHolds(ov) then
             C_Spell.EnableSpellRangeCheck(ov, false)
         end
         armed[base] = nil
@@ -10795,6 +10903,9 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, updateInfo, arg3)
         -- inside the debounce window would otherwise resolve against the pre-swap book. The rebuild
         -- wipes it again, which still matters: this early rebuild can read a book the client has not finished updating, and that second wipe corrects it.
         if ns.WipeCdmBookNameCache then ns.WipeCdmBookNameCache() end
+        -- Talent Conditions read node ranks from a cache; the rebuild's reanchor re-evaluates them.
+        -- Unconditional: the options popup fills the cache before the gate is ever set.
+        ns.TalentCondInvalidate()
         ScheduleTalentRebuild()
         return
     end

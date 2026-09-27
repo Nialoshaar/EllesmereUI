@@ -468,11 +468,14 @@ initFrame:SetScript("OnEvent", function(self)
             })
 
             -- Classic WoW UI paints every header icon with vanilla art that
-            -- carries its own colours: both swatches inert. (Blizzard Style
+            -- carries its own colours, and WoW Forever tints the glyphs its
+            -- own tan on their plates: both swatches inert. (Blizzard Style
             -- keeps the EUI glyphs, so the tint stays live there.)
+            local stockIcons = EllesmereUI.BlizzStyle.Active("damagemeters") == "classic"
+                or EllesmereUI.BlizzStyle.Forever("damagemeters")
             local function refreshHdrIcon()
                 updateCustom(); updateAccent()
-                if EllesmereUI.BlizzStyle.Active("damagemeters") == "classic" then
+                if stockIcons then
                     customSwatch:SetAlpha(0.3); accentSwatch:SetAlpha(0.3)
                     return
                 end
@@ -482,7 +485,7 @@ initFrame:SetScript("OnEvent", function(self)
             end
             EllesmereUI.RegisterWidgetRefresh(refreshHdrIcon)
             refreshHdrIcon()
-            if EllesmereUI.BlizzStyle.Active("damagemeters") == "classic" then
+            if stockIcons then
                 EllesmereUI.BlizzStyle.BlockInline("damagemeters", customSwatch)
                 EllesmereUI.BlizzStyle.BlockInline("damagemeters", accentSwatch)
             end
@@ -706,7 +709,11 @@ initFrame:SetScript("OnEvent", function(self)
                   Set("borderTextureOffsetY", nil)
                   Set("borderTextureShiftX", nil)
                   Set("borderTextureShiftY", nil)
-                  if v ~= "solid" then
+                  local selC = EllesmereUI.GetBorderSelectColor(v)
+                  if selC then
+                      -- The style's select colour (Pixels grey).
+                      Set("borderR", selC.r); Set("borderG", selC.g); Set("borderB", selC.b); Set("borderA", 1)
+                  elseif v ~= "solid" then
                       Set("borderR", 1); Set("borderG", 1); Set("borderB", 1); Set("borderA", 1)
                   else
                       Set("borderR", 0); Set("borderG", 0); Set("borderB", 0); Set("borderA", 1)
@@ -841,7 +848,11 @@ initFrame:SetScript("OnEvent", function(self)
                 Set("iconBorderTexture", v)
                 Set("iconBorderTextureOffset", nil); Set("iconBorderTextureOffsetY", nil)
                 Set("iconBorderTextureShiftX", nil); Set("iconBorderTextureShiftY", nil)
-                if v ~= "solid" then
+                local selC = EllesmereUI.GetBorderSelectColor(v)
+                if selC then
+                    -- The style's select colour (Pixels grey).
+                    Set("iconBorderR", selC.r); Set("iconBorderG", selC.g); Set("iconBorderB", selC.b); Set("iconBorderA", 1)
+                elseif v ~= "solid" then
                     Set("iconBorderR", 1); Set("iconBorderG", 1); Set("iconBorderB", 1); Set("iconBorderA", 1)
                 else
                     Set("iconBorderR", 0); Set("iconBorderG", 0); Set("iconBorderB", 0); Set("iconBorderA", 1)

@@ -464,12 +464,15 @@ local function BuildDropdownMenu(ddBtn, menuW, order, values, getValue, setValue
     local searchPad = _moSearchable and (SEARCH_H + 8) or 0
     local searchEdit, searchPlaceholder
     local searchResetScroll  -- assigned inside the scrolling branch; nil otherwise
+    local padInit, padStepSync, padReveal  -- controller helpers: padInit (scrolling branch only) builds the other two on first use
     local mBgR, mBgG, mBgB, mBgA = DD_BG_R, DD_BG_G, DD_BG_B, DD_BG_HA
     local mBrR, mBrG, mBrB, mBrA = 1, 1, 1, DD_BRD_A
-    -- Parent to a caller-supplied frame (a scaled popup) when given so the menu INHERITS its scale and layers within it -- no manual scale matching, nested dropdowns don't render giant/behind. Else UIParent, so page dropdowns escape the scroll-frame clip.
-    local menu = CreateFrame("Frame", nil, (_menuOpts and _menuOpts.parent) or UIParent)
+    -- Parent to a caller-supplied frame (a scaled popup) when given so the menu INHERITS its scale and layers within it -- no manual scale matching, nested dropdowns don't render giant/behind. Else UIParent (the controller-cursor overlay layer while one is loaded), so page dropdowns escape the scroll-frame clip.
+    local menu = CreateFrame("Frame", nil, (_menuOpts and _menuOpts.parent) or EllesmereUI.OverlayParent())
     -- Spec Overrides auto-capture: edits through this menu attribute to the slot whose dropdown opened it.
     menu._euiOptionsPopup = true
+    -- Controller cursor: the list blocks what is under it but is not a stop itself.
+    EllesmereUI.PadHint(menu, "nodepass")
     menu:SetFrameStrata("FULLSCREEN_DIALOG")
     menu:SetFrameLevel(200)
     menu:SetClampedToScreen(true)
@@ -559,7 +562,7 @@ local function BuildDropdownMenu(ddBtn, menuW, order, values, getValue, setValue
                 if sn.order then for _, ck in ipairs(sn.order) do item._subnavChildKeys[ck] = true end end
                 menuItems[#menuItems + 1] = item
 
-                local flyout = CreateFrame('Frame', nil, UIParent)
+                local flyout = CreateFrame('Frame', nil, EllesmereUI.OverlayParent())
                 flyout:SetFrameStrata('FULLSCREEN_DIALOG')
                 flyout:SetFrameLevel(menu:GetFrameLevel() + 10)
                 flyout:SetClampedToScreen(true)
@@ -570,7 +573,14 @@ local function BuildDropdownMenu(ddBtn, menuW, order, values, getValue, setValue
                 item._flyout = flyout
                 if not menu._flyouts then menu._flyouts = {} end
                 menu._flyouts[#menu._flyouts + 1] = flyout
+                -- Controller cursor: not a stop; Cancel clicks the dropdown button, closing the whole list.
+                if EllesmereUI.PadCP() then
+                    EllesmereUI.PadHint(flyout, "nodepass")
+                    flyout.CloseButton = ddBtn
+                end
 
+                -- Declared before the children: under the controller cursor they keep the flyout open too.
+                local flyoutTimer
                 local fH = 4
                 for _, childKey in ipairs(sn.order) do
                     local childText = sn.values[childKey]
@@ -604,11 +614,27 @@ local function BuildDropdownMenu(ddBtn, menuW, order, values, getValue, setValue
                         ci:SetScript('OnEnter', function()
                             cLbl:SetTextColor(1, 1, 1, 1)
                             cHl:SetAlpha(DD_ITEM_HL_A)
+                            -- Controller cursor: the hidden pointer is never over the flyout, so a child
+                            -- keeps it open itself (the mouse path relies on IsMouseOver instead).
+                            if flyoutTimer and EllesmereUI.PadCursorShown() then
+                                flyoutTimer:Cancel(); flyoutTimer = nil
+                            end
                         end)
                         ci:SetScript('OnLeave', function()
                             cLbl:SetTextColor(TEXT_DIM_R, TEXT_DIM_G, TEXT_DIM_B, TEXT_DIM_A)
                             local cur = getValue()
                             cHl:SetAlpha(ci._key == cur and DD_ITEM_SEL_A or 0)
+                            -- Controller cursor: leaving a child starts the same close check the parent row
+                            -- uses; the next child or the parent row cancels it.
+                            if EllesmereUI.PadCursorShown() then
+                                if flyoutTimer then flyoutTimer:Cancel() end
+                                flyoutTimer = C_Timer.NewTimer(0.25, function()
+                                    if not flyout:IsMouseOver() and not item:IsMouseOver() then
+                                        flyout:Hide()
+                                    end
+                                    flyoutTimer = nil
+                                end)
+                            end
                         end)
                         ci:SetScript('OnClick', function()
                             if sn.onSelect then sn.onSelect(childKey) end
@@ -625,7 +651,6 @@ local function BuildDropdownMenu(ddBtn, menuW, order, values, getValue, setValue
                 end
                 flyout:SetHeight(fH + 4)
 
-                local flyoutTimer
                 item:SetScript('OnEnter', function()
                     iLbl:SetTextColor(1, 1, 1, 1)
                     arrowTex:SetAlpha(1)
@@ -662,6 +687,7 @@ local function BuildDropdownMenu(ddBtn, menuW, order, values, getValue, setValue
                         flyoutTimer = nil
                     end)
                 end)
+                EllesmereUI.TrackOverlay(flyout)
                 menu:HookScript('OnHide', function() flyout:Hide() end)
                 item:SetScript('OnClick', function() end)  -- no-op, subnav only
                 mH = mH + 26
@@ -895,6 +921,8 @@ local function BuildDropdownMenu(ddBtn, menuW, order, values, getValue, setValue
         ddThumb:SetScript("OnDragStart", function() end)
         ddThumb:SetScript("OnDragStop", function() end)
         SolidTex(ddThumb, "ARTWORK", 1, 1, 1, 0.27):SetAllPoints()
+        -- Controller cursor: it scrolls the list to the selected row itself; the pointer-drag thumb is no stop.
+        EllesmereUI.PadHint(ddThumb, "nodeignore")
 
         -- Smooth scroll state (per-dropdown, isolated from main panel)
         local ddScrollTarget = 0
@@ -961,6 +989,72 @@ local function BuildDropdownMenu(ddBtn, menuW, order, values, getValue, setValue
             DDSmoothScrollTo(base - delta * SCROLL_STEP)
         end)
         sf:SetScript("OnScrollRangeChanged", UpdateDDThumb)
+
+        -- Controller helpers, built by the first open that runs with a controller
+        -- (menu._padOpen), so a list never opened with one carries none of them.
+        padInit = function()
+            padInit = nil
+            -- The gamepad-driven pointer has no mouse wheel: one step strip above
+            -- and one below the list, built the first time that pointer drives the
+            -- menu and shown only while it does; the list gives up their height
+            -- only then.
+            local PAD_STEP_H = 16
+            local padUp, padDown
+            local function PadStepClick(self)
+                local base = ddSmoothing and ddScrollTarget or sf:GetVerticalScroll()
+                DDSmoothScrollTo(base + self._dir * SCROLL_STEP)
+            end
+            local function MakePadStep(dir, edge, y)
+                local b = CreateFrame("Button", nil, menu)
+                b:SetHeight(PAD_STEP_H)
+                b:SetPoint(edge .. "LEFT", menu, edge .. "LEFT", 1, y)
+                b:SetPoint(edge .. "RIGHT", menu, edge .. "RIGHT", -1, y)
+                b:SetFrameLevel(menu:GetFrameLevel() + 3)
+                b._dir = dir
+                local hl = SolidTex(b, "ARTWORK", 1, 1, 1, 1)
+                hl:SetAllPoints(); hl:SetAlpha(0)
+                local arrow = b:CreateTexture(nil, "OVERLAY")
+                arrow:SetSize(18, 18)
+                arrow:SetPoint("CENTER")
+                arrow:SetTexture(MEDIA_PATH .. "icons/eui-arrow.png")
+                if dir < 0 then arrow:SetRotation(math.pi) end
+                arrow:SetAlpha(0.6)
+                b:SetScript("OnEnter", function() hl:SetAlpha(DD_ITEM_HL_A); arrow:SetAlpha(1) end)
+                b:SetScript("OnLeave", function() hl:SetAlpha(0); arrow:SetAlpha(0.6) end)
+                b:SetScript("OnClick", PadStepClick)
+                -- The controller cursor scrolls the list by itself; the strips serve the pointer.
+                EllesmereUI.PadHint(b, "nodeignore")
+                return b
+            end
+            padStepSync = function(show)
+                if not padUp then
+                    if not show then return end
+                    padUp = MakePadStep(-1, "TOP", -searchPad)
+                    padDown = MakePadStep(1, "BOTTOM", 0)
+                end
+                padUp:SetShown(show); padDown:SetShown(show)
+                local inset = show and PAD_STEP_H or 0
+                sf:SetPoint("TOPLEFT", menu, "TOPLEFT", 0, -searchPad - inset)
+                sf:SetPoint("BOTTOMRIGHT", menu, "BOTTOMRIGHT", 0, inset)
+            end
+
+            -- Controller cursor: scroll the row it is about to land on into view;
+            -- true when that row is inside the visible list afterwards.
+            padReveal = function(it)
+                local top, itTop = innerContainer:GetTop(), it:GetTop()
+                if not (top and itTop) then return false end
+                local maxScroll = EllesmereUI.SafeScrollRange(sf)
+                local y = (top - itTop) - (sf:GetHeight() - it:GetHeight()) / 2
+                y = math.max(0, math.min(maxScroll, y))
+                ddSmoothing = false
+                ddSmoothFrame:Hide()
+                ddScrollTarget = y
+                sf:SetVerticalScroll(y)
+                UpdateDDThumb()
+                local sTop, sBot, iTop, iBot = sf:GetTop(), sf:GetBottom(), it:GetTop(), it:GetBottom()
+                return (sTop and sBot and iTop and iBot and iBot < sTop and iTop > sBot) and true or false
+            end
+        end
 
         -- Thumb drag
         local ddDragging = false
@@ -1048,11 +1142,12 @@ local function BuildDropdownMenu(ddBtn, menuW, order, values, getValue, setValue
             if searchResetScroll then searchResetScroll() end
         end
         searchEdit:SetScript("OnTextChanged", function(self) ApplySearchFilter(self:GetText()) end)
-        -- Focus the dropdown search on open
+        -- Focus the dropdown search on open (not under the controller cursor: focus
+        -- would pop its on-screen keyboard over the list; its Special press focuses).
         local function FocusSearch()
             searchEdit:SetText("")
             ApplySearchFilter("")
-            searchEdit:SetFocus()
+            if not EllesmereUI.PadCursorShown() then searchEdit:SetFocus() end
         end
         menu._focusSearch = FocusSearch
         menu:HookScript("OnShow", FocusSearch)
@@ -1096,6 +1191,35 @@ local function BuildDropdownMenu(ddBtn, menuW, order, values, getValue, setValue
             end
         end
     end
+
+    -- Controller open edge, run by the menu's OnShow (WireDropdownScripts): the
+    -- no-wheel step strips for the gamepad-driven pointer, then the controller
+    -- cursor onto the selected row (the first row when none is), scrolled into
+    -- view. Mouse and keyboard stop at the first gate, unless strips an earlier
+    -- controller open showed must be put away.
+    menu._padOpen = function()
+        if not padStepSync and not EllesmereUI.PadInUse() then return end
+        if padInit then padInit() end
+        local cursor = EllesmereUI.PadCursorShown()
+        -- The controller cursor scrolls the list itself, so the strips are for the pointer only.
+        if padStepSync then padStepSync(not cursor and EllesmereUI.PadNative()) end
+        if not cursor then return end
+        local cur, target = getValue(), nil
+        for i = 1, #menuItems do
+            local it = menuItems[i]
+            if it:IsShown() then
+                if not target then target = it end
+                if it._key == cur or (it._subnavChildKeys and it._subnavChildKeys[cur]) then
+                    target = it
+                    break
+                end
+            end
+        end
+        -- A row still clipped by the list (its range not laid out yet) cannot take
+        -- the cursor: fall back to the first drawn stop in the list.
+        if target and padReveal and not padReveal(target) then target = nil end
+        EllesmereUI.PadFocus(target or menu)
+    end
     return menu, menuItems, Refresh
 end
 
@@ -1134,9 +1258,13 @@ local function WireDropdownScripts(ddBtn, ddLbl, bg, brd, menu, refresh, s, keep
         end)
         ddBtn:HookScript("OnHide", function() menu:Hide() end)
     end
+    -- Controller cursor: its Cancel press clicks the dropdown button, which closes the list.
+    if EllesmereUI.PadCP() then menu.CloseButton = ddBtn end
     menu:SetScript("OnShow", function(self)
-        -- Detect custom parenting via GetParent(); _menuOpts is out of scope here.
-        if menu:GetParent() ~= UIParent then
+        -- Detect custom parenting via GetParent(); _menuOpts is out of scope here. The
+        -- controller-cursor overlay layer covers UIParent 1:1, so it counts as UIParent.
+        local mp = menu:GetParent()
+        if mp ~= UIParent and mp ~= EllesmereUI._overlayLayer then
             -- Scaled popup parent: scale is inherited, leave at 1 (nothing to match, nothing to go stale).
             self:SetScale(1)
         else
@@ -1151,6 +1279,8 @@ local function WireDropdownScripts(ddBtn, ddLbl, bg, brd, menu, refresh, s, keep
         refresh()
         -- This SetScript replaces BuildDropdownMenu's OnShow hook, so drive its search auto-focus directly.
         if menu._focusSearch then menu._focusSearch() end
+        -- Controller open edge (step strips, cursor into the list); returns at once without one.
+        if menu._padOpen then menu._padOpen() end
         self:SetScript("OnUpdate", function(m)
             local flyoverFlyout = false; if m._flyouts then for _, fo in ipairs(m._flyouts) do if fo:IsShown() and fo:IsMouseOver() then flyoverFlyout = true; break end end end
             if not m:IsMouseOver() and not ddBtn:IsMouseOver() and not flyoverFlyout and not m._ddThumbDragging and IsMouseButtonDown("LeftButton") then m:Hide(); return end
@@ -1194,7 +1324,11 @@ local function WireDropdownScripts(ddBtn, ddLbl, bg, brd, menu, refresh, s, keep
             ApplyNormal()
             if ddBtn._ttText then HideWidgetTooltip() end
         end
+        -- Controller cursor: back onto the dropdown button (a no-op once that is hidden too).
+        if EllesmereUI.PadCursorShown() then EllesmereUI.PadFocus(ddBtn) end
     end)
+    -- A no-op unless the menu sits on the controller-cursor overlay layer.
+    EllesmereUI.TrackOverlay(menu)
 end
 
 -- Pre-built colour arrays for the two dropdown styles
@@ -1432,12 +1566,36 @@ local function BuildSliderCore(parent, trackW, trackH, thumbSz, inputW, inputH, 
         end
     end)
 
+    local padNudged = false  -- controller cursor press in progress (see OnMouseDown)
     trackFrame:EnableMouse(true)
     trackFrame:RegisterForDrag("LeftButton")
     trackFrame:SetScript("OnDragStart", function() end)   -- swallow drag so parent window doesn't move
     trackFrame:SetScript("OnDragStop",  function() end)
-    trackFrame:SetScript("OnMouseDown", function(_, button) if thumb._sliderDisabled then return end; if button == "LeftButton" then BeginDrag() end end)
-    trackFrame:SetScript("OnMouseUp",   function(_, button) if thumb._sliderDisabled then return end; if button == "LeftButton" then EndDrag() end end)
+    trackFrame:SetScript("OnMouseDown", function(_, button)
+        if thumb._sliderDisabled then return end
+        -- Controller cursor: its press runs this track's mouse scripts with no mouse
+        -- button down, so the hidden pointer's position means nothing. Such a press
+        -- nudges one step instead (left click up, right click down) and its release
+        -- is swallowed.
+        if EllesmereUI.PadCursorShown() and not IsMouseButtonDown(button) then
+            padNudged = true
+            local v = SnapStep(currentVal + (button == "RightButton" and -step or step))
+            if v ~= currentVal then
+                setValue(v); currentVal = v; rawDragVal = v; lastSnapped = v; UpdateSliderVisual(v)
+                -- Same widget-state refresh a typed value gets (CommitInput).
+                if not EllesmereUI._sliderDragging then EllesmereUI:RefreshPage() end
+            end
+            return
+        end
+        if button == "LeftButton" then BeginDrag() end
+    end)
+    trackFrame:SetScript("OnMouseUp", function(_, button)
+        if padNudged then padNudged = false; return end
+        if thumb._sliderDisabled then return end
+        if button == "LeftButton" then EndDrag() end
+    end)
+    -- Controller cursor: the track is the one stop; the pointer-drag thumb is skipped.
+    EllesmereUI.PadHint(thumb, "nodeignore")
     thumb._sliderDisabled = false
     thumb:RegisterForDrag("LeftButton")
     thumb:SetScript("OnDragStart", function() end)
@@ -2354,6 +2512,17 @@ local function BuildColorPickerPopup()
     end)
     alphaBar:SetScript("OnMouseUp", function(self) alphaDragging = false; self:SetScript("OnUpdate", nil) end)
 
+    -- Controller cursor: the three pads read the pointer position, which its presses
+    -- do not move, so they are skipped (Hex#, Opacity and the swatches set colours);
+    -- the drag bar is no stop, and Cancel clicks the close button.
+    if EllesmereUI.PadCP() then
+        EllesmereUI.PadHint(svPad, "nodeignore")
+        EllesmereUI.PadHint(hueBar, "nodeignore")
+        EllesmereUI.PadHint(alphaBar, "nodeignore")
+        EllesmereUI.PadHint(titleBar, "nodepass")
+        popup.CloseButton = closeBtn
+    end
+
     ---------------------------------------------------------------------------
     --  Right column: New, Prev, Hex#, OK
     ---------------------------------------------------------------------------
@@ -2605,6 +2774,8 @@ local function BuildColorPickerPopup()
         PopulateSwatchRow(rcSwatches,  rcRow,  GetRecentColorsDB())
     end
 
+    -- Controller cursor: the swatch that opened the picker (set only when it opened under that cursor).
+    local padOpener
     popup:SetScript("OnHide", function()
         EllesmereUI._colorPickerOpen = false
         if not _confirmed and cancelFunc then cancelFunc() end
@@ -2618,6 +2789,12 @@ local function BuildColorPickerPopup()
         if checks then for fn in pairs(checks) do fn() end end
         -- Re-evaluate widget state (sync icons, disabled overlays) now the picked color is committed. Fast path: no rebuild.
         EllesmereUI:RefreshPage()
+        -- Controller cursor: back onto that swatch (a no-op once it is hidden).
+        if padOpener then
+            local opener = padOpener
+            padOpener = nil
+            if EllesmereUI.PadCursorShown() then EllesmereUI.PadFocus(opener) end
+        end
     end)
     EllesmereUI.RegisterEscapeClose(popup)
 
@@ -2653,6 +2830,15 @@ local function BuildColorPickerPopup()
         local cx, cy = GetCursorPosition()
         local scale = popup:GetEffectiveScale()
         cx, cy = cx / scale, cy / scale
+        -- Controller cursor: the hidden pointer is nowhere near the swatch it pressed.
+        if anchorFrame and EllesmereUI.PadCursorShown() then
+            padOpener = anchorFrame
+            local ax, ay = anchorFrame:GetCenter()
+            if ax and ay then
+                local r = anchorFrame:GetEffectiveScale() / scale
+                cx, cy = ax * r, ay * r
+            end
+        end
         local pw = popup:GetWidth()
         local ph = popup:GetHeight()
         local x = cx - pw * 0.5
@@ -2669,6 +2855,8 @@ local function BuildColorPickerPopup()
         EllesmereUI._colorPickerOpen = true
         RefreshSwatchRows()
         popup:Show(); UpdateAllControls()
+        -- Controller cursor: into the picker, on OK (its first stop would be the close box).
+        if EllesmereUI.PadCursorShown() then EllesmereUI.PadFocus(okBtn) end
     end
 
     -- Spec Overrides auto-capture: color picker edits attribute to the slot whose swatch opened it.
@@ -2972,9 +3160,13 @@ function EllesmereUI.BuildKeybindButton(parent, opts)
 
     local disabled = opts.disabled
     local listening = false
+    -- Controller buttons: padArmed while they are captured; padHeld is the button
+    -- whose press ended capture, kept captured until its release.
+    local padArmed, padWired, padHeld = false, false, nil
     local function Stop()
         listening = false
         btn:EnableKeyboard(false)
+        if padArmed and not padHeld then padArmed = false; btn:EnableGamePadButton(false) end
         -- OnLeave keeps the hover look while armed; drop it once capture ends.
         if not btn:IsMouseOver() then
             bg:SetColorTexture(DD_BG_R, DD_BG_G, DD_BG_B, DD_BG_A)
@@ -3021,6 +3213,49 @@ function EllesmereUI.BuildKeybindButton(parent, opts)
         listening = true
         lbl:SetText(EllesmereUI.L("Press a key..."))
         self:EnableKeyboard(true)
+        -- Controller in use: its buttons are captured too, only while armed (Stop turns it off).
+        if EllesmereUI.PadInUse() then
+            if not padWired then
+                padWired = true
+                -- Armed: the button bound to the pause menu cancels, as Escape does on the
+                -- keyboard; a button set up as an emulated modifier passes through so it can
+                -- be held for a chord; anything else is the chord. The press that ends capture
+                -- is consumed down AND up (padHeld): a controller cursor clicks on release, so
+                -- a loose release would click this button again (re-arm, or unbind).
+                self:SetScript("OnGamePadButtonDown", function(s, key)
+                    if not listening then
+                        s:SetPropagateKeyboardInput(true)
+                        return
+                    end
+                    if GetBindingFromClick(key) == "TOGGLEGAMEMENU" then
+                        s:SetPropagateKeyboardInput(false)
+                        padHeld = key
+                        Stop(); Refresh()
+                        return
+                    end
+                    local k = GetConvertedKeyOrButton(key)
+                    if IsKeyPressIgnoredForBinding(k) or k == GetCVar("GamePadEmulateShift")
+                        or k == GetCVar("GamePadEmulateCtrl") or k == GetCVar("GamePadEmulateAlt") then
+                        s:SetPropagateKeyboardInput(true)
+                        return
+                    end
+                    s:SetPropagateKeyboardInput(false)
+                    padHeld = key
+                    Commit(CreateKeyChordStringUsingMetaKeyState(k))
+                end)
+                self:SetScript("OnGamePadButtonUp", function(s, key)
+                    if key ~= padHeld then
+                        s:SetPropagateKeyboardInput(true)
+                        return
+                    end
+                    s:SetPropagateKeyboardInput(false)
+                    padHeld = nil
+                    if not listening then padArmed = false; s:EnableGamePadButton(false) end
+                end)
+            end
+            padArmed = true
+            self:EnableGamePadButton(true)
+        end
     end)
     btn:SetScript("OnKeyDown", function(self, key)
         -- Bare modifiers pass through so they can be held for the chord.
@@ -3051,6 +3286,8 @@ function EllesmereUI.BuildKeybindButton(parent, opts)
     end)
     btn:SetScript("OnHide", function()
         if listening then Stop(); Refresh() end
+        -- A hidden button gets no release: drop a controller press still held.
+        if padHeld then padHeld = nil; padArmed = false; btn:EnableGamePadButton(false) end
         -- Hidden is never hovered: always come back in the resting look.
         bg:SetColorTexture(DD_BG_R, DD_BG_G, DD_BG_B, DD_BG_A)
         btn._border:SetColor(1, 1, 1, DD_BRD_A)
@@ -4336,12 +4573,14 @@ local function BuildCogPopup(opts)
             totalH = totalH + FOOTER_H
         end
 
-        local pf = CreateFrame("Frame", nil, UIParent)
+        local pf = CreateFrame("Frame", nil, EllesmereUI.OverlayParent())
         pf:SetSize(POPUP_W, totalH)
         pf:SetFrameStrata(opts.frameStrata or "DIALOG"); pf:SetFrameLevel(opts.frameLevel or 200)
         pf:EnableMouse(true); pf:Hide()
         -- Spec Overrides auto-capture: edits inside this popup attribute to the slot whose cog opened it.
         pf._euiOptionsPopup = true
+        -- Controller cursor: the popup blocks what is under it but is not a stop itself.
+        EllesmereUI.PadHint(pf, "nodepass")
 
         -- Match panel scale so the popup matches scrollable-area widgets
         local ppScale = EllesmereUI.GetPopupScale() or 1
@@ -4722,6 +4961,20 @@ local function BuildCogPopup(opts)
                 lbl:SetText(EllesmereUI.L(row.label))
                 lbl:SetPoint("LEFT", pf, "TOPLEFT", SIDE_PAD, curY - ROW_H / 2 - 1)
 
+                if row.tooltip then
+                    local hitFrame = CreateFrame("Frame", nil, pf)
+                    hitFrame:SetPoint("TOPLEFT", lbl, "TOPLEFT", -2, 2)
+                    hitFrame:SetPoint("BOTTOMRIGHT", lbl, "BOTTOMRIGHT", 2, -2)
+                    hitFrame:SetFrameLevel(pf:GetFrameLevel() + 3)
+                    hitFrame:EnableMouse(true)
+                    hitFrame:SetScript("OnEnter", function()
+                        EllesmereUI.ShowWidgetTooltip(lbl, row.tooltip)
+                    end)
+                    hitFrame:SetScript("OnLeave", function()
+                        EllesmereUI.HideWidgetTooltip()
+                    end)
+                end
+
                 local inputW = row.inputWidth or 80
                 local SAVE_W = 34
                 local SAVE_GAP = 4
@@ -4870,12 +5123,14 @@ local function BuildCogPopup(opts)
                 -- Menu is FULLSCREEN_DIALOG so it floats above the popup
                 local MH = 26
                 local FONT = (EllesmereUI.GetFontPath()) or "Fonts\\FRIZQT__.TTF"
-                local menu = CreateFrame("Frame", nil, UIParent)
+                local menu = CreateFrame("Frame", nil, EllesmereUI.OverlayParent())
                 menu:SetFrameStrata("FULLSCREEN_DIALOG")
                 menu:SetFrameLevel(220)
                 menu:SetClampedToScreen(true)
                 menu:SetWidth(RR_W)
                 menu:Hide()
+                -- Controller cursor: Cancel clicks the button (it toggles the list closed).
+                if EllesmereUI.PadCP() then menu.CloseButton = ddBtn end
                 local mBg2 = SolidTex(menu, "BACKGROUND", EllesmereUI.DD_BG_R, EllesmereUI.DD_BG_G, EllesmereUI.DD_BG_B, 0.98)
                 mBg2:SetAllPoints()
                 MakeBorder(menu, 1, 1, 1, EllesmereUI.DD_BRD_A, PP)
@@ -4894,7 +5149,11 @@ local function BuildCogPopup(opts)
                         end
                     end)
                 end)
-                menu:SetScript("OnHide", function(self) self:SetScript("OnUpdate", nil) end)
+                menu:SetScript("OnHide", function(self)
+                    self:SetScript("OnUpdate", nil)
+                    -- Controller cursor: back onto the button (a no-op once the popup hid it too).
+                    if EllesmereUI.PadCursorShown() then EllesmereUI.PadFocus(ddBtn) end
+                end)
 
                 local mY = -2
                 local ht = menu:CreateFontString(nil, "OVERLAY")
@@ -5064,9 +5323,12 @@ local function BuildCogPopup(opts)
                     mY = mY - MH
                 end
                 menu:SetHeight(20 + visH + 4)
+                EllesmereUI.TrackOverlay(menu)
 
                 ddBtn:SetScript("OnClick", function()
                     if menu:IsShown() then menu:Hide() else menu:Show() end
+                    -- Controller cursor: into the opened list.
+                    if EllesmereUI.PadCursorShown() and menu:IsShown() then EllesmereUI.PadFocus(menu) end
                 end)
 
                 -- Disabled overlay: dim + block + hide menu
@@ -5276,6 +5538,11 @@ local function BuildCogPopup(opts)
             -- Dim the anchor back to cog idle alpha; skipped via noOwnerDim when the anchor isn't a cog (e.g. a preview icon) and must not fade.
             if owner and owner._euiCogState then owner._euiCogState()
             elseif owner and not opts.noOwnerDim then owner:SetAlpha(0.4) end
+            -- Controller cursor: back onto the cog (not for the hover-opened popups,
+            -- where it stays free; a no-op once the cog is hidden).
+            if owner and not opts.noOwnerDim and EllesmereUI.PadCursorShown() then
+                EllesmereUI.PadFocus(owner)
+            end
         end)
 
         -- Close when the main EllesmereUI frame hides
@@ -5285,6 +5552,7 @@ local function BuildCogPopup(opts)
             end)
         end
 
+        EllesmereUI.TrackOverlay(pf)
         popupFrame = pf
     end
 
@@ -5318,6 +5586,14 @@ local function BuildCogPopup(opts)
             if t >= 1 then self:SetScript("OnUpdate", self._clickOutside) end
         end)
         if anchorBtn._euiCogState then anchorBtn._euiCogState() end
+        -- Controller cursor: Cancel clicks the anchor again (a second click on the same
+        -- anchor closes the popup), and the cursor moves into the popup. Not for the
+        -- hover-opened popups (noOwnerDim: the anchor is a menu row, not a cog), where
+        -- the cursor must stay free to walk past the row.
+        if EllesmereUI.PadCP() and not opts.noOwnerDim then
+            popupFrame.CloseButton = anchorBtn.Click and anchorBtn or nil
+            if EllesmereUI.PadCursorShown() then EllesmereUI.PadFocus(popupFrame) end
+        end
     end })
 
     return popupFrame, showFn
@@ -6030,7 +6306,9 @@ local function BuildMultiApplyDropdown(anchorFrame, opts, flashTargets)
     local menuW = 180
     local menuH = PAD + APPLY_H + 2 + #keys * ITEM_H + PAD
 
-    local menu = CreateFrame("Frame", nil, UIParent)
+    -- Controller cursor loaded: the one gate for everything controller-only below.
+    local padCP = EllesmereUI.PadCP()
+    local menu = CreateFrame("Frame", nil, EllesmereUI.OverlayParent())
     menu:SetFrameStrata("FULLSCREEN_DIALOG")
     menu:SetFrameLevel(200)
     menu:SetClampedToScreen(true)
@@ -6226,7 +6504,7 @@ local function BuildMultiApplyDropdown(anchorFrame, opts, flashTargets)
     end)
 
     -- Click-outside-to-close
-    local blocker = CreateFrame("Button", nil, UIParent)
+    local blocker = CreateFrame("Button", nil, EllesmereUI.OverlayParent())
     blocker:SetFrameStrata("FULLSCREEN")
     blocker:SetFrameLevel(199)
     blocker:SetAllPoints(UIParent)
@@ -6239,10 +6517,23 @@ local function BuildMultiApplyDropdown(anchorFrame, opts, flashTargets)
         blocker:Hide()
         blocker:SetParent(nil)
         _activeMultiApplyDropdown = nil
+        -- Controller cursor: back onto the sync link that opened it (a no-op once that is hidden).
+        if padCP and EllesmereUI.PadCursorShown() then EllesmereUI.PadFocus(anchorFrame) end
     end)
+
+    -- Controller cursor: the popup and its catcher block what they cover without
+    -- being stops, and Cancel clicks the catcher (closing the popup).
+    if padCP then
+        EllesmereUI.PadHint(menu, "nodepass")
+        EllesmereUI.PadHint(blocker, "nodepass")
+        menu.CloseButton = blocker
+        EllesmereUI.TrackOverlay(blocker)
+        EllesmereUI.TrackOverlay(menu)
+    end
 
     _activeMultiApplyDropdown = menu
     menu:Show()
+    if padCP and EllesmereUI.PadCursorShown() then EllesmereUI.PadFocus(menu) end
     return menu
 end
 
@@ -6701,6 +6992,7 @@ end
 --  onClick override, per-swatch disabled+disabledTooltip, refreshAlpha) to the LEFT of the region's control, so a
 --  slider (or any control half) can host its color swatches on the same row. Chains region._lastInline, so a cog
 --  button built afterwards lands left of the swatches. opts.disabled/opts.disabledTooltip mirror the row-level disabled state of the multiSwatch form.
+--  opts.size: the swatch size (nil = BuildColorSwatch's default 24).
 -------------------------------------------------------------------------------
 local function BuildInlineSwatches(region, swatches, opts)
     opts = opts or {}
@@ -6708,7 +7000,7 @@ local function BuildInlineSwatches(region, swatches, opts)
     local anchorTo = region._lastInline or region._control
     for i = #swatches, 1, -1 do
         local sc = swatches[i]
-        local swatch, updateSwatch = BuildColorSwatch(region, level, sc.getValue, sc.setValue, sc.hasAlpha)
+        local swatch, updateSwatch = BuildColorSwatch(region, level, sc.getValue, sc.setValue, sc.hasAlpha, opts.size)
         PP.Point(swatch, "RIGHT", anchorTo, "LEFT", -8, 0)
         anchorTo = swatch
         region._lastInline = swatch
@@ -6844,7 +7136,7 @@ function EllesmereUI.ShowPickMenu(anchor, opts)
 
     local menu = EllesmereUI._pickMenu
     if not menu then
-        menu = CreateFrame("Frame", nil, UIParent)
+        menu = CreateFrame("Frame", nil, EllesmereUI.OverlayParent())
         EllesmereUI._pickMenu = menu
         menu:SetFrameStrata("FULLSCREEN_DIALOG")
         menu:SetFrameLevel(220)
@@ -6855,7 +7147,7 @@ function EllesmereUI.ShowPickMenu(anchor, opts)
         bg:SetColorTexture(0.067, 0.067, 0.067, 0.98)
         EllesmereUI.MakeBorder(menu, 1, 1, 1, 0.2)
 
-        local catcher = CreateFrame("Button", nil, UIParent)
+        local catcher = CreateFrame("Button", nil, EllesmereUI.OverlayParent())
         catcher:SetAllPoints(UIParent)
         catcher:SetFrameStrata("FULLSCREEN_DIALOG")
         catcher:SetFrameLevel(210)
@@ -6863,8 +7155,27 @@ function EllesmereUI.ShowPickMenu(anchor, opts)
         catcher:SetScript("OnClick", function() menu:Hide() end)
         catcher:Hide()
         menu._catcher = catcher
-        menu:SetScript("OnHide", function(self) self._catcher:Hide() end)
+        menu:SetScript("OnHide", function(self)
+            self._catcher:Hide()
+            -- Controller cursor: back onto the tile that opened it (set only under that cursor).
+            local opener = self._padOpener
+            if opener then
+                self._padOpener = nil
+                if EllesmereUI.PadCursorShown() then EllesmereUI.PadFocus(opener) end
+            end
+        end)
         menu:SetScript("OnShow", function(self) self._catcher:Show() end)
+        -- Controller cursor: on its overlay layer the menu is created hidden, so the
+        -- layer shows only with it; the menu and its catcher block what they cover
+        -- without being stops, and Cancel clicks the catcher (closing the menu).
+        if EllesmereUI.PadCP() then
+            menu:Hide()
+            EllesmereUI.PadHint(menu, "nodepass")
+            EllesmereUI.PadHint(catcher, "nodepass")
+            menu.CloseButton = catcher
+            EllesmereUI.TrackOverlay(catcher)
+            EllesmereUI.TrackOverlay(menu)
+        end
 
         local title = menu:CreateFontString(nil, "OVERLAY")
         title:SetPoint("TOPLEFT", menu, "TOPLEFT", 10, -7)
@@ -6972,8 +7283,18 @@ function EllesmereUI.ShowPickMenu(anchor, opts)
     local scale = UIParent:GetEffectiveScale()
     local cx, cy = GetCursorPosition()
     menu:ClearAllPoints()
-    menu:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", cx / scale + 2, cy / scale + 2)
+    -- Controller cursor: the hidden pointer is not on the tile; open at the tile, cursor into the list.
+    local padCursor = EllesmereUI.PadCursorShown()
+    if padCursor and anchor then
+        menu:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, -2)
+    else
+        menu:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", cx / scale + 2, cy / scale + 2)
+    end
     menu:Show()
+    if padCursor then
+        menu._padOpener = anchor
+        EllesmereUI.PadFocus(menu)
+    end
 end
 
 -------------------------------------------------------------------------------
@@ -7331,6 +7652,8 @@ function EllesmereUI.ShowTrackedAurasPopup(opts)
             end)
         end
         ddBtn:SetScript("OnClick", function() menu:SetShown(not menu:IsShown()) end)
+        -- Controller cursor: Cancel inside the list clicks the button (closing just the list).
+        if EllesmereUI.PadCP() then menu.CloseButton = ddBtn end
 
         applyBtn:SetScript("OnClick", function()
             if not chosen then return end
@@ -7622,6 +7945,20 @@ function EllesmereUI.ShowTrackedAurasPopup(opts)
     end)
     doneBtn:SetScript("OnClick", ClosePopup)
 
+    -- Controller in use: the popup joins the controller cursor and answers the
+    -- controller's Back (registered while hidden, so it counts from this show);
+    -- the full-screen dimmer and the panel are no stops, Cancel clicks the X, the
+    -- cursor starts on Done.
+    if EllesmereUI.PadInUse() then
+        dimmer:Hide()
+        EllesmereUI.RegisterEscapeClose(dimmer, { padOnly = true, onEscape = ClosePopup })
+        EllesmereUI.PadHint(dimmer, "nodepass")
+        EllesmereUI.PadHint(panel, "nodepass")
+        if EllesmereUI.PadCP() then panel.CloseButton = closeBtn end
+        dimmer:Show()
+        if EllesmereUI.PadCursorShown() then EllesmereUI.PadFocus(doneBtn) end
+    end
+
     RefreshBoth()
 end
 
@@ -7639,16 +7976,20 @@ function EllesmereUI.ShowSpellBlacklistPopup(opts)
     local eg = EllesmereUI.ELLESMERE_GREEN or { r = 0.05, g = 0.82, b = 0.62 }
     local PW, PH = 320, 400
 
-    local dimmer = CreateFrame("Frame", nil, UIParent)
+    -- Controller cursor loaded: the dimmer is a named Button, so the cursor can
+    -- take the popup as a window and its Cancel press can click the dimmer shut.
+    local padCP = EllesmereUI.PadCP()
+    local dimmer = CreateFrame(padCP and "Button" or "Frame", padCP and "EUISpellBlacklistDimmer" or nil, UIParent)
     dimmer:SetFrameStrata("FULLSCREEN_DIALOG")
     dimmer:SetAllPoints(UIParent)
     dimmer:EnableMouse(true)
     dimmer:EnableMouseWheel(true)
     dimmer:SetScript("OnMouseWheel", function() end)
-    dimmer:SetScript("OnMouseDown", function()
+    local function CloseBlacklist()
         dimmer:Hide()
         EllesmereUI._blacklistPopup = nil
-    end)
+    end
+    dimmer:SetScript("OnMouseDown", CloseBlacklist)
     EllesmereUI.SolidTex(dimmer, "BACKGROUND", 0, 0, 0, 0.25):SetAllPoints(dimmer)
     EllesmereUI._blacklistPopup = dimmer
 
@@ -7804,7 +8145,24 @@ function EllesmereUI.ShowSpellBlacklistPopup(opts)
     addBtn:SetScript("OnClick", AddFromBox)
     addBox:SetScript("OnEnterPressed", AddFromBox)
 
+    -- Controller in use: the popup joins the controller cursor and answers the
+    -- controller's Back (registered while hidden, so it counts from this show);
+    -- the dimmer and the panel are no stops, Cancel clicks the dimmer (the popup
+    -- has no close button), and the cursor starts inside the popup.
+    if padCP or EllesmereUI.PadNative() then
+        dimmer:Hide()
+        if padCP then
+            dimmer:SetScript("OnClick", CloseBlacklist)
+            EllesmereUI.PadHint(dimmer, "nodepass")
+            EllesmereUI.PadHint(popup, "nodepass")
+            popup.CloseButton = dimmer
+        end
+        EllesmereUI.RegisterEscapeClose(dimmer, { padOnly = true, onEscape = CloseBlacklist })
+        dimmer:Show()
+    end
+
     RebuildList()
+    if padCP and EllesmereUI.PadCursorShown() then EllesmereUI.PadFocus(popup) end
 end
 
 -- Empty-selection warning for a filter dropdown whose selection is allowed
@@ -7969,7 +8327,7 @@ function EllesmereUI.BuildVisOptsCBDropdown(parentFrame, ddW, fLevel, items, get
         local needsScroll = maxVisibleItems and checkableCount > maxVisibleItems
         -- +2 accounts for scroll frame 1px top + 1px bottom insets so non-scrolling menus don't scroll
         local menuH = (needsScroll and (4 + maxVisibleItems * ITEM_H + 4 + CLOSE_BTN_H) or (contentH + 4)) + SEARCH_H + TOP_H
-        menu = CreateFrame("Frame", nil, UIParent)
+        menu = CreateFrame("Frame", nil, EllesmereUI.OverlayParent())
         menu:SetFrameStrata("FULLSCREEN_DIALOG")
         menu:SetFrameLevel(200)
         menu:SetClampedToScreen(true)
@@ -7977,6 +8335,12 @@ function EllesmereUI.BuildVisOptsCBDropdown(parentFrame, ddW, fLevel, items, get
         menu:SetSize(ddW, menuH)
         menu:SetPoint("TOPLEFT", ddBtn, "BOTTOMLEFT", 0, -2)
         menu:Hide()
+        -- Controller cursor: the list blocks what is under it but is not a stop itself;
+        -- Cancel clicks the dropdown button (it toggles the list closed).
+        if EllesmereUI.PadCP() then
+            EllesmereUI.PadHint(menu, "nodepass")
+            menu.CloseButton = ddBtn
+        end
         local mBg = menu:CreateTexture(nil, "BACKGROUND")
         mBg:SetAllPoints()
         mBg:SetColorTexture(EllesmereUI.DD_BG_R, EllesmereUI.DD_BG_G, EllesmereUI.DD_BG_B, EllesmereUI.DD_BG_HA or 0.92)
@@ -8101,6 +8465,8 @@ function EllesmereUI.BuildVisOptsCBDropdown(parentFrame, ddW, fLevel, items, get
         local cbThumbBg = cbThumb:CreateTexture(nil, "ARTWORK")
         cbThumbBg:SetAllPoints()
         cbThumbBg:SetColorTexture(1, 1, 1, 0.27)
+        -- Controller cursor: it scrolls the list to the row itself; the pointer-drag thumb is no stop.
+        EllesmereUI.PadHint(cbThumb, "nodeignore")
 
         local function SafeMaxScroll()
             return math.max(0, child:GetHeight() - sf:GetHeight())
@@ -8679,7 +9045,8 @@ function EllesmereUI.BuildVisOptsCBDropdown(parentFrame, ddW, fLevel, items, get
             end)
             menu:HookScript("OnShow", function()
                 searchEdit:SetText("")
-                searchEdit:SetFocus()
+                -- Not under the controller cursor: focus would pop its on-screen keyboard over the list.
+                if not EllesmereUI.PadCursorShown() then searchEdit:SetFocus() end
                 UpdateCBThumb()
             end)
         end
@@ -8695,6 +9062,21 @@ function EllesmereUI.BuildVisOptsCBDropdown(parentFrame, ddW, fLevel, items, get
             for i = 1, #_taTints do _taTints[i]() end
         end)
 
+        if EllesmereUI.PadCP() then
+            -- Controller cursor (ShowMenu calls this only while it is shown): list back
+            -- to the top, cursor onto the first row.
+            menu._padFocus = function()
+                sf:SetVerticalScroll(0)
+                UpdateCBThumb()
+                local first
+                for i = 1, #_allRows do
+                    local r = _allRows[i]
+                    if not r.isHeader and r.frame:IsShown() then first = r.frame; break end
+                end
+                EllesmereUI.PadFocus(first or menu)
+            end
+            EllesmereUI.TrackOverlay(menu)
+        end
         ddBtn._ddMenu = menu
     end
 
@@ -8790,7 +9172,10 @@ function EllesmereUI.BuildVisOptsCBDropdown(parentFrame, ddW, fLevel, items, get
                 ApplyNormal()
             end
             if onMenuClosed then onMenuClosed() end
+            -- Controller cursor: back onto the dropdown button (a no-op once that is hidden too).
+            if EllesmereUI.PadCursorShown() then EllesmereUI.PadFocus(ddBtn) end
         end)
+        if menu._padFocus and EllesmereUI.PadCursorShown() then menu._padFocus() end
     end
 
     ddBtn:SetScript("OnClick", function() ShowMenu() end)
@@ -8837,7 +9222,11 @@ end
 --                            does not re-fill it back to true (the built-in CDM bars ship
 --                            housing-hide on, so they need this)
 --      onChanged/onOptionChanged = fired after a mode / option write (latter falls back)
---      extraItems          = { { key, label, tooltip, get, set }, ... } single-lane rows
+--      extraItems          = { { key, label, tooltip, get, set, default }, ... } single-lane
+--                            rows; a missing get/set uses the boolean getStore()[key], with
+--                            `default` as its unset value (a write equal to it stores nil)
+--      leftCfg             = optional DualRow config for the LEFT slot; the checklist then
+--                            takes the RIGHT slot (excludes rightVis and rightCfg)
 --      label/width/tooltip/disabledFn/disabledTooltip/rawTooltip/refreshPageArg
 --  }
 --  rightCfg: DualRow right-slot config -- the old Visibility Options dropdown's old slot,
@@ -9029,8 +9418,28 @@ function EllesmereUI.AttachVisibilityChecklist(region, opts)
 
     if opts.extraItems then
         for _, ex in ipairs(opts.extraItems) do
+            -- A missing accessor reads or writes a boolean in the checklist's own
+            -- store, which never holds the row's default.
+            local get, set = ex.get, ex.set
+            local k, dflt = ex.key, ex.default == true
+            if not get then
+                get = function()
+                    local store = opts.getStore()
+                    local v = store and store[k]
+                    if v == nil then return dflt end
+                    return v == true
+                end
+            end
+            if not set then
+                set = function(v)
+                    local store = opts.getStore()
+                    if not store then return end
+                    v = v == true
+                    if v == dflt then store[k] = nil else store[k] = v end
+                end
+            end
             items[#items + 1] = { key = ex.key, label = ex.label, tooltip = ex.tooltip }
-            defs[ex.key] = { key = ex.key, axis = "extra", get = ex.get, set = ex.set }
+            defs[ex.key] = { key = ex.key, axis = "extra", get = get, set = set }
         end
     end
 
@@ -9508,16 +9917,24 @@ function EllesmereUI.BuildVisibilityRow(W, parent, y, opts, rightCfg)
     -- opts.rightVis: a second, fully independent visibility checklist in the right
     -- slot (its own store, legacyKey, caps and callbacks). Mutually exclusive with
     -- rightCfg, which stays the way to put any ordinary widget there.
+    -- opts.leftCfg: an ordinary widget in the LEFT slot and this checklist in the RIGHT
+    -- one. Excludes rightVis and rightCfg.
     local rightVis = opts.rightVis
-    local row, h = W:DualRow(parent, y, Slot(opts),
-        rightVis and Slot(rightVis) or rightCfg or { type = "label", text = "" })
+    local leftCfg = opts.leftCfg
+    local row, h
+    if leftCfg then
+        row, h = W:DualRow(parent, y, leftCfg, Slot(opts))
+    else
+        row, h = W:DualRow(parent, y, Slot(opts),
+            rightVis and Slot(rightVis) or rightCfg or { type = "label", text = "" })
+    end
 
     -- Search pre-build: the row is an absorber, so the chrome below would throw. The
     -- row's labels were already indexed by the factory stubs; nothing here registers.
     if EllesmereUI._prebuilding then return row, h end
 
-    EllesmereUI.AttachVisibilityChecklist(row._leftRegion, opts)
-    if rightVis then
+    EllesmereUI.AttachVisibilityChecklist(leftCfg and row._rightRegion or row._leftRegion, opts)
+    if rightVis and not leftCfg then
         EllesmereUI.AttachVisibilityChecklist(row._rightRegion, rightVis)
     end
 
@@ -9605,7 +10022,7 @@ function EllesmereUI.BuildReorderCBDropdown(parentFrame, ddW, fLevel, items, get
         local ROWS_BASE_Y = -4 - HINT_H
         local menuH = 4 + HINT_H + #movable * ITEM_H
             + ((#fixedItems > 0) and (DIV_H + #fixedItems * ITEM_H) or 0) + 4
-        menu = CreateFrame("Frame", nil, UIParent)
+        menu = CreateFrame("Frame", nil, EllesmereUI.OverlayParent())
         menu:SetFrameStrata("FULLSCREEN_DIALOG")
         menu:SetFrameLevel(200)
         menu:SetClampedToScreen(true)
@@ -9617,6 +10034,12 @@ function EllesmereUI.BuildReorderCBDropdown(parentFrame, ddW, fLevel, items, get
         mBg:SetAllPoints()
         mBg:SetColorTexture(EllesmereUI.DD_BG_R, EllesmereUI.DD_BG_G, EllesmereUI.DD_BG_B, EllesmereUI.DD_BG_HA or 0.92)
         EllesmereUI.MakeBorder(menu, 1, 1, 1, EllesmereUI.DD_BRD_A, PP)
+        -- Controller cursor: the list blocks what is under it but is not a stop itself;
+        -- Cancel clicks the dropdown button (it toggles the list closed).
+        if EllesmereUI.PadCP() then
+            EllesmereUI.PadHint(menu, "nodepass")
+            menu.CloseButton = ddBtn
+        end
 
         -- Hint line(s) above the rows
         local hint = menu:CreateFontString(nil, "OVERLAY")
@@ -9857,11 +10280,15 @@ function EllesmereUI.BuildReorderCBDropdown(parentFrame, ddW, fLevel, items, get
             for _, row in ipairs(movableRows) do row:_cancelDrag() end
             isDragging = false
             insLine:Hide()
+            -- Controller cursor: back onto the dropdown button before onClose, so a
+            -- prompt it opens can still take the cursor (a no-op once the button is hidden).
+            if EllesmereUI.PadCursorShown() then EllesmereUI.PadFocus(ddBtn) end
             local changed = orderChanged
             orderChanged = false
             if opts.onClose then opts.onClose(changed) end
         end)
 
+        EllesmereUI.TrackOverlay(menu)
         ddBtn._ddMenu = menu
     end
 
@@ -9896,6 +10323,8 @@ function EllesmereUI.BuildReorderCBDropdown(parentFrame, ddW, fLevel, items, get
                 self:Hide()
             end
         end)
+        -- Controller cursor: into the opened list.
+        if EllesmereUI.PadCursorShown() then EllesmereUI.PadFocus(menu) end
     end
     ddBtn:SetScript("OnClick", ShowMenu)
     ddBtn:HookScript("OnHide", function() if menu then menu:Hide() end end)

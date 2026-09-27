@@ -92,12 +92,12 @@ end
 --  there bills the PARENT forever (see EllesmereUI_Ticker.lua). These are born
 --  in this file's main chunk; event hosts adopt one via ns.TakeShell() instead
 --  of CreateFrame("Frame"). Plain unnamed Frames, persistent hosts only: no
---  release. Sized for per-unit trackers (40 raid + party + boss + extra) plus
---  standing watchers.
+--  release. Sized for per-unit trackers (40 raid + party + boss + extra + pets)
+--  plus standing watchers.
 -------------------------------------------------------------------------------
 do
     local pool = {}
-    local n = 90
+    local n = 120
     for i = 1, n do pool[i] = CreateFrame("Frame") end
     ns.TakeShell = function()
         if n > 0 then
@@ -175,6 +175,9 @@ local ABSORB_STYLE_TEX = {
     largeOutlinedStripesR = "Interface\\AddOns\\EllesmereUI\\media\\textures\\shields\\large-habsorb-right.png",
     largeStripes          = "Interface\\AddOns\\EllesmereUI\\media\\textures\\shields\\large-absorb-left.png",
     largeStripesR         = "Interface\\AddOns\\EllesmereUI\\media\\textures\\shields\\large-absorb-right.png",
+    pixelsShield          = "Interface\\AddOns\\EllesmereUI\\media\\textures\\shields\\pixels-shield.tga",
+    pixelsShieldEdge      = "Interface\\AddOns\\EllesmereUI\\media\\textures\\shields\\pixels-shield-edge.tga",
+    pixelsShieldFill      = "Interface\\AddOns\\EllesmereUI\\media\\textures\\shields\\pixels-shield-fill.tga",
 }
 local ABSORB_STYLE_ALPHA = {
     striped         = 0.8,
@@ -223,6 +226,12 @@ local ROLE_ICON_STYLES = {
         TANK    = ROLE_MEDIA .. "tank.png",
         HEALER  = ROLE_MEDIA .. "healer.png",
         DAMAGER = ROLE_MEDIA .. "dps.png",
+    },
+    pixels = {
+        _isTexture = true,
+        TANK    = ROLE_MEDIA .. "pixels-tank.tga",
+        HEALER  = ROLE_MEDIA .. "pixels-healer.tga",
+        DAMAGER = ROLE_MEDIA .. "pixels-dps.tga",
     },
 }
 -- Read-only share with the options file's style preview (this file loads first).
@@ -362,6 +371,19 @@ local defaults = {
             -- growDirection / wrapDirection / freeRect: optional, no defaults.
             -- Unset, growth derives from freeHorizontal, wrap from the perpendicular
             -- default, anchoring from freePos. See XF.GrowInfo / XF.FreeAnchor.
+        },
+
+        -- Pet Frames (party and raid pets, beside the groups). Each tab reads the placement
+        -- (position, freePos, freeRect) and extra size here until it sets its own party_/raid_
+        -- key (PF.View).
+        petFrames = {
+            party = false,
+            raid  = false,
+            position = "right",   -- "left" | "right" | "free" | "owner" (Beside Owner, Party tab)
+            freePos  = { x = 100, y = -200 },
+            healthColor = { r = 23/255, g = 172/255, b = 49/255 },
+            extraWidth  = 0,      -- size offset on top of the party or raid frame size
+            extraHeight = 0,
         },
 
         -- Healer Mana Text Display (Extras): one text row per group healer.
@@ -505,7 +527,7 @@ local defaults = {
         healAbsorbBarGrowDir  = "up",
 
         -- Indicators
-        roleIconStyle    = "modern",  -- none/modern/modernCircle/styled/classicCircle/classic/blizzDefault/blizzLight
+        roleIconStyle    = "modern",  -- none/modern/modernCircle/styled/classicCircle/classic/blizzDefault/blizzLight/pixels
         roleIconSize     = 13,
         roleIconPosition = "bottomleft",  -- topleft/top/topright/left/center/right/bottomleft/bottom/bottomright
         roleIconOffsetX  = 0,
@@ -714,6 +736,19 @@ local defaults = {
         partyFrameHeight  = 60,
         partyShowWhenSolo = false,
         partySmallRaid    = false,  -- raid under 10 players: group 1 as party frames, others hidden
+        partyShowTargets  = false,  -- opt-in secure target buttons beside party frames
+        -- Party target frames (Party tab PARTY TARGETS section): party only, one value under
+        -- every style. partyTargetPosition nil = beside stacked frames, below horizontal ones.
+        partyTargetIncludeSelf     = false,     -- your own target beside your frame too
+        partyTargetHealthColorMode = "class",   -- "class" | "dark" | "classic" | "custom"
+        partyTargetCustomFillColor = { r = 37/255, g = 193/255, b = 29/255 },
+        partyTargetBgClassColored  = false,
+        partyTargetCustomBgColor   = { r = 17/255, g = 17/255, b = 17/255 },
+        partyTargetBgDarkness      = 50,
+        partyTargetOffsetX         = 0,         -- -100..100
+        partyTargetOffsetY         = 0,
+        partyTargetWidth           = 70,
+        partyTargetHeight          = 33,
         partyCenterWhenSolo = false,  -- center the lone player frame in the container when solo
         partySyncSections = nil,  -- nil = all synced; { healthBar=false } = healthBar custom
         partySortMode     = "ROLE",
@@ -742,7 +777,8 @@ local defaults = {
         partyPortraitBorderOpacity = 100,       -- 0..100
         partyPortraitBorderSize  = 7,           -- 1..7
         partyPortraitArtScale    = 100,         -- 2D Zoom 50..100
-        partyPortrait3dZoom      = 100,         -- 3D Zoom 100..300
+        partyPortrait3dZoom      = 100,         -- 3D Zoom 100..500 (above 300: whole character)
+        partyPortraitCharScale   = 100,         -- Character Size % 50..200 (Inside, 3D)
     }
 }
 
@@ -1026,8 +1062,9 @@ local function InitHealthBarTextures()
     )
 end
 
-local function ResolveHealthTexture()
-    local key = db.profile.healthBarTexture or "atrocity"
+-- s: the settings to read (the profile when nil).
+local function ResolveHealthTexture(s)
+    local key = (s or db.profile).healthBarTexture or "atrocity"
     return EllesmereUI.ResolveTexturePath(healthBarTextures, key, healthBarTextures["atrocity"] or "Interface\\Buttons\\WHITE8X8")
 end
 
@@ -1927,6 +1964,22 @@ function ns.GetHealAbsorbTextColor(unit, s)
     end
 end
 
+-- A preview text's colour for its colour mode: accent, class (classToken: the sample member's
+-- class; none, as for a pet, reads white) or custom (custom: the colour). r, g, b: the colour
+-- without one.
+function ns.RF_PreviewTextColor(mode, custom, classToken, r, g, b)
+    if mode == "accent" then
+        local ar, ag, ab = EllesmereUI.ResolveActiveAccent()
+        if ar then return ar, ag, ab end
+    elseif mode == "class" then
+        local cc = EllesmereUI.GetClassColor(classToken)
+        return cc.r, cc.g, cc.b
+    elseif custom then
+        return custom.r, custom.g, custom.b
+    end
+    return r, g, b
+end
+
 -- Anchor a FontString to the health bar using the shared 8-position scheme. Mirrors FB.AnchorText
 -- (defined later, after the friendly-boss subsystem) so heal-absorb text in the early frame-build
 -- path anchors identically. Optional width clamps long "amount"-mode values like health text.
@@ -1966,6 +2019,47 @@ function ns.AnchorRFText(fs, health, pos, ox, oy, width)
     -- Force re-render after a JustifyH change (mirrors the name/health text fns).
     local txt = fs:GetText()
     fs:SetText(""); fs:SetText(txt or "")
+end
+
+-- Health text in one of the health text modes. A unit's values are read only in the modes that
+-- show them; a preview (unit nil) shows made-up ones, perPct per percent. Returns false for None or
+-- an unknown mode, which blank the text.
+function ns.RF_HealthTextInto(fs, mode, pct, unit, perPct)
+    local v
+    if mode == "percent" then
+        fs:SetFormattedText("%.0f%%", pct)
+    elseif mode == "percentNoSign" then
+        fs:SetFormattedText("%.0f", pct)
+    elseif mode == "number" then
+        if unit then v = UnitHealth(unit, true) else v = pct * perPct end
+        if v and AbbreviateNumbers then
+            fs:SetText(AbbreviateNumbers(v))
+        elseif v then
+            fs:SetFormattedText("%s", v)
+        end
+    elseif mode == "numberPercent" or mode == "percentNumber" then
+        if unit then v = UnitHealth(unit, true) else v = pct * perPct end
+        local numStr = (v and AbbreviateNumbers) and AbbreviateNumbers(v) or tostring(v or 0)
+        if mode == "numberPercent" then
+            fs:SetFormattedText("%s | %.0f%%", numStr, pct)
+        else
+            fs:SetFormattedText("%.0f%% | %s", pct, numStr)
+        end
+    elseif mode == "missing" then
+        if unit then v = UnitHealthMissing(unit, true) else v = (100 - pct) * perPct end
+        fs:SetText(C_StringUtil.TruncateWhenZero(v))
+        if fs:GetText() then
+            if v and AbbreviateNumbers then
+                fs:SetText(AbbreviateNumbers(v))
+            elseif v then
+                fs:SetFormattedText("%s", v)
+            end
+        end
+    else
+        fs:SetText("")
+        return false
+    end
+    return true
 end
 
 -- Format a heal-absorb amount into a FontString. mode: "amount" (full), "short" (abbreviated like
@@ -2128,7 +2222,7 @@ local function ApplyAbsorbStyle(absorbBar, style, settings)
     local ac = settings and settings.absorbColor or { r = 1, g = 1, b = 1 }
     absorbBar:SetStatusBarTexture(tex)
     absorbBar:SetStatusBarColor(ac.r or 1, ac.g or 1, ac.b or 1, alpha)
-    local tiled = (style == "striped" or style == "stripedReversed" or style == "stripedThick" or style == "stripedThickR" or style == "largeStripes" or style == "largeStripesR" or style == "largeOutlinedStripes" or style == "largeOutlinedStripesR")
+    local tiled = (style == "striped" or style == "stripedReversed" or style == "stripedThick" or style == "stripedThickR" or style == "largeStripes" or style == "largeStripesR" or style == "largeOutlinedStripes" or style == "largeOutlinedStripesR" or style == "pixelsShieldFill")
     local fill = absorbBar:GetStatusBarTexture()
     if fill then
         fill:SetDrawLayer("ARTWORK", 1)
@@ -2162,7 +2256,7 @@ ns.ApplyHealAbsorbStyle = function(haBar, style, settings)
     local mask = haBar._absorbMask
     haBar:SetStatusBarTexture(tex)
     haBar:SetStatusBarColor(hc.r or 0.8, hc.g or 0.15, hc.b or 0.15, alpha)
-    local tiled = (style == "striped" or style == "stripedReversed" or style == "stripedThick" or style == "stripedThickR" or style == "largeStripes" or style == "largeStripesR" or style == "largeOutlinedStripes" or style == "largeOutlinedStripesR")
+    local tiled = (style == "striped" or style == "stripedReversed" or style == "stripedThick" or style == "stripedThickR" or style == "largeStripes" or style == "largeStripesR" or style == "largeOutlinedStripes" or style == "largeOutlinedStripesR" or style == "pixelsShieldFill")
     local fill = haBar:GetStatusBarTexture()
     if fill then
         fill:SetDrawLayer("ARTWORK", 2)
@@ -2185,7 +2279,7 @@ ns.ApplyMaxHealthStyle = function(bar, style, settings)
         tiled = true
     else
         tex = ns.ResolveAbsorbStyleTex(style, "Interface\\Buttons\\WHITE8X8")
-        tiled = (style == "striped" or style == "stripedReversed" or style == "stripedThick" or style == "stripedThickR" or style == "largeStripes" or style == "largeStripesR" or style == "largeOutlinedStripes" or style == "largeOutlinedStripesR")
+        tiled = (style == "striped" or style == "stripedReversed" or style == "stripedThick" or style == "stripedThickR" or style == "largeStripes" or style == "largeStripesR" or style == "largeOutlinedStripes" or style == "largeOutlinedStripesR" or style == "pixelsShieldFill")
     end
     local alpha = settings and (settings.maxHealthOpacity or 100) / 100 or 1
     local mc = settings and settings.maxHealthColor or { r = 0.7, g = 0.1, b = 0.1 }
@@ -5251,10 +5345,15 @@ function ERF:UpdateAllFrames()
         if ns._xfUnitToButton then
             for _, btn in pairs(ns._xfUnitToButton) do ns._UpdateButtonHealth(btn) end
         end
-        if ns._FB and ns._FB.buttons then
-            for _, btn in ipairs(ns._FB.buttons) do ns._UpdateButtonHealth(btn) end
-        end
     end
+    -- Boss and pet frames paint through their own painter (names and their colours included).
+    local FB = ns._FB
+    for _, btn in ipairs(FB.buttons) do
+        if btn:IsVisible() then FB.Update(btn) end
+    end
+    ns._PF_RefreshVisible()
+    -- Party target frames: their fill and background read the Dark Mode and class palettes too.
+    ns._PT_RepaintVisible()
 end
 
 -- Lightweight: only toggle raid markers on each button (for RAID_TARGET_UPDATE)
@@ -5635,6 +5734,31 @@ do
 local FB = { buttons = {}, trackers = {} }
 ns._FB = FB
 
+-- Settings source per button for the other groups these helpers style (the pet frames beside the
+-- party frames read the party settings). Unregistered buttons, the boss group's own among them,
+-- read the raid settings.
+FB.src = setmetatable({}, { __mode = "k" })
+FB.Source = function(b)
+    local get = FB.src[b]
+    return (get and get()) or ns._scaledProfile or db.profile
+end
+
+-- Target store: true while a button shows your target, read by the border painter. Re-read by the
+-- full paint and on target changes, so a target change repaints only the buttons that flipped.
+-- UnitIsUnit can be secret: read as not targeted. Returns true when the button's state flipped.
+FB.tgt = setmetatable({}, { __mode = "k" })
+FB.ReadTarget = function(b, unit)
+    local t = unit and UnitIsUnit(unit, "target")
+    if issecretvalue(t) then t = false end
+    t = t and true or nil
+    if FB.tgt[b] == t then return false end
+    FB.tgt[b] = t
+    return true
+end
+
+-- Hover store: true while the mouse is over a button, read by the border painter.
+FB.hov = setmetatable({}, { __mode = "k" })
+
 -- Baseline heal per healer class for NPC range checks. Boss units sit outside UnitInRange's
 -- group-member domain and never fire UNIT_IN_RANGE_UPDATE, so range is measured against a known
 -- helpful spell instead -- healer specs only; everyone else keeps full alpha (no range check).
@@ -5739,30 +5863,31 @@ FB.AnchorText = function(fs, health, pos, ox, oy)
 end
 
 -- Recolor the border for the current state. Mirrors the raid buttons' single recolored border:
--- hover (raised) > target (raised) > normal, using the raid border settings -- nothing separate.
+-- hover (raised) > target (raised) > normal, using the button's border settings (FB.Source: the raid
+-- ones for the boss group) -- nothing separate.
 FB.ApplyBorderColor = function(b)
     if not PP or not b._borderFrame or not db then return end
-    local s = ns._scaledProfile or db.profile
+    local s = FB.Source(b)
+    local targeted = FB.tgt[b] and s.targetBorderEnabled ~= false
     if b.stockEdge then
-        local hover = b._fbHovered and s.hoverBorderEnabled ~= false
+        local hover = FB.hov[b] and s.hoverBorderEnabled ~= false
         local lvl = b:GetFrameLevel() + (hover and ns.LVL_RAISE or 8)
         if b._borderFrame:GetFrameLevel() ~= lvl then
             b._borderFrame:SetFrameLevel(lvl)
             local container = PP.GetBorders(b._borderFrame)
             if container then container:SetFrameLevel(lvl + 1) end
         end
-        ns.RF_StockHighlight(b, b._borderFrame, s, hover,
-            UnitIsUnit(FB.UnitOf(b), "target") and s.targetBorderEnabled ~= false)
+        ns.RF_StockHighlight(b, b._borderFrame, s, hover, targeted)
         return
     end
     local r, g, bcol, a
     local raised, hlSize, hlPx = false, nil, nil
-    if b._fbHovered and s.hoverBorderEnabled ~= false then
+    if FB.hov[b] and s.hoverBorderEnabled ~= false then
         local c = s.hoverBorderColor or { r = 1, g = 1, b = 1 }
         r, g, bcol, a = c.r, c.g, c.b, s.hoverBorderAlpha or 1
         raised, hlSize = true, s.hoverBorderSize or 1
         hlPx = EllesmereUI.BorderPx(s.hoverBorderSizePx, hlSize, s.borderTexture or "solid")
-    elseif UnitIsUnit(FB.UnitOf(b), "target") and s.targetBorderEnabled ~= false then
+    elseif targeted then
         local c = s.targetBorderColor or { r = 1, g = 1, b = 1 }
         r, g, bcol, a = c.r, c.g, c.b, s.targetBorderAlpha or 1
         raised, hlSize = true, s.targetBorderSize or 1
@@ -5793,10 +5918,10 @@ FB.ApplyBorderColor = function(b)
     EllesmereUI.SetBorderStyleColor(b._borderFrame, r, g, bcol, a)
 end
 
--- Apply the raid border style (size/color/texture/offsets) to one button.
+-- Apply the border style (size/color/texture/offsets) to one button, from its FB.Source.
 FB.StyleBorder = function(b)
     if not PP or not b._borderFrame then return end
-    local s = ns._scaledProfile or db.profile
+    local s = FB.Source(b)
     local bs = s.borderSize or 1
     local bc = s.borderColor or { r = 0, g = 0, b = 0 }
     local pl = b:GetFrameLevel()
@@ -5816,84 +5941,125 @@ FB.StyleBorder = function(b)
     FB.ApplyBorderColor(b)
 end
 
--- Refresh one boss button: health value/color, health text, name text. Mirrors the corresponding
--- slices of UpdateButton/_UpdateButtonHealth; boss units are not group units, so no roster paths.
-FB.Update = function(b)
-    local unit = FB.UnitOf(b)
-    if not db or not UnitExists(unit) then return end
-    local s = ns._scaledProfile or db.profile
+-- Bar colour: the owner's own colour setting (default #17AC31). The raid color modes mislead here:
+-- gradient modes read as damage states, and many NPCs carry real class tokens (a friendly add can
+-- come out yellow).
+FB.PaintBarColor = function(b, owner, s)
     local health = b._health
-
-    local pct = GetSafeHealthPercent(unit)
-    health:SetMinMaxValues(0, 100)
-    local smooth = s.smoothBars and Enum and Enum.StatusBarInterpolation
-        and Enum.StatusBarInterpolation.ExponentialEaseOut
-    if smooth then health:SetValue(pct, smooth) else health:SetValue(pct) end
-    -- Own color setting (default #17AC31). The raid color modes mislead here: gradient modes read
-    -- as damage states, and many NPCs carry real class tokens (a friendly add can come out yellow).
-    local fbc = FB.Settings()
+    local fbc = (owner.ColorSettings or owner.Settings)()
     fbc = fbc and fbc.healthColor
     local fillTex = health:GetStatusBarTexture()
     if fillTex then fillTex:SetAlpha(1) end
     health:SetStatusBarColor(fbc and fbc.r or 23/255, fbc and fbc.g or 172/255,
         fbc and fbc.b or 49/255, (s.healthBarOpacity or 100) / 100)
+end
 
-    if b._nameText then
-        b._nameText:SetText(ResolveDisplayName(unit, true, s))
-        local nr, ng, nb = GetNameColor(unit, s)
-        b._nameText:SetTextColor(nr, ng, nb)
+FB.PaintName = function(b, unit, s)
+    local fs = b._nameText
+    if not fs then return end
+    fs:SetText(ResolveDisplayName(unit, true, s))
+    local nr, ng, nb = GetNameColor(unit, s)
+    fs:SetTextColor(nr, ng, nb)
+end
+
+-- Health value, health text and heal absorb text. A text set to None is blank: the full paint (full)
+-- clears it, and the health events after it skip it.
+FB.PaintHealth = function(b, unit, s, full)
+    local health = b._health
+    local pct = GetSafeHealthPercent(unit)
+    health:SetMinMaxValues(0, 100)
+    local smooth = s.smoothBars and Enum and Enum.StatusBarInterpolation
+        and Enum.StatusBarInterpolation.ExponentialEaseOut
+    if smooth then health:SetValue(pct, smooth) else health:SetValue(pct) end
+
+    local ht, hat = b._healthText, b._healAbsorbText
+    local mode = s.healthTextMode or "none"
+    if ht and mode == "none" then
+        if full then ht:SetText("") end
+        ht = nil
     end
+    if hat and (s.healAbsorbTextMode or "none") == "none" then
+        if full then hat:SetText("") end
+        hat = nil
+    end
+    if not (ht or hat) then return end
+    local dead = UnitIsDeadOrGhost(unit)
 
-    if b._healthText then
-        local mode = s.healthTextMode or "none"
-        if UnitIsDeadOrGhost(unit) then
-            b._healthText:SetText("")
-        elseif mode == "percent" then
-            b._healthText:SetFormattedText("%.0f%%", pct)
-        elseif mode == "percentNoSign" then
-            b._healthText:SetFormattedText("%.0f", pct)
-        elseif mode == "number" then
-            local curr = UnitHealth(unit, true)
-            if curr and AbbreviateNumbers then
-                b._healthText:SetText(AbbreviateNumbers(curr))
-            elseif curr then
-                b._healthText:SetFormattedText("%s", curr)
-            end
-        elseif mode == "numberPercent" then
-            local curr = UnitHealth(unit, true)
-            local numStr = (curr and AbbreviateNumbers) and AbbreviateNumbers(curr) or tostring(curr or 0)
-            b._healthText:SetFormattedText("%s | %.0f%%", numStr, pct)
-        elseif mode == "percentNumber" then
-            local curr = UnitHealth(unit, true)
-            local numStr = (curr and AbbreviateNumbers) and AbbreviateNumbers(curr) or tostring(curr or 0)
-            b._healthText:SetFormattedText("%.0f%% | %s", pct, numStr)
-        elseif mode == "missing" then
-            local curr = UnitHealthMissing(unit, true)
-            b._healthText:SetText(C_StringUtil.TruncateWhenZero(curr))
-            if b._healthText:GetText() then
-                if curr and AbbreviateNumbers then
-                    b._healthText:SetText(AbbreviateNumbers(curr))
-                elseif curr then
-                    b._healthText:SetFormattedText("%s", curr)
-                end
-            end
-            local htr, htg, htb = GetHealthTextColor(unit, s)
-            b._healthText:SetTextColor(htr, htg, htb, 0.9)
+    if ht then
+        if dead then
+            ht:SetText("")
         else
-            b._healthText:SetText("")
+            ns.RF_HealthTextInto(ht, mode, pct, unit)
         end
-        if mode ~= "none" then
-            local htr, htg, htb = GetHealthTextColor(unit, s)
-            b._healthText:SetTextColor(htr, htg, htb, 0.9)
-        end
+        local htr, htg, htb = GetHealthTextColor(unit, s)
+        ht:SetTextColor(htr, htg, htb, 0.9)
     end
 
-    if b._healAbsorbText then
-        if UnitIsDeadOrGhost(unit) then b._healAbsorbText:SetText("")
-        else ns.SetHealAbsorbText(b._healAbsorbText, unit, s) end
+    if hat then
+        if dead then hat:SetText("")
+        else ns.SetHealAbsorbText(hat, unit, s) end
     end
+end
 
+-- Refresh one boss button: health value/color, health text, name text, target state and border.
+-- Mirrors the corresponding slices of UpdateButton/_UpdateButtonHealth; boss units are not group
+-- units, so no roster paths. Returns true when it painted (border included); without a unit only a
+-- flipped target state repaints the border.
+FB.Update = function(b, owner)
+    local unit = FB.UnitOf(b)
+    local flipped = FB.ReadTarget(b, unit)
+    if not db or not UnitExists(unit) then
+        if flipped then FB.ApplyBorderColor(b) end
+        return
+    end
+    local s = FB.Source(b)
+    FB.PaintBarColor(b, owner or FB, s)
+    FB.PaintName(b, unit, s)
+    FB.PaintHealth(b, unit, s, true)
     FB.ApplyBorderColor(b)
+    return true
+end
+
+-- Background, health bar, the three texts and the border frame of one button, kept on the button
+-- itself with the stock styles' edge and highlight state. Shared with the pet frames and their
+-- preview. The pet header's buttons are made by the pet header, not by us: these keys on them are
+-- the one known exception to keeping state off header buttons (the rest lives in weak tables and
+-- GetFFD).
+FB.BuildVisuals = function(b)
+    local bg = b:CreateTexture(nil, "BACKGROUND")
+    bg:SetAllPoints()
+    if PP then PP.DisablePixelSnap(bg) end
+    b._bg = bg
+
+    local health = CreateFrame("StatusBar", nil, b)
+    health:SetFrameLevel(b:GetFrameLevel() + 2)
+    health:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0)
+    health:SetPoint("TOPRIGHT", b, "TOPRIGHT", 0, 0)
+    if PP then PP.DisablePixelSnap(health) end
+    health:SetMinMaxValues(0, 100)
+    health:SetValue(100)
+    b._health = health
+
+    local carrier = CreateFrame("Frame", nil, b)
+    carrier:SetAllPoints(health)
+    carrier:SetFrameLevel(b:GetFrameLevel() + ns.LVL_TEXT)
+    local nameFS = carrier:CreateFontString(nil, "OVERLAY")
+    nameFS:SetWordWrap(false)
+    b._nameText = nameFS
+    local healthFS = carrier:CreateFontString(nil, "OVERLAY")
+    healthFS:SetWordWrap(false)
+    b._healthText = healthFS
+    local healAbsorbFS = carrier:CreateFontString(nil, "OVERLAY")
+    healAbsorbFS:SetWordWrap(false)
+    b._healAbsorbText = healAbsorbFS
+
+    -- Border frame (same construction as the raid buttons; styled from the shared raid border settings in FB.StyleBorder)
+    local bdr = CreateFrame("Frame", nil, b)
+    bdr:SetAllPoints(b)
+    bdr:SetFrameLevel(b:GetFrameLevel() + 8)
+    b._borderFrame = bdr
+    -- Stock styles: the stock edge and highlights.
+    if ns.RF_Stock() then ns.RF_StockBuild(b, b) end
 end
 
 -- One-time construction of the container, the five buttons, click-cast registration and per-unit
@@ -5919,41 +6085,7 @@ FB.EnsureBuilt = function()
             b:SetAttribute("*type2", "togglemenu")
         end
         b:Hide()
-
-        local bg = b:CreateTexture(nil, "BACKGROUND")
-        bg:SetAllPoints()
-        if PP then PP.DisablePixelSnap(bg) end
-        b._bg = bg
-
-        local health = CreateFrame("StatusBar", nil, b)
-        health:SetFrameLevel(b:GetFrameLevel() + 2)
-        health:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0)
-        health:SetPoint("TOPRIGHT", b, "TOPRIGHT", 0, 0)
-        if PP then PP.DisablePixelSnap(health) end
-        health:SetMinMaxValues(0, 100)
-        health:SetValue(100)
-        b._health = health
-
-        local carrier = CreateFrame("Frame", nil, b)
-        carrier:SetAllPoints(health)
-        carrier:SetFrameLevel(b:GetFrameLevel() + ns.LVL_TEXT)
-        local nameFS = carrier:CreateFontString(nil, "OVERLAY")
-        nameFS:SetWordWrap(false)
-        b._nameText = nameFS
-        local healthFS = carrier:CreateFontString(nil, "OVERLAY")
-        healthFS:SetWordWrap(false)
-        b._healthText = healthFS
-        local healAbsorbFS = carrier:CreateFontString(nil, "OVERLAY")
-        healAbsorbFS:SetWordWrap(false)
-        b._healAbsorbText = healAbsorbFS
-
-        -- Border frame (same construction as the raid buttons; styled from the shared raid border settings in FB.StyleBorder)
-        local bdr = CreateFrame("Frame", nil, b)
-        bdr:SetAllPoints(b)
-        bdr:SetFrameLevel(b:GetFrameLevel() + 8)
-        b._borderFrame = bdr
-        -- Stock styles: the stock edge and highlights (our button).
-        if ns.RF_Stock() then ns.RF_StockBuild(b, b) end
+        FB.BuildVisuals(b)
 
         -- Refresh as soon as the driver shows the button; visible-count drives the ticker lifecycle.
         b:HookScript("OnShow", function(self)
@@ -5975,11 +6107,11 @@ FB.EnsureBuilt = function()
 
         -- Hover highlight (these are our own buttons; hooks are safe)
         b:HookScript("OnEnter", function(self)
-            self._fbHovered = true
+            FB.hov[self] = true
             FB.ApplyBorderColor(self)
         end)
         b:HookScript("OnLeave", function(self)
-            self._fbHovered = nil
+            FB.hov[self] = nil
             FB.ApplyBorderColor(self)
         end)
 
@@ -6115,48 +6247,76 @@ FB.ApplyStyle = function(owner)
             b:SetPoint("TOPLEFT", owner.container, "TOPLEFT", 0, -off * stepH)
         end
 
-        b._bg:SetColorTexture(bgc.r, bgc.g, bgc.b, (s.bgDarkness or 50) / 100)
-        b._health:SetStatusBarTexture(texPath)
-        local ft = b._health:GetStatusBarTexture()
-        if ft then ft:SetHorizTile(false) end
-        -- Fill axis follows the raid Health Bar setting. The bg is a full-button texture (not fill-tracking), so nothing else re-anchors.
-        ns.RF_ApplyHealthOrientation(b._health, s)
-        -- These carry aura containers (RFC_SetupButton below) and so can carry
-        -- Health Bar Color overlays, but they have no absorb cluster and never
-        -- build ReanchorAbsorbToFill, where every other frame picks the swap up.
-        b._health._euiFillOpacity = (s.healthBarOpacity or 100) / 100
-        ns.RF_RefreshBarTints(b._health)
-        -- No power bar / top name bar here: health fills the button.
-        b._health:SetHeight(h)
-
-        ApplyFont(b._nameText, s.nameSize or 10)
-        ApplyFont(b._healthText, s.healthTextSize or 9)
-        b._nameText:SetWidth(w * ns.RF_NAME_WIDTH_FRACTION)
-        b._nameText:SetHeight(0)
-        b._healthText:SetWidth(w * 0.75)
-        b._healthText:SetHeight(0)
-        local namePos = s.namePosition or "center"
-        if namePos == "none" then
-            b._nameText:Hide()
-        else
-            b._nameText:Show()
-            FB.AnchorText(b._nameText, b._health, namePos, s.nameOffsetX or 0, s.nameOffsetY or 0)
-        end
-        FB.AnchorText(b._healthText, b._health, s.healthTextPosition or "center",
-            s.healthTextOffsetX or 0, s.healthTextOffsetY or 0)
-        if b._healAbsorbText then
-            ApplyFont(b._healAbsorbText, s.healAbsorbTextSize or 9)
-            b._healAbsorbText:SetWidth(w * 0.75)
-            b._healAbsorbText:SetHeight(0)
-            FB.AnchorText(b._healAbsorbText, b._health, s.healAbsorbTextPosition or "center",
-                s.healAbsorbTextOffsetX or 0, s.healAbsorbTextOffsetY or 0)
-        end
-        FB.StyleBorder(b)
+        FB.StyleVisuals(b, s, w, h, texPath, bgc)
     end
 end
 
+-- The size-dependent part of FB.StyleVisuals (the health bar's height, the text widths): all a
+-- resize of an already styled button needs.
+FB.SizeVisuals = function(b, w, h)
+    -- No power bar / top name bar here: health fills the button.
+    b._health:SetHeight(h)
+    b._nameText:SetWidth(w * ns.RF_NAME_WIDTH_FRACTION)
+    b._healthText:SetWidth(w * 0.75)
+    if b._healAbsorbText then b._healAbsorbText:SetWidth(w * 0.75) end
+end
+
+-- Texture, fonts, text anchors and border of one button at w x h. Shared with the pet frames.
+FB.StyleVisuals = function(b, s, w, h, texPath, bgc)
+    b._bg:SetColorTexture(bgc.r, bgc.g, bgc.b, (s.bgDarkness or 50) / 100)
+    b._health:SetStatusBarTexture(texPath)
+    local ft = b._health:GetStatusBarTexture()
+    if ft then ft:SetHorizTile(false) end
+    -- Fill axis follows the raid Health Bar setting. The bg is a full-button texture (not fill-tracking), so nothing else re-anchors.
+    ns.RF_ApplyHealthOrientation(b._health, s)
+    -- These carry aura containers (RFC_SetupButton below) and so can carry
+    -- Health Bar Color overlays, but they have no absorb cluster and never
+    -- build ReanchorAbsorbToFill, where every other frame picks the swap up.
+    b._health._euiFillOpacity = (s.healthBarOpacity or 100) / 100
+    ns.RF_RefreshBarTints(b._health)
+    FB.SizeVisuals(b, w, h)
+
+    ApplyFont(b._nameText, s.nameSize or 10)
+    ApplyFont(b._healthText, s.healthTextSize or 9)
+    b._nameText:SetHeight(0)
+    b._healthText:SetHeight(0)
+    local namePos = s.namePosition or "center"
+    if namePos == "none" then
+        b._nameText:Hide()
+    else
+        b._nameText:Show()
+        FB.AnchorText(b._nameText, b._health, namePos, s.nameOffsetX or 0, s.nameOffsetY or 0)
+    end
+    FB.AnchorText(b._healthText, b._health, s.healthTextPosition or "center",
+        s.healthTextOffsetX or 0, s.healthTextOffsetY or 0)
+    if b._healAbsorbText then
+        ApplyFont(b._healAbsorbText, s.healAbsorbTextSize or 9)
+        b._healAbsorbText:SetHeight(0)
+        FB.AnchorText(b._healAbsorbText, b._health, s.healAbsorbTextPosition or "center",
+            s.healAbsorbTextOffsetX or 0, s.healAbsorbTextOffsetY or 0)
+    end
+    FB.StyleBorder(b)
+end
+
+-- A container's one anchor point, left alone when it already sits exactly there: the roster and
+-- layout passes re-anchor with unchanged targets, and rewriting a protected frame's point re-lays
+-- it and every button under it. A secret point always rewrites.
+FB.Pin = function(c, point, rel, relPoint, x, y)
+    if c:GetNumPoints() == 1 then
+        local p, r, rp, px, py = c:GetPoint(1)
+        if not (issecretvalue(p) or issecretvalue(r) or issecretvalue(rp)
+                or issecretvalue(px) or issecretvalue(py))
+           and p == point and r == rel and rp == relPoint and px == x and py == y then
+            return
+        end
+    end
+    c:ClearAllPoints()
+    c:SetPoint(point, rel, relPoint, x, y)
+end
+
 -- Position the container per the position setting. The container inherits protection from its
--- secure children, so SetPoint is OOC-only. Owner-parameterized like ApplyStyle.
+-- secure children, so SetPoint is OOC-only. Owner-parameterized like ApplyStyle. Every placement
+-- goes through FB.Pin (owner.FreeAnchor included).
 FB.Anchor = function(owner)
     owner = owner or FB
     if not owner.built then return end
@@ -6164,7 +6324,6 @@ FB.Anchor = function(owner)
     local s = db.profile
     local fb = owner.Settings()
     local c = owner.container
-    c:ClearAllPoints()
 
     if fb.position ~= "free" then
         local anchorHdr
@@ -6180,13 +6339,45 @@ FB.Anchor = function(owner)
                 anchorHdr = xf.container
             end
         end
+        -- Owners placed after other attached groups on the same side (the pet frames), which
+        -- remember the group they followed (owner.chainTgt).
+        if not anchorHdr and owner.ChainAnchor then
+            anchorHdr = owner.ChainAnchor(fb)
+            owner.chainTgt = anchorHdr or false
+            -- Beside the party frames the chain runs on the party attach axis, not the raid growth,
+            -- with the same kit side and clearance, and the corner the party stack grows from.
+            if anchorHdr and owner.attachParty then
+                local gap = s.groupSpacing or -1
+                local before = (fb.position == "left")
+                if ns.RF_PartyKit() then
+                    local extra
+                    before, extra = ns.RF_KitAttach(s, before)
+                    gap = gap + extra
+                end
+                local grow = ns._PartyGrowth(s)
+                if grow == "UP" then
+                    if before then FB.Pin(c, "BOTTOMRIGHT", anchorHdr, "BOTTOMLEFT", -gap, 0)
+                    else FB.Pin(c, "BOTTOMLEFT", anchorHdr, "BOTTOMRIGHT", gap, 0) end
+                elseif grow == "LEFT" then
+                    if before then FB.Pin(c, "BOTTOMRIGHT", anchorHdr, "TOPRIGHT", 0, gap)
+                    else FB.Pin(c, "TOPRIGHT", anchorHdr, "BOTTOMRIGHT", 0, -gap) end
+                elseif s.partyHorizontal then
+                    if before then FB.Pin(c, "BOTTOMLEFT", anchorHdr, "TOPLEFT", 0, gap)
+                    else FB.Pin(c, "TOPLEFT", anchorHdr, "BOTTOMLEFT", 0, -gap) end
+                else
+                    if before then FB.Pin(c, "TOPRIGHT", anchorHdr, "TOPLEFT", -gap, 0)
+                    else FB.Pin(c, "TOPLEFT", anchorHdr, "TOPRIGHT", gap, 0) end
+                end
+                return
+            end
+        end
         -- Party/dungeon: every raid group header is hidden there, so the boss group slots in beside
         -- the party container as if it were the next group -- along the axis the party frames do NOT
         -- stack on, the way "before first / after last group" reads in a raid. Extra Frames is raid
         -- only and keeps the raid path. Party frames off screen leaves nothing to attach to: this
         -- branch anchors nothing and the free position below takes over.
-        if owner == FB and not anchorHdr and (not IsInRaid() or ns._PartyInRaid())
-           and fb.showInDungeons == true then
+        if not anchorHdr and (not IsInRaid() or ns._PartyInRaid())
+           and ((owner == FB and fb.showInDungeons == true) or owner.attachParty) then
             local pc = ns._partyContainerFrame
             if pc and pc:IsShown() then
                 local gap = s.groupSpacing or -1
@@ -6197,15 +6388,35 @@ FB.Anchor = function(owner)
                     before, extra = ns.RF_KitAttach(s, before)
                     gap = gap + extra
                 end
+                -- The group clears the party target frames on its side, and the boss group the
+                -- Beside Owner pets there too (the pet header is down while those are up).
+                gap = gap + ns.PT_Reserve(s.partyHorizontal, before,
+                    (owner == FB) and ns.PF_OwnerReserve(s.partyHorizontal, before) or nil)
+                -- Pets line up with the first party frame: Flip Frame Growth and Centered start
+                -- the stack away from the container's top-left.
+                if owner ~= FB then
+                    local first = ns._partyFirstSlot or pc
+                    local grow = ns._PartyGrowth(s)
+                    if grow == "UP" then
+                        if before then FB.Pin(c, "BOTTOMRIGHT", first, "BOTTOMLEFT", -gap, 0)
+                        else FB.Pin(c, "BOTTOMLEFT", first, "BOTTOMRIGHT", gap, 0) end
+                        return
+                    elseif grow == "LEFT" then
+                        if before then FB.Pin(c, "BOTTOMRIGHT", first, "TOPRIGHT", 0, gap)
+                        else FB.Pin(c, "TOPRIGHT", first, "BOTTOMRIGHT", 0, -gap) end
+                        return
+                    end
+                    pc = first
+                end
                 -- Party growth axis comes from partyHorizontal alone (_LayoutPartyFrames): the flip
                 -- and "centered" variants only reverse it, and the container spans all five slots
                 -- either way, so the perpendicular attach point is the same.
                 if s.partyHorizontal then
-                    if before then c:SetPoint("BOTTOMLEFT", pc, "TOPLEFT", 0, gap)
-                    else c:SetPoint("TOPLEFT", pc, "BOTTOMLEFT", 0, -gap) end
+                    if before then FB.Pin(c, "BOTTOMLEFT", pc, "TOPLEFT", 0, gap)
+                    else FB.Pin(c, "TOPLEFT", pc, "BOTTOMLEFT", 0, -gap) end
                 else
-                    if before then c:SetPoint("TOPRIGHT", pc, "TOPLEFT", -gap, 0)
-                    else c:SetPoint("TOPLEFT", pc, "TOPRIGHT", gap, 0) end
+                    if before then FB.Pin(c, "TOPRIGHT", pc, "TOPLEFT", -gap, 0)
+                    else FB.Pin(c, "TOPLEFT", pc, "TOPRIGHT", gap, 0) end
                 end
                 return
             end
@@ -6216,7 +6427,9 @@ FB.Anchor = function(owner)
             -- in Show Groups AND populated. With none populated (not in a raid yet), fall back to
             -- the Show Groups bounds alone.
             local vg = s.visibleGroups or {}
-            local occupied = {}
+            -- One reused set across calls (the roster edges anchor every group).
+            local occupied = FB.occ
+            if occupied then wipe(occupied) else occupied = {}; FB.occ = occupied end
             for ri = 1, GetNumGroupMembers() or 0 do
                 local _, _, sub = GetRaidRosterInfo(ri)
                 if sub then occupied[sub] = true end
@@ -6247,17 +6460,17 @@ FB.Anchor = function(owner)
             local grow = s.groupGrowth or "RIGHT"
             local before = (fb.position == "left")
             if grow == "RIGHT" then
-                if before then c:SetPoint("TOPRIGHT", anchorHdr, "TOPLEFT", -gap, 0)
-                else c:SetPoint("TOPLEFT", anchorHdr, "TOPRIGHT", gap, 0) end
+                if before then FB.Pin(c, "TOPRIGHT", anchorHdr, "TOPLEFT", -gap, 0)
+                else FB.Pin(c, "TOPLEFT", anchorHdr, "TOPRIGHT", gap, 0) end
             elseif grow == "LEFT" then
-                if before then c:SetPoint("TOPLEFT", anchorHdr, "TOPRIGHT", gap, 0)
-                else c:SetPoint("TOPRIGHT", anchorHdr, "TOPLEFT", -gap, 0) end
+                if before then FB.Pin(c, "TOPLEFT", anchorHdr, "TOPRIGHT", gap, 0)
+                else FB.Pin(c, "TOPRIGHT", anchorHdr, "TOPLEFT", -gap, 0) end
             elseif grow == "DOWN" then
-                if before then c:SetPoint("BOTTOMLEFT", anchorHdr, "TOPLEFT", 0, gap)
-                else c:SetPoint("TOPLEFT", anchorHdr, "BOTTOMLEFT", 0, -gap) end
+                if before then FB.Pin(c, "BOTTOMLEFT", anchorHdr, "TOPLEFT", 0, gap)
+                else FB.Pin(c, "TOPLEFT", anchorHdr, "BOTTOMLEFT", 0, -gap) end
             else -- UP
-                if before then c:SetPoint("TOPLEFT", anchorHdr, "BOTTOMLEFT", 0, -gap)
-                else c:SetPoint("BOTTOMLEFT", anchorHdr, "TOPLEFT", 0, gap) end
+                if before then FB.Pin(c, "TOPLEFT", anchorHdr, "BOTTOMLEFT", 0, -gap)
+                else FB.Pin(c, "BOTTOMLEFT", anchorHdr, "TOPLEFT", 0, gap) end
             end
             return
         end
@@ -6267,7 +6480,7 @@ FB.Anchor = function(owner)
     -- Owner-specific free anchoring (Extra Frames pins the grid's growth corner so the group grows away from it); CENTER pin otherwise.
     if owner.FreeAnchor and owner.FreeAnchor(c, fb) then return end
     local p = fb.freePos or {}
-    c:SetPoint("CENTER", UIParent, "CENTER", p.x or 100, p.y or 0)
+    FB.Pin(c, "CENTER", UIParent, "CENTER", p.x or 100, p.y or 0)
 end
 
 -- Re-anchor only (no restyle): the party visibility pass calls this on the party container's
@@ -6275,6 +6488,7 @@ end
 -- the Show in Dungeons opt-in: with it off the party attach branch is inert, so the party
 -- layout/visibility hooks skip the re-anchor entirely (zero added work for raid-only users).
 function ns.FB_ReAnchor()
+    ns.PF_PartyRelayout()
     if not FB.built then return end
     local fb = FB.Settings and FB.Settings()
     if fb and fb.showInDungeons == true then FB.Anchor() end
@@ -6352,20 +6566,51 @@ function ns.FB_IsMoverShown()
     return FB.mover and FB.mover:IsShown() or false
 end
 
+-- Free Move corner pin (Extra Frames, Pet Frames): the corner a grid grows from (hDir, vDir: its
+-- horizontal and vertical growth), so its first frame stays put as frames come and go, and with a
+-- saved rect r (FB.SaveMoverRect) that corner's offset from UIParent's centre.
+FB.CornerPin = function(hDir, vDir, r)
+    local corner
+    if vDir == "UP" then
+        corner = (hDir == "LEFT") and "BOTTOMRIGHT" or "BOTTOMLEFT"
+    else
+        corner = (hDir == "LEFT") and "TOPRIGHT" or "TOPLEFT"
+    end
+    if not r then return corner end
+    return corner, (hDir == "LEFT") and r.right or r.left, (vDir == "UP") and r.bottom or r.top
+end
+
+-- The shared mover's drag stop, for corner-pinned owners: the dropped rect, relative to UIParent's
+-- centre, into set.freeRect.
+FB.SaveMoverRect = function(mover, set)
+    if not set then return end
+    local ux, uy = UIParent:GetCenter()
+    local l, b, mw, mh = mover:GetRect()
+    if not (ux and l) then return end
+    set.freeRect = { left = l - ux, right = l + mw - ux, bottom = b - uy, top = b + mh - uy }
+end
+
 -- Free Move drag overlay (unlock-mode look, TOOLTIP strata so it floats above the options panel).
--- Deliberately independent of unlock mode. Owner-parameterized: the Extra Frames group builds its
--- own mover through this exact code with its own name/label (stored at owner.mover).
+-- Deliberately independent of unlock mode. Owner-parameterized: the Extra Frames and pet groups
+-- build their own movers through this exact code with their own name/label (stored at owner.mover).
 FB.SetMoverShown = function(owner, show, frameName, labelText)
     if not show then
         if owner.mover then owner.mover:Hide() end
         return
     end
-    local fb = owner.Settings()
+    -- Owners whose overlay can place another context's spot (the pet frames' Party and Raid tabs)
+    -- read the overlay's settings, and bring their live group up to date themselves.
+    local moverSettings = owner.MoverSettings or owner.Settings
+    local fb = moverSettings()
     if not fb or fb.position ~= "free" then return end
-    owner.EnsureBuilt()
-    -- Owners with their own geometry pass (Extra Frames) restyle through it; FB-built buttons use the FB styler.
-    if owner.Layout then owner.Layout() else FB.ApplyStyle(owner) end
-    FB.Anchor(owner)
+    if owner.MoverPrep then
+        owner.MoverPrep()
+    else
+        owner.EnsureBuilt()
+        -- Owners with their own geometry pass (Extra Frames) restyle through it; FB-built buttons use the FB styler.
+        if owner.Layout then owner.Layout() else FB.ApplyStyle(owner) end
+        FB.Anchor(owner)
+    end
 
     if not owner.mover then
         local m = CreateFrame("Frame", frameName, UIParent)
@@ -6392,7 +6637,7 @@ FB.SetMoverShown = function(owner, show, frameName, labelText)
             local cx, cy = self:GetCenter()
             local ux, uy = UIParent:GetCenter()
             if cx and ux then
-                local set = owner.Settings()
+                local set = (owner.MoverSettings or owner.Settings)()
                 if set then
                     set.freePos = {
                         x = math.floor(cx - ux + 0.5),
@@ -6411,15 +6656,19 @@ FB.SetMoverShown = function(owner, show, frameName, labelText)
         end
     end
 
-    owner.mover:SetSize(owner.container:GetWidth(), owner.container:GetHeight())
     owner.mover:ClearAllPoints()
-    local oset = owner.Settings() or {}
-    if owner.FreeAnchor and oset.freeRect then
-        -- Corner-pinned owners: mirror the container's placement so the overlay always covers the live grid (FB.Anchor just ran).
-        owner.mover:SetPoint("CENTER", owner.container, "CENTER")
+    local oset = moverSettings() or {}
+    if owner.PlaceMover then
+        owner.PlaceMover(owner.mover, oset)
     else
-        local p = oset.freePos or {}
-        owner.mover:SetPoint("CENTER", UIParent, "CENTER", p.x or 100, p.y or 0)
+        owner.mover:SetSize(owner.container:GetWidth(), owner.container:GetHeight())
+        if owner.FreeAnchor and oset.freeRect then
+            -- Corner-pinned owners: mirror the container's placement so the overlay always covers the live grid (FB.Anchor just ran).
+            owner.mover:SetPoint("CENTER", owner.container, "CENTER")
+        else
+            local p = oset.freePos or {}
+            owner.mover:SetPoint("CENTER", UIParent, "CENTER", p.x or 100, p.y or 0)
+        end
     end
     owner.mover:Show()
 end
@@ -6450,9 +6699,9 @@ do
                 if b:IsVisible() then FB.Update(b) end
             end
         elseif event == "PLAYER_TARGET_CHANGED" then
-            -- Lightweight: only the border state can change here
+            -- Only the border state can change here, and only on the buttons that flipped
             for _, b in ipairs(FB.buttons) do
-                if b:IsVisible() then FB.ApplyBorderColor(b) end
+                if b:IsVisible() and FB.ReadTarget(b, FB.UnitOf(b)) then FB.ApplyBorderColor(b) end
             end
         elseif event == "GROUP_ROSTER_UPDATE" then
             -- First/last visible group (and the size tier) can shift with
@@ -6544,26 +6793,14 @@ XF.FreeAnchor = function(c, set)
     local r = set and set.freeRect
     if not r then return false end
     local grow, wrap, horizontal = XF.GrowInfo(set, db and db.profile)
-    local hDir = horizontal and grow or wrap
-    local vDir = horizontal and wrap or grow
-    local corner = (vDir == "UP" and "BOTTOM" or "TOP")
-        .. (hDir == "LEFT" and "RIGHT" or "LEFT")
-    c:SetPoint(corner, UIParent, "CENTER",
-        (hDir == "LEFT") and r.right or r.left,
-        (vDir == "UP") and r.bottom or r.top)
+    local corner, x, y = FB.CornerPin(horizontal and grow or wrap, horizontal and wrap or grow, r)
+    FB.Pin(c, corner, UIParent, "CENTER", x, y)
     return true
 end
 
--- Called by the shared mover on drag stop: capture the dropped rect
--- (relative to the UIParent center) for the corner pin above.
+-- Called by the shared mover on drag stop: capture the dropped rect for the corner pin above.
 XF.SaveFreeRect = function(mover)
-    local set = XF.Settings()
-    if not set then return end
-    local ux, uy = UIParent:GetCenter()
-    local l, b, mw, mh = mover:GetRect()
-    if not (ux and l) then return end
-    set.freeRect = { left = l - ux, right = l + mw - ux,
-                     bottom = b - uy, top = b + mh - uy }
+    FB.SaveMoverRect(mover, XF.Settings())
 end
 
 -- Ordered raid units to duplicate (bounded by XF.CAP): tanks in roster order first
@@ -7060,6 +7297,1553 @@ do
     XF.eventFrame = ev
 end
 end -- XF scope block
+
+-------------------------------------------------------------------------------
+--  Pet Frames: party and raid pets in one Blizzard pet header, beside the
+--  groups like Friendly Boss, or (Party tab, Beside Owner) one pet button
+--  beside each party frame. Health, name, range, hover/target borders and
+--  click-cast only, on the FB visuals, painter and anchor; out of the raid
+--  routing maps, trackers of their own. Built on first Show Pets.
+-------------------------------------------------------------------------------
+-- Scope block: 200-local main-chunk cap (see the FB block above).
+do
+local FB = ns._FB
+local PF = { buttons = {}, trackers = {}, byUnit = {}, ownerButtons = {}, ownerByUnit = {}, watching = false,
+             shownEv = false, tgtEv = false, petEv = false, tgtWanted = false }
+ns._PF = PF
+
+PF.MAX = 40
+PF.UNITS = { "pet" }
+for i = 1, 4 do PF.UNITS[#PF.UNITS + 1] = "partypet" .. i end
+for i = 1, 40 do PF.UNITS[#PF.UNITS + 1] = "raidpet" .. i end
+-- Tracker frames (two tokens each): every token, or while raid pets are off the first seven, which
+-- hold your pet, the party pets and raidpet1-9 (inside a raid the party frames run below ten
+-- members).
+PF.ALL_TRACKERS = math.ceil(#PF.UNITS / 2)
+PF.SMALL_TRACKERS = 7
+PF.EVENTS = { "UNIT_HEALTH", "UNIT_MAXHEALTH", "UNIT_NAME_UPDATE" }
+-- A party frame's token -> its pet's token.
+PF.PET_OF = { player = "pet" }
+for i = 1, 4 do PF.PET_OF["party" .. i] = "partypet" .. i end
+for i = 1, 40 do PF.PET_OF["raid" .. i] = "raidpet" .. i end
+PF.DEFAULT_BG = { r = 17/255, g = 17/255, b = 17/255 }
+-- Beside Owner pet -> the party frame it sits beside (your own pet has none); header button -> the
+-- style generation it was last styled at; Beside Owner pet -> its preview mouse blocker.
+PF.ownerOf = setmetatable({}, { __mode = "k" })
+PF.styledGen = setmetatable({}, { __mode = "k" })
+PF.pvBlock = setmetatable({}, { __mode = "k" })
+
+PF.Raw = function()
+    return db and db.profile and db.profile.petFrames
+end
+-- The painter's Pet Health Color read (one setting for both tabs, off the per-tab view).
+PF.ColorSettings = PF.Raw
+
+-- The Party and Raid tabs each keep their own Position, Extra Width/Height and Free Move spot. A tab
+-- reads the shared key until it sets its own: a view over the saved table that never writes on
+-- read. Every other key (the tab toggles, Pet Health Color, Pet Side) is the saved one.
+PF.TAB_KEY = {
+    party = { position = "party_position", extraWidth = "party_extraWidth", extraHeight = "party_extraHeight",
+              freePos = "party_freePos", freeRect = "party_freeRect" },
+    raid  = { position = "raid_position", extraWidth = "raid_extraWidth", extraHeight = "raid_extraHeight",
+              freePos = "raid_freePos", freeRect = "raid_freeRect" },
+}
+PF.views = {}
+PF.View = function(ctx)
+    local v = PF.views[ctx]
+    if v then return v end
+    local keys = PF.TAB_KEY[ctx]
+    v = setmetatable({}, {
+        __index = function(_, k)
+            local raw = PF.Raw()
+            if not raw then return nil end
+            local tk = keys[k]
+            if tk then
+                local val = raw[tk]
+                if val ~= nil then return val end
+            end
+            return raw[k]
+        end,
+        __newindex = function(_, k, val)
+            local raw = PF.Raw()
+            if raw then raw[keys[k] or k] = val end
+        end,
+    })
+    PF.views[ctx] = v
+    return v
+end
+ns.PF_View = PF.View
+
+-- The toggle that counts is the one for the frames on screen: the party frames also run inside
+-- small raids and arenas.
+PF.PartyMode = function()
+    return not IsInRaid() or ns._PartyInRaid()
+end
+
+PF.Ctx = function()
+    return PF.PartyMode() and "party" or "raid"
+end
+
+-- The live tab's view.
+PF.Settings = function()
+    return PF.Raw() and PF.View(PF.Ctx())
+end
+
+-- Beside Owner: Show Pets on the Party tab with its Position on Beside Owner, while the party frames
+-- are the ones on screen.
+PF.OwnerChosen = function()
+    local raw = PF.Raw()
+    return (raw and raw.party == true and PF.PartyMode() and PF.View("party").position == "owner") or false
+end
+
+-- The pet header (Beside Owner leaves it down).
+PF.Wanted = function()
+    local raw = PF.Raw()
+    if not raw then return false end
+    if PF.PartyMode() then return raw.party == true and PF.View("party").position ~= "owner" end
+    return raw.raid == true
+end
+
+-- Settings the pets are styled from: the party settings beside the party frames, else the raid's.
+-- The header's follows the mode PF.Layout last laid it out for (PF.styleCtx), so the paint path
+-- never re-derives the mode.
+PF.PartySource = function()
+    return ns._scaledPartyProxy
+end
+PF.StyleSource = function()
+    if PF.styleCtx == "party" then return ns._scaledPartyProxy end
+    return ns._scaledProfile or db.profile
+end
+
+-- Beside Owner pets ignore their party frame's alpha (its range, offline and Buff Manager fades
+-- are the owner's), so the party container's own dims (the options previews) apply here instead.
+PF.ContainerAlpha = function()
+    local a = ns._partyContainerFrame:GetAlpha()
+    if issecretvalue(a) then return 1 end
+    return a
+end
+
+-- As the raid buttons: UnitInRange's first return straight into SetAlphaFromBoolean, which takes
+-- a secret. Its unchecked case is your own units, so your pet stays at full alpha like you do.
+PF.ApplyRange = function(b)
+    local unit = FB.UnitOf(b)
+    if not unit then return end
+    local ca = PF.ownerOf[b] and PF.ContainerAlpha() or 1
+    local own = UnitIsUnit(unit, "pet")
+    if issecretvalue(own) then own = false end
+    if not UnitExists(unit) or own then
+        b:SetAlpha(ca)
+        return
+    end
+    local s = FB.Source(b)
+    b:SetAlphaFromBoolean(UnitInRange(unit), ca, (s.oorAlpha or 0.4) * ca)
+end
+
+-- fn(b, unit) on every pet button on screen: the header's, and beside the party frames the Beside
+-- Owner pets and your own pet button.
+PF.EachShown = function(fn)
+    if PF.active then
+        for u, b in pairs(PF.byUnit) do
+            if b:IsVisible() then fn(b, u) end
+        end
+    end
+    if PF.ownerActive then
+        for u, b in pairs(PF.ownerByUnit) do
+            if b:IsVisible() then fn(b, u) end
+        end
+        local sp = PF.selfPet
+        if sp:IsVisible() then fn(sp, "pet") end
+    end
+end
+
+-- Whether a target change can repaint anything: Target Border on in the settings the pets that are
+-- up are styled from. Re-read by every apply and party restyle (PF.SyncListeners).
+PF.TargetWanted = function()
+    local s = PF.active and PF.StyleSource()
+    if s and s.targetBorderEnabled ~= false then return true end
+    s = PF.ownerActive and PF.PartySource()
+    return (s and s.targetBorderEnabled ~= false) and true or false
+end
+
+-- Every pet listener runs only while a pet button is on screen (the header hidden solo or in a pet
+-- battle, or the party frames down, leaves none): the trackers' health, name and range, the vehicle
+-- edges, UNIT_PET beside the party frames, and target changes while a Target Border can show. A
+-- button coming on screen paints in full, which covers whatever it missed.
+PF.SyncShownEvents = function()
+    local want = (PF.tracking and (PF.visCount or 0) > 0) and true or false
+    local ev = PF.eventFrame
+    local tgt = want and PF.tgtWanted
+    if PF.tgtEv ~= tgt then
+        PF.tgtEv = tgt
+        if tgt then ev:RegisterEvent("PLAYER_TARGET_CHANGED") else ev:UnregisterEvent("PLAYER_TARGET_CHANGED") end
+    end
+    local pet = (want and PF.ownerActive) and true or false
+    if PF.petEv ~= pet then
+        PF.petEv = pet
+        if pet then ev:RegisterEvent("UNIT_PET") else ev:UnregisterEvent("UNIT_PET") end
+    end
+    if PF.shownEv == want then return end
+    PF.shownEv = want
+    if want then
+        ev:RegisterEvent("UNIT_ENTERED_VEHICLE")
+        ev:RegisterEvent("UNIT_EXITED_VEHICLE")
+    else
+        ev:UnregisterEvent("UNIT_ENTERED_VEHICLE")
+        ev:UnregisterEvent("UNIT_EXITED_VEHICLE")
+    end
+    for _, tr in ipairs(PF.trackers) do PF.TrackerEvents(tr, want) end
+end
+
+-- The listeners after an apply or a party restyle, which can change the pets that are up and the
+-- Target Border setting.
+PF.SyncListeners = function()
+    PF.tgtWanted = PF.TargetWanted()
+    PF.SyncShownEvents()
+end
+
+-- One tracker's health, name and range listeners. Your own pet takes no range fade, so its token is
+-- left out of range.
+PF.TrackerEvents = function(tr, on)
+    local f = tr.frame
+    if not on then
+        f:UnregisterAllEvents()
+        return
+    end
+    for _, ev in ipairs(PF.EVENTS) do f:RegisterUnitEvent(ev, tr.u1, tr.u2) end
+    if tr.u1 == "pet" then
+        f:RegisterUnitEvent("UNIT_IN_RANGE_UPDATE", tr.u2)
+    else
+        f:RegisterUnitEvent("UNIT_IN_RANGE_UPDATE", tr.u1, tr.u2)
+    end
+end
+
+-- Range re-read with no range update behind it (phasing, the Out of Range Alpha slider, roster
+-- passes): the tail of the raid frames' own range seed.
+function ns._PF_RangeSeed()
+    if PF.shownEv then PF.EachShown(PF.ApplyRange) end
+end
+
+-- A group member's connection changed: re-read its pet's range.
+function ns._PF_OwnerRange(owner)
+    local pt = PF.shownEv and PF.PET_OF[owner]
+    if not pt then return end
+    local b = PF.active and PF.byUnit[pt]
+    if b and b:IsVisible() then PF.ApplyRange(b) end
+    b = PF.ownerActive and PF.ownerByUnit[pt]
+    if b and b:IsVisible() then PF.ApplyRange(b) end
+end
+
+-- A target change repaints only the pets whose target state flipped (the old and new target).
+PF.TargetFlip = function(b, u)
+    if FB.ReadTarget(b, u) then FB.ApplyBorderColor(b) end
+end
+
+-- The full paint, which stamps the occupant it painted (unit + GUID, a secret GUID never stored) so
+-- a re-assignment of the same pet can skip it. A pet that does not exist yet still gets its border.
+PF.Refresh = function(b)
+    if not FB.Update(b, PF) then FB.ApplyBorderColor(b) end
+    PF.ApplyRange(b)
+    local u = FB.UnitOf(b)
+    local g = u and UnitGUID(u)
+    if issecretvalue(g) then g = nil end
+    local d = GetFFD(b)
+    d.pfPaintUnit, d.pfGuid = u, g
+end
+
+-- Repaints a shown button only when its occupant differs from the stamped one (a secret or missing
+-- GUID always repaints).
+PF.Revalidate = function(b)
+    if not (b and b:IsVisible()) then return end
+    local u = FB.UnitOf(b)
+    local d = GetFFD(b)
+    if u and u == d.pfPaintUnit then
+        local g = UnitGUID(u)
+        if issecretvalue(g) then g = nil end
+        if g and g == d.pfGuid then return end
+    end
+    PF.Refresh(b)
+end
+
+-- Every pet button on screen (cross-module colour and name pushes).
+function ns._PF_RefreshVisible()
+    PF.EachShown(PF.Refresh)
+end
+
+-- The buttons of one list that are on screen (PF.buttons or PF.ownerButtons), after a settings
+-- reload or a party/raid flip.
+PF.RepaintShown = function(list)
+    for _, b in ipairs(list) do
+        if b:IsVisible() then PF.Refresh(b) end
+    end
+end
+
+-- The pet behind one owner's token may have changed while its button kept the same unit attribute:
+-- a new pet (UNIT_PET, Beside Owner only: the pet header re-assigns its own buttons on it), or the
+-- owner entering or leaving a vehicle, which the pet token then stands for. Only that owner's pet
+-- buttons are re-checked. owner: the event's unit.
+PF.OnPetChanged = function(owner)
+    local pt = owner and PF.PET_OF[owner]
+    if not pt then return end
+    if PF.active then PF.Revalidate(PF.byUnit[pt]) end
+    if PF.ownerActive then
+        PF.Revalidate(PF.ownerByUnit[pt])
+        if pt == "pet" then PF.Revalidate(PF.selfPet) end
+    end
+end
+
+-- The party container's alpha changed (the options previews): re-apply the Beside Owner pets'.
+function ns._PF_AlphaSync()
+    if not PF.ownerActive then return end
+    for _, b in ipairs(PF.ownerButtons) do
+        if PF.ownerOf[b] and b:IsVisible() then PF.ApplyRange(b) end
+    end
+end
+
+-- The side a group attached beside the party frames takes, the Party Frames kit's flip included.
+PF.KitSide = function(pos)
+    local before = pos == "left"
+    if ns.RF_PartyKit() then before = ns.RF_KitAttach(db.profile, before) end
+    return before
+end
+
+-- The pet group goes after Friendly Boss and Extra Frames when they sit on the same side. Beside
+-- the party frames only a Show in Dungeons boss group is attached there to follow, and Extra
+-- Frames (raid only) never is.
+PF.ChainAnchor = function(pset)
+    if pset.position == "free" or pset.position == "owner" then return end
+    local party = PF.PartyMode()
+    local fs = FB.Settings()
+    if fs and FB.built and FB.container:IsShown() then
+        if party then
+            if fs.position ~= "free" and fs.showInDungeons == true
+               and PF.KitSide(fs.position) == PF.KitSide(pset.position) then
+                return FB.container
+            end
+        elseif fs.position == pset.position then
+            return FB.container
+        end
+    end
+    if party then return end
+    local xf = ns._XF
+    local xs = xf.Settings()
+    if xs and xs.position == pset.position and xf.built and xf.container and xf.container:IsShown() then
+        return xf.container
+    end
+end
+
+-- map: the unit -> button map the button keeps itself in (none for your own Beside Owner pet).
+PF.StyleButton = function(b, map)
+    b:RegisterForClicks("AnyUp")
+    b:SetAttribute("*type1", "target")
+    -- The engine gates SecureUnitButton's togglemenu; route right-click through a SecureActionButton proxy so the menu works without taint.
+    EllesmereUI.AttachSecureUnitMenu(b)
+    FB.BuildVisuals(b)
+
+    b:HookScript("OnShow", function(self)
+        PF.visCount = (PF.visCount or 0) + 1
+        -- A button showing again holds its unit's map entry, which another button may have taken
+        -- and dropped while this one was off screen with the same unit.
+        if map then
+            local u = self:GetAttribute("unit")
+            local d = GetFFD(self)
+            local old = d.pfUnit
+            if old and old ~= u and map[old] == self then map[old] = nil end
+            if u then map[u] = self end
+            d.pfUnit = u
+        end
+        -- Header buttons hidden at the last restyle catch up as they show.
+        local g = PF.styledGen[self]
+        if g and g ~= PF.styleGen then PF.StyleHeaderButton(self) end
+        PF.Refresh(self)
+        PF.SyncShownEvents()
+    end)
+    b:HookScript("OnHide", function(self)
+        PF.visCount = math.max(0, (PF.visCount or 0) - 1)
+        local d = GetFFD(self)
+        d.pfPaintUnit, d.pfGuid = nil, nil
+        PF.SyncShownEvents()
+    end)
+    b:HookScript("OnEnter", function(self)
+        FB.hov[self] = true
+        FB.ApplyBorderColor(self)
+    end)
+    b:HookScript("OnLeave", function(self)
+        FB.hov[self] = nil
+        FB.ApplyBorderColor(self)
+    end)
+    -- The header (or, beside the party frames, the party frame's unit snippet) re-units buttons as
+    -- pets come and go, in combat too. Both re-set every button's unit on each re-process (roster,
+    -- name and pet events), so most fires re-confirm the pet already painted: those keep only the
+    -- map write. A hidden button paints as it shows.
+    b:HookScript("OnAttributeChanged", function(self, name, value)
+        if name ~= "unit" then return end
+        local d = GetFFD(self)
+        if map then
+            local old = d.pfUnit
+            if old and map[old] == self then map[old] = nil end
+            if value then map[value] = self end
+            d.pfUnit = value
+        end
+        if not value or not self:IsVisible() then
+            d.pfPaintUnit, d.pfGuid = nil, nil
+            if not value then FB.tgt[self] = nil end
+            return
+        end
+        if value == d.pfPaintUnit then
+            local g = UnitGUID(value)
+            if issecretvalue(g) then g = nil end
+            if g and g == d.pfGuid then return end
+        end
+        PF.Refresh(self)
+    end)
+
+    -- Full click-cast / hovercast binding suite (mouseover heals included)
+    if ns.CC_RegisterFrame then ns.CC_RegisterFrame(b) end
+end
+
+-- One header button at the header's current size and style.
+PF.StyleHeaderButton = function(b)
+    if not PF.w then return end
+    local s = PF.StyleSource()
+    FB.StyleVisuals(b, s, PF.w, PF.h, ResolveHealthTexture(s), s.customBgColor or PF.DEFAULT_BG)
+    PF.styledGen[b] = PF.styleGen
+end
+
+-- Every setting the button styler reads (FB.StyleVisuals with FB.StyleBorder; the size is checked on
+-- its own), plus the UI scale its pixel-sized borders follow, gathered into a reused list, so a
+-- reload that changed none of them leaves the pets' fonts, textures and borders alone. The hover and
+-- target borders are painted, not styled.
+PF.STYLE_N = 34
+PF.fp = {}
+PF.fpNew = {}
+PF.StyleInputs = function(t, s, texPath)
+    local bgc = s.customBgColor or PF.DEFAULT_BG
+    local bc = s.borderColor
+    t[1], t[2], t[3], t[4], t[5] = bgc.r, bgc.g, bgc.b, s.bgDarkness, texPath
+    t[6], t[7] = s.healthVerticalFill, s.healthBarOpacity
+    t[8], t[9] = EllesmereUI.GetFontPath("raidFrames"), EllesmereUI.GetFontOutlineFlag("raidFrames")
+    t[10], t[11], t[12] = s.nameSize, s.healthTextSize, s.healAbsorbTextSize
+    t[13], t[14], t[15] = s.namePosition, s.nameOffsetX, s.nameOffsetY
+    t[16], t[17], t[18] = s.healthTextPosition, s.healthTextOffsetX, s.healthTextOffsetY
+    t[19], t[20], t[21] = s.healAbsorbTextPosition, s.healAbsorbTextOffsetX, s.healAbsorbTextOffsetY
+    t[22], t[23], t[24], t[25], t[26] = s.borderSize, bc and bc.r, bc and bc.g, bc and bc.b, s.borderAlpha
+    t[27], t[28], t[29] = s.borderTexture, s.borderSizePx, s.borderBehind
+    t[30], t[31] = s.borderTextureOffset, s.borderTextureOffsetY
+    t[32], t[33] = s.borderTextureShiftX, s.borderTextureShiftY
+    t[34] = UIParent:GetEffectiveScale()
+end
+
+-- True when the inputs differ from the ones last styled under key ("hdr": the header, "owner": the
+-- Beside Owner pets, "pt": the party target frames), which they then become (two lists trade
+-- places, nothing allocated). extra(t), when given, writes the key's own inputs after the shared
+-- ones, n slots in all (the party target frames' colour settings). The second return is the first
+-- slot that differs (0 with nothing styled yet), so a key with extra slots can tell a change to
+-- its own inputs alone (past PF.STYLE_N) from one the styler reads.
+PF.StyleChanged = function(key, s, texPath, extra, n)
+    local new = PF.fpNew
+    PF.StyleInputs(new, s, texPath)
+    if extra then extra(new) end
+    local old, at = PF.fp[key], 0
+    if old then
+        for i = 1, n or PF.STYLE_N do
+            if old[i] ~= new[i] then at = i; break end
+        end
+        if at == 0 then return false end
+    end
+    PF.fp[key] = new
+    PF.fpNew = old or {}
+    return true, at
+end
+
+-- Header buttons: five in one column beside the party frames, all forty (eight columns) once raid
+-- pets are on. The column count caps what the header shows, so it never makes a button itself.
+PF.Capacity = function()
+    local raw = PF.Raw()
+    return (raw and raw.raid == true) and PF.MAX or 5
+end
+
+-- A header makes children only while visible, so the buttons up to the capacity are made up front
+-- (the raid headers' startingIndex pass, its parent shown for it) and set up once; the header then
+-- assigns pets to them. The pass leaves the header hidden for the apply to show laid out. With the
+-- UI hidden (a cinematic, Alt-Z) nothing is made and the next apply tries again. OOC only.
+PF.EnsureBuilt = function()
+    local cap = PF.Capacity()
+    local have = #PF.buttons
+    if have >= cap then return true end
+    local hdr = PF.container
+    if not hdr then
+        -- The header's parent carries its pet-battle and solo hide (see PF.SetHider).
+        local hider = CreateFrame("Frame", nil, UIParent)
+        hider:SetAllPoints(UIParent)
+        PF.hider = hider
+        hdr = CreateFrame("Frame", "ERFPetHeader", hider, "SecureGroupPetHeaderTemplate")
+        hdr:SetAttribute("template", "SecureUnitButtonTemplate")
+        hdr:SetAttribute("templateType", "Button")
+        hdr:SetAttribute("showRaid", true)
+        hdr:SetAttribute("showParty", true)
+        hdr:SetAttribute("showPlayer", true)
+        hdr:SetAttribute("sortMethod", "INDEX")
+        hdr:SetAttribute("unitsPerColumn", 5)
+        -- The forty-button pass lays its buttons out in columns, which needs a column anchor;
+        -- PF.Layout sets the real one.
+        hdr:SetAttribute("columnAnchorPoint", "LEFT")
+        PF.container = hdr
+        -- Switched on with a preview up: dim it like the other real frames.
+        if ns.previewActive() or ns._partyPvActive then ns._SetRealFramesPreviewHidden(true) end
+    end
+    if not hdr[cap] then
+        local hider = PF.hider
+        local hid = not hider:IsShown()
+        hdr:Hide()
+        if hid then hider:Show() end
+        hdr:SetAttribute("maxColumns", cap > 5 and 8 or 1)
+        hdr:SetAttribute("startingIndex", 1 - cap)
+        hdr:Show()
+        hdr:SetAttribute("startingIndex", 1)
+        hdr:Hide()
+        if hid then hider:Hide() end
+    end
+    for i = have + 1, cap do
+        local b = hdr[i]
+        if not b then break end
+        PF.StyleButton(b, PF.byUnit)
+        FB.src[b] = PF.StyleSource
+        PF.styledGen[b] = 0
+        PF.buttons[i] = b
+    end
+    local n = #PF.buttons
+    if n == 0 then return false end
+    -- New buttons take their size on the next layout.
+    if n > have then PF.w = nil end
+    PF.EnsureTrackers(n >= PF.MAX and PF.ALL_TRACKERS or PF.SMALL_TRACKERS)
+    PF.built = true
+    return true
+end
+
+-- Per-event slices of the full paint (PF.Refresh): health events repaint the health value and texts,
+-- name events the name, range updates the range fade.
+PF.PaintHealth = function(b, u)
+    if UnitExists(u) then FB.PaintHealth(b, u, FB.Source(b)) end
+end
+PF.PaintName = function(b, u)
+    if UnitExists(u) then FB.PaintName(b, u, FB.Source(b)) end
+end
+
+-- The event's pet is on the header button holding it, and beside the party frames on its Beside
+-- Owner pet (your pet on your own pet button or on the party frame showing you: one of them shows).
+PF.OnTrackerEvent = function(_, event, u)
+    local paint = PF.PaintHealth
+    if event == "UNIT_IN_RANGE_UPDATE" then
+        paint = PF.ApplyRange
+    elseif event == "UNIT_NAME_UPDATE" then
+        paint = PF.PaintName
+    end
+    local b = PF.byUnit[u]
+    if b and b:IsVisible() then paint(b, u) end
+    if PF.ownerActive then
+        b = PF.ownerByUnit[u]
+        if b and b:IsVisible() then paint(b, u) end
+        b = PF.selfPet
+        if u == "pet" and b:IsVisible() then paint(b, u) end
+    end
+end
+
+-- Up to n tracker frames, two pet tokens each (RegisterUnitEvent takes two units), from the shell
+-- pool. Frames added while pets are on screen listen at once (the listeners switch on edges).
+PF.EnsureTrackers = function(n)
+    for k = #PF.trackers + 1, n do
+        local i = 2 * k - 1
+        local t = ns.TakeShell()
+        t:SetScript("OnEvent", PF.OnTrackerEvent)
+        local tr = { frame = t, u1 = PF.UNITS[i], u2 = PF.UNITS[i + 1] }
+        PF.trackers[k] = tr
+        if PF.shownEv then PF.TrackerEvents(tr, true) end
+    end
+end
+
+-------------------------------------------------------------------------------
+--  Beside Owner (Party tab): a pet button beside each party frame. The party
+--  header's children carry them as children, so they follow every re-sort and
+--  hide with their frame (Hide Self included). Each party frame's unit snippet
+--  (refreshUnitChange, run by the header right after it assigns the frame's
+--  unit, in combat too) writes the pet's own unit, so mouseover, click-cast
+--  and the target and menu proxies see the pet token itself. It writes on
+--  every pass, the same token included: tokens are positional, so a member
+--  leaving hands a frame's token to the next member, and the pet's unit hook
+--  then re-checks the occupant. Your own pet has a button of its own on the
+--  party container: beside the self button, or with Hide Self in your frame's
+--  empty slot after the last party frame.
+--  The same snippet carries the party target frames' Include Own Target gate:
+--  with it off (pt-noself), the frame holding you drops its target frame's
+--  unit (the restricted environment has no UnitIsUnit, so your raid token is
+--  compared as pt-me). The pet part runs only while the pets are up (pf-on).
+--  Limitation: pt-me is written out of combat. A raid index shift in combat
+--  (arena, Small Raid: a lower-index member leaves) leaves it stale until the
+--  combat-end reseed (ns._ptSelfDirty -> ns._PT_SyncSelf): your own target
+--  shows, and the member now on your old token loses theirs, until then.
+-------------------------------------------------------------------------------
+PF.OWNER_SNIPPET = [[
+    local u = self:GetAttribute("unit")
+    if self:GetAttribute("pf-on") then
+        local pu
+        if u == "player" then
+            pu = "pet"
+        elseif u then
+            local k, n = strmatch(u, "^(%a+)(%d+)$")
+            if k then pu = k .. "pet" .. n end
+        end
+        local pet = self:GetFrameRef("pfpet")
+        if pet then pet:SetAttribute("unit", pu) end
+        local sp = self:GetFrameRef("pfself")
+        if sp and sp:GetAttribute("pf-hs") then
+            sp:ClearAllPoints()
+            sp:SetPoint(sp:GetAttribute("pf-pt"), self, sp:GetAttribute("pf-rp"), sp:GetAttribute("pf-x"), sp:GetAttribute("pf-y"))
+        end
+    end
+    local pt = self:GetFrameRef("ptframe")
+    if pt then
+        local show = not (pt:GetAttribute("pt-noself") and u and (u == "player" or u == pt:GetAttribute("pt-me")))
+        if pt:GetAttribute("useparent-unit") ~= show then pt:SetAttribute("useparent-unit", show) end
+    end
+]]
+
+-- OOC only.
+PF.EnsureOwnerBuilt = function()
+    if PF.ownerBuilt then return end
+    PF.ownerBuilt = true
+    -- Your pet hangs off the container, not the self button, so it can outlive Hide Self.
+    local sp = CreateFrame("Button", nil, ns._partyContainerFrame, "SecureUnitButtonTemplate")
+    sp:SetAttribute("unit", "pet")
+    sp:Hide()
+    PF.StyleButton(sp)
+    FB.src[sp] = PF.PartySource
+    PF.selfPet = sp
+    PF.ownerButtons[1] = sp
+    for _, owner in ipairs(ns._partyAllButtons) do
+        if owner ~= ns._partySelfButton then
+            local b = CreateFrame("Button", nil, owner, "SecureUnitButtonTemplate")
+            b:Hide()
+            b:SetIgnoreParentAlpha(true)
+            PF.ownerOf[b] = owner
+            PF.StyleButton(b, PF.ownerByUnit)
+            FB.src[b] = PF.PartySource
+            PF.ownerButtons[#PF.ownerButtons + 1] = b
+            SecureHandlerSetFrameRef(owner, "pfpet", b)
+            SecureHandlerSetFrameRef(owner, "pfself", sp)
+        end
+    end
+    PF.EnsureTrackers(PF.SMALL_TRACKERS)
+end
+
+-- The party frames' one unit snippet, installed while the Beside Owner pets or the party target
+-- frames' Include Own Target gate (ns._ptNoSelf) need it, with the pet part switched by pf-on.
+-- Only changed attributes are written. OOC only.
+PF.SyncUnitSnippet = function()
+    local pets = PF.ownerActive and true or nil
+    local code = (pets or ns._ptNoSelf) and PF.OWNER_SNIPPET or nil
+    for _, o in ipairs(ns._partyAllButtons) do
+        if o ~= ns._partySelfButton then
+            if o:GetAttribute("pf-on") ~= pets then o:SetAttribute("pf-on", pets) end
+            if o:GetAttribute("refreshUnitChange") ~= code then o:SetAttribute("refreshUnitChange", code) end
+        end
+    end
+end
+ns.PF_SyncUnitSnippet = PF.SyncUnitSnippet
+
+-- Switches the snippet's pet part on or off; on, seeds each pet's unit from its frame's current one
+-- (written as the snippet does, the same token included). OOC only.
+PF.SetOwnerLinks = function(on)
+    if on then
+        for _, b in ipairs(PF.ownerButtons) do
+            local o = PF.ownerOf[b]
+            if o then
+                local u = o:GetAttribute("unit")
+                b:SetAttribute("unit", u and PF.PET_OF[u])
+            end
+        end
+    end
+    PF.SyncUnitSnippet()
+end
+
+-- Unit watches on the Beside Owner pets run only while the party frames are on screen. OOC only.
+PF.SetOwnerWatch = function()
+    local want = (PF.ownerActive and ns._partyContainerFrame:IsShown()) and true or false
+    if PF.watching ~= want then
+        PF.watching = want
+        for _, b in ipairs(PF.ownerButtons) do
+            if PF.ownerOf[b] then
+                if want then
+                    RegisterUnitWatch(b)
+                else
+                    UnregisterUnitWatch(b)
+                    b:Hide()
+                end
+            end
+        end
+    end
+    PF.PlaceSelfPet()
+end
+
+-- Party frame size (the raid frame size under the Party Frames layout, whose size is its portrait
+-- box, as Friendly Boss does).
+PF.PartySize = function(s)
+    local w, h, sp = ns.RF_PartyDims(db.profile)
+    if ns.RF_PartyKit() then
+        w, h, sp = s.frameWidth or 125, s.frameHeight or 60, s.cellSpacing or -1
+    end
+    return w, h, sp
+end
+
+-- A tab's pet size (its frames' size plus that tab's Extra Width/Height), spacing and growth: the
+-- party frames' size and stacking on the Party tab, the raid frame size and growth on the Raid tab.
+PF.Geometry = function(ctx)
+    local s = ns._scaledProfile or db.profile
+    local w, h, sp, unitGrowth, groupGrowth
+    if ctx == "party" then
+        w, h, sp = PF.PartySize(s)
+        unitGrowth = ns._PartyGrowth(db.profile)
+        groupGrowth = (unitGrowth == "RIGHT" or unitGrowth == "LEFT") and "DOWN" or "RIGHT"
+    else
+        w, h, sp = s.frameWidth or 125, s.frameHeight or 60, s.cellSpacing or -1
+        unitGrowth, groupGrowth = ns._RFEffectiveGrowth(s.unitGrowth or "DOWN", s.groupGrowth or "RIGHT", true)
+    end
+    local v = PF.View(ctx)
+    w = PixelSnap(math.max(10, w + (v.extraWidth or 0)))
+    h = PixelSnap(math.max(10, h + (v.extraHeight or 0)))
+    return w, h, sp, unitGrowth, groupGrowth
+end
+
+-- Pet Side, fitted to the party frames' orientation: across the stack only (Left/Right beside
+-- stacked frames, Above/Below horizontal ones), so a pet never lands on the next frame. A choice
+-- that no longer fits reads as the default until it fits again. s: the profile (or preview view).
+PF.OwnerSide = function(s)
+    local raw = PF.Raw()
+    local side = raw and raw.ownerSide
+    if s.partyHorizontal then
+        if side ~= "above" and side ~= "below" then side = "below" end
+    elseif side ~= "left" and side ~= "right" then
+        side = "right"
+    end
+    return side
+end
+function ns.PF_OwnerSide()
+    return PF.OwnerSide(db.profile)
+end
+
+-- The side the pets take and the extra gap: the Party Frames kit moves them off its outside auras
+-- as it does the Friendly Boss group.
+PF.ResolveOwnerSide = function(s)
+    local side = PF.OwnerSide(s)
+    local extra = 0
+    if ns.RF_PartyKit() then
+        local before = side == "left" or side == "above"
+        before, extra = ns.RF_KitAttach(s, before)
+        if s.partyHorizontal then side = before and "above" or "below"
+        else side = before and "left" or "right" end
+    end
+    return side, extra
+end
+
+PF.OwnerPoint = function(b, owner, side, gap)
+    if side == "left" then
+        b:SetPoint("TOPRIGHT", owner, "TOPLEFT", -gap, 0)
+    elseif side == "below" then
+        b:SetPoint("TOPLEFT", owner, "BOTTOMLEFT", 0, -gap)
+    elseif side == "above" then
+        b:SetPoint("BOTTOMLEFT", owner, "TOPLEFT", 0, gap)
+    else
+        b:SetPoint("TOPLEFT", owner, "TOPRIGHT", gap, 0)
+    end
+end
+
+-- Size, side and style of the Beside Owner pets: only what changed is touched (the party layout pass
+-- runs this on every roster edge). restyle (a settings reload) checks the style inputs, and restyles
+-- the fonts, textures and borders only when they changed; a size change alone resizes. OOC only.
+PF.OwnerLayout = function(restyle)
+    local w, h, sp = PF.Geometry("party")
+    local side, extra = PF.ResolveOwnerSide(db.profile)
+    local baseGap = PixelSnap(sp)
+    local gap = baseGap + PixelSnap(extra)
+    local resized = w ~= PF.ownerW or h ~= PF.ownerH
+    local moved = side ~= PF.ownerSideCur or gap ~= PF.ownerGap
+    PF.ownerW, PF.ownerH, PF.ownerSideCur, PF.ownerGap, PF.ownerBaseGap = w, h, side, gap, baseGap
+    local s, texPath
+    local restyled = false
+    if restyle then
+        s = PF.PartySource()
+        texPath = ResolveHealthTexture(s)
+        restyled = PF.StyleChanged("owner", s, texPath)
+    end
+    if restyled then
+        local bgc = s.customBgColor or PF.DEFAULT_BG
+        for _, b in ipairs(PF.ownerButtons) do
+            b:SetSize(w, h)
+            FB.StyleVisuals(b, s, w, h, texPath, bgc)
+        end
+    elseif resized then
+        for _, b in ipairs(PF.ownerButtons) do
+            b:SetSize(w, h)
+            FB.SizeVisuals(b, w, h)
+        end
+    end
+    if moved then
+        for _, b in ipairs(PF.ownerButtons) do
+            local o = PF.ownerOf[b]
+            if o then
+                b:ClearAllPoints()
+                PF.OwnerPoint(b, o, side, gap)
+            end
+        end
+    end
+    if resized or moved then
+        PF.PlaceSelfPet(true)
+        PF.NotifyReserve()
+    end
+end
+
+-- Your own pet: beside the self button while that shows you. With Hide Self (in a group), in your
+-- frame's empty slot after the last party frame: seated here, then re-seated by the party frames'
+-- unit snippet after whichever frame the header fills last, so joins, leaves and re-sorts in combat
+-- carry it along. While the party header shows you, that frame's own pet has it and this one stays
+-- hidden. Repeat calls with nothing changed return at once. OOC only.
+PF.PlaceSelfPet = function(force)
+    local b = PF.selfPet
+    if not b then return end
+    if InCombatLockdown() then PF.anchorDirty = true; return end
+    local mode = "off"
+    if PF.watching then
+        local m = ns._partySelfMode
+        if m == "button" or (m == "hidden" and IsInGroup()) then mode = m end
+    end
+    if mode == "off" then
+        if force or PF.spMode ~= "off" then
+            PF.spMode = "off"
+            b:SetAttribute("pf-hs", nil)
+            UnregisterUnitWatch(b)
+            b:Hide()
+        end
+        return
+    end
+    local grow = ns._PartyGrowth(db.profile)
+    local _, _, psp = ns.RF_PartyDims(db.profile)
+    -- The party frames' pitch: spacing, plus the room party target frames along the stack take.
+    local slotGap = PixelSnap(psp) + ns.PT_AlongPitch(db.profile)
+    if not force and mode == PF.spMode and PF.ownerSideCur == PF.spSide and PF.ownerGap == PF.spGap
+       and grow == PF.spGrow and slotGap == PF.spSlotGap then
+        return
+    end
+    PF.spMode, PF.spSide, PF.spGap, PF.spGrow, PF.spSlotGap = mode, PF.ownerSideCur, PF.ownerGap, grow, slotGap
+    if mode == "hidden" then
+        local pt, rp, x, y, base
+        if grow == "UP" then
+            pt, rp, x, y, base = "BOTTOMLEFT", "TOPLEFT", 0, slotGap, "BOTTOMLEFT"
+        elseif grow == "RIGHT" then
+            pt, rp, x, y, base = "TOPLEFT", "TOPRIGHT", slotGap, 0, "TOPLEFT"
+        elseif grow == "LEFT" then
+            pt, rp, x, y, base = "TOPRIGHT", "TOPLEFT", -slotGap, 0, "TOPRIGHT"
+        else
+            pt, rp, x, y, base = "TOPLEFT", "BOTTOMLEFT", 0, -slotGap, "TOPLEFT"
+        end
+        b:SetAttribute("pf-pt", pt)
+        b:SetAttribute("pf-rp", rp)
+        b:SetAttribute("pf-x", x)
+        b:SetAttribute("pf-y", y)
+        b:SetAttribute("pf-hs", true)
+        local hdr = ns._partyHeader
+        local last
+        for i = 1, 5 do
+            local c = hdr[i]
+            if c and c:IsShown() and c:GetAttribute("unit") then last = c end
+        end
+        b:ClearAllPoints()
+        if last then
+            b:SetPoint(pt, last, rp, x, y)
+        else
+            b:SetPoint(base, hdr, base, 0, 0)
+        end
+    else
+        b:SetAttribute("pf-hs", nil)
+        b:ClearAllPoints()
+        PF.OwnerPoint(b, ns._partySelfButton, PF.ownerSideCur, PF.ownerGap)
+    end
+    RegisterUnitWatch(b)
+end
+
+-- A Show in Dungeons boss group beside the party frames clears the Beside Owner pets' column, and
+-- the party target frames follow the pets on their side.
+PF.NotifyReserve = function()
+    ns._PT_Layout()
+    local fs = FB.Settings()
+    if FB.built and fs and fs.showInDungeons == true then FB.Anchor() end
+end
+
+-- The room the Beside Owner pets take on the side a group attaches to the party frames (horizontal:
+-- the party frames' orientation; before: left, or above horizontal frames).
+function ns.PF_OwnerReserve(horizontal, before)
+    local side = PF.ownerActive and PF.ownerSideCur
+    if not side then return 0 end
+    if horizontal then
+        if (before and side == "above") or (not before and side == "below") then
+            return PF.ownerH + PF.ownerBaseGap
+        end
+    elseif (before and side == "left") or (not before and side == "right") then
+        return PF.ownerW + PF.ownerBaseGap
+    end
+    return 0
+end
+
+-- Whether either kind of pet is up. Its listeners follow the pets on screen (PF.SyncShownEvents),
+-- the vehicle edges among them: an owner entering or leaving a vehicle swaps what its pet token
+-- stands for without touching any unit attribute (PF.OnPetChanged re-checks that owner's pet).
+PF.SetTracking = function(on)
+    if PF.tracking == on then return end
+    PF.tracking = on
+    PF.SyncShownEvents()
+end
+
+-- One write of a batch on the header: the batch's first change sets _ignore, so the header skips its
+-- update per attribute; the caller clears it and re-runs the header once. changed: whether the
+-- batch has changed anything yet; returns the same for after this write.
+local function SetAttr(hdr, key, value, changed)
+    if hdr:GetAttribute(key) == value then return changed end
+    if not changed then hdr:SetAttribute("_ignore", "attributeChanges") end
+    hdr:SetAttribute(key, value)
+    return true
+end
+
+-- The pet header's parent hides it in pet battles and, unless your pet shows solo, outside a group.
+-- A visibility driver writes the statehidden attribute on its frame every 0.2 s; on the header that
+-- attribute change re-runs its whole update, so the driver sits on this plain parent. Re-registered
+-- only when the macro changes.
+-- solo: the header's showSolo. OOC only.
+PF.SetHider = function(solo)
+    local m = solo and "[petbattle] hide; show" or "[petbattle][nogroup] hide; show"
+    if PF.hiderMacro ~= m then
+        RegisterStateDriver(PF.hider, "visibility", m)
+        PF.hiderMacro = m
+    end
+end
+
+-- Teardown, after the header is hidden: the driver goes and the parent shows again, so a later build
+-- makes its buttons under a shown parent. OOC only.
+PF.ClearHider = function()
+    if not PF.hiderMacro then return end
+    UnregisterStateDriver(PF.hider, "visibility")
+    PF.hiderMacro = nil
+    PF.hider:Show()
+end
+
+-- Show Groups as a groupFilter: nil with every group on, one cached string per group set.
+PF.gf = {}
+PF.RaidGroupFilter = function()
+    local vg = db.profile.visibleGroups
+    if not vg then return nil end
+    local mask = 0
+    for gi = 1, 8 do
+        if vg[gi] ~= false then mask = mask + 2 ^ (gi - 1) end
+    end
+    if mask == 255 then return nil end
+    local str = PF.gf[mask]
+    if not str then
+        str = ""
+        for gi = 1, 8 do
+            if vg[gi] ~= false then str = (str == "") and tostring(gi) or (str .. "," .. gi) end
+        end
+        PF.gf[mask] = str
+    end
+    return str
+end
+
+-- Size and growth follow the frames on screen (the party frames' in party mode, else the raid
+-- frames'), plus that tab's size offsets. Roster edges come through here too, so only what changed
+-- is touched: restyle (a settings or profile reload) and a party/raid flip restyle only when the
+-- style inputs changed, a size change alone resizes, and buttons off screen catch up as they show.
+-- Both also repaint the pets on screen, whose paint reads the settings too. OOC only.
+PF.Layout = function(restyle)
+    local ctx = PF.Ctx()
+    local party = ctx == "party"
+    local w, h, sp, unitGrowth, groupGrowth = PF.Geometry(ctx)
+    local hdr = PF.container
+    local resized = w ~= PF.w or h ~= PF.h
+    PF.w, PF.h, PF.sp, PF.unitGrowth, PF.groupGrowth = w, h, sp, unitGrowth, groupGrowth
+    local flipped = PF.styleCtx ~= ctx
+    local restyled = false
+    if restyle or flipped then
+        PF.styleCtx = ctx
+        local ss = PF.StyleSource()
+        restyled = PF.StyleChanged("hdr", ss, ResolveHealthTexture(ss))
+    end
+    if resized then
+        for _, b in ipairs(PF.buttons) do b:SetSize(w, h) end
+    end
+    if restyled or resized then
+        PF.styleGen = (PF.styleGen or 0) + 1
+        for _, b in ipairs(PF.buttons) do
+            if b:IsVisible() then
+                if restyled then
+                    PF.StyleHeaderButton(b)
+                else
+                    FB.SizeVisuals(b, w, h)
+                    PF.styledGen[b] = PF.styleGen
+                end
+            end
+        end
+    end
+    -- Before the header re-runs below: the pets it re-assigns paint in their unit hook, and the
+    -- ones it shows as they show.
+    if restyle or flipped then PF.RepaintShown(PF.buttons) end
+
+    local s = ns._scaledProfile or db.profile
+    -- Party: Small Raid mode shows only group 1 in the party frames, and your pet shows solo while
+    -- the party frames do. Raid: the groups Show Groups keeps.
+    local group
+    if party then
+        local g = ns._SmallRaidGroup()
+        group = g and tostring(g) or nil
+    else
+        group = PF.RaidGroupFilter()
+    end
+    -- Beside the party frames the pets keep the party frames' pitch, which party target frames along
+    -- the stack open (the kit's pets take the raid frame size, which never lines up with them).
+    local pitch = sp
+    if party and not ns.RF_PartyKit() and PF.View("party").position ~= "free" then
+        pitch = sp + ns.PT_AlongPitch(db.profile)
+    end
+    local point, xOff, yOff = ns._RFHeaderPoint(unitGrowth, pitch)
+    local solo = (party and db.profile.partyShowWhenSolo) and true or nil
+    -- One batch: the header re-runs once below, not per attribute.
+    local changed = SetAttr(hdr, "groupFilter", group, false)
+    changed = SetAttr(hdr, "showSolo", solo, changed)
+    changed = SetAttr(hdr, "point", point, changed)
+    changed = SetAttr(hdr, "xOffset", xOff, changed)
+    changed = SetAttr(hdr, "yOffset", yOff, changed)
+    changed = SetAttr(hdr, "columnSpacing", PixelSnap(s.groupSpacing or 8), changed)
+    changed = SetAttr(hdr, "columnAnchorPoint", ns._RFColAnchor(unitGrowth, groupGrowth), changed)
+    changed = SetAttr(hdr, "maxColumns", #PF.buttons >= PF.MAX and 8 or 1, changed)
+    if changed then hdr:SetAttribute("_ignore", nil) end
+    -- Blizzard never clears a shown button's anchors, and a leftover column anchor pins button 1 to
+    -- the header's old size, so a new size or layout re-lays from cleared anchors (as the merged raid
+    -- header does). One write of a spare attribute then re-runs the header once on the final
+    -- attributes (clearing _ignore runs nothing, and a new size alone changes no attribute), with
+    -- no pet hidden and re-shown. A header not on screen re-runs as it shows.
+    if resized or changed then
+        for _, b in ipairs(PF.buttons) do b:ClearAllPoints() end
+        hdr:SetAttribute("pf-relayout", not hdr:GetAttribute("pf-relayout"))
+    end
+    -- Last, so a parent that shows here runs the header once on the final attributes.
+    PF.SetHider(solo)
+end
+
+-- Free Move: the header is pinned at the corner its pets grow from, so pet 1 stays put as pets come
+-- and go. The overlay covers five pets; until its first drag they are centred on freePos. ctx: the
+-- tab whose spot and size this is.
+PF.FreeCorner = function(set, ctx)
+    local w, h, sp, unitGrowth, groupGrowth = PF.Geometry(ctx)
+    local vertical = unitGrowth ~= "RIGHT" and unitGrowth ~= "LEFT"
+    local hDir = vertical and groupGrowth or unitGrowth
+    local vDir = vertical and unitGrowth or groupGrowth
+    if vertical then h = 5 * h + 4 * sp else w = 5 * w + 4 * sp end
+    local r = set.freeRect
+    local corner, x, y = FB.CornerPin(hDir, vDir, r)
+    if not r then
+        local p = set.freePos
+        local cx, cy = p and p.x or 100, p and p.y or 0
+        x = (hDir == "LEFT") and (cx + w / 2) or (cx - w / 2)
+        y = (vDir == "UP") and (cy - h / 2) or (cy + h / 2)
+    end
+    return corner, x, y, w, h
+end
+
+PF.FreeAnchor = function(c, set)
+    local corner, x, y = PF.FreeCorner(set, PF.Ctx())
+    FB.Pin(c, corner, UIParent, "CENTER", x, y)
+    return true
+end
+
+-- The Move Frames overlay places the spot of the tab it was opened on, which need not be the live one.
+PF.MoverSettings = function()
+    return PF.Raw() and PF.View(PF.moverCtx or PF.Ctx())
+end
+
+-- Before the overlay shows: the live header, when up, takes the current settings.
+PF.MoverPrep = function()
+    if PF.active and not InCombatLockdown() then
+        PF.Layout()
+        PF.Anchor()
+    end
+end
+
+PF.PlaceMover = function(m, set)
+    local corner, x, y, w, h = PF.FreeCorner(set, PF.moverCtx or PF.Ctx())
+    m:SetSize(w, h)
+    m:SetPoint(corner, UIParent, "CENTER", x, y)
+end
+
+PF.SaveFreeRect = function(mover)
+    FB.SaveMoverRect(mover, PF.MoverSettings())
+end
+
+-- ctx: "party" or "raid", the tab the overlay is for (the live one when nil).
+function ns.PF_SetMoverShown(show, ctx)
+    if show then PF.moverCtx = ctx or PF.Ctx() end
+    FB.SetMoverShown(PF, show, "ERFPetFramesMover", "Pet Frames")
+end
+
+-- ctx: true only when the overlay is up for that tab (any tab when nil).
+function ns.PF_IsMoverShown(ctx)
+    return (PF.mover and PF.mover:IsShown() and (ctx == nil or PF.moverCtx == ctx)) or false
+end
+
+-- A size change on the tab whose overlay is up: the overlay takes the new size (the apply before
+-- this has already re-laid the live group).
+function ns.PF_PlaceMover(ctx)
+    local m = PF.mover
+    if not (m and m:IsShown() and PF.moverCtx == ctx) then return end
+    local set = PF.MoverSettings()
+    if not set then return end
+    m:ClearAllPoints()
+    PF.PlaceMover(m, set)
+end
+
+-- Options preview: made-up pets beside the preview frames, on the same visuals. Plain frames, built
+-- the first time a preview shows with Show Pets on; the preview code makes room and places them.
+PF.PV_PETS = {
+    { name = "Felhunter", hp = 100 },
+    { name = "Ghoul", hp = 64 },
+    { name = "Spirit Beast", hp = 100 },
+    { name = "Water Elemental", hp = 38 },
+    { name = "Imp", hp = 85 },
+}
+PF.OPPOSITE = { RIGHT = "LEFT", LEFT = "RIGHT", DOWN = "UP", UP = "DOWN" }
+PF.pv = {}
+
+-- The settings the preview pets are painted with (their border reads it through FB.Source).
+PF.PvStyle = function()
+    return PF.pvStyle
+end
+
+-- One preview pass's shared paint values (reused table). Pets have no class: a class colour mode
+-- reads white.
+PF.pvc = {}
+PF.PvColors = function(s)
+    local c = PF.pvc
+    PF.pvStyle = s
+    c.texPath = ResolveHealthTexture(s)
+    c.bgc = s.customBgColor or PF.DEFAULT_BG
+    local raw = PF.Raw()
+    c.hc = raw and raw.healthColor
+    c.opacity = (s.healthBarOpacity or 100) / 100
+    c.nr, c.ng, c.nb = ns.RF_PreviewTextColor(s.nameColorMode or "class", s.nameCustomColor, nil, 1, 1, 1)
+    c.tr, c.tg, c.tb = ns.RF_PreviewTextColor(s.healthTextColorMode or "custom",
+        s.healthTextCustomColor, nil, 1, 1, 1)
+    c.ar, c.ag, c.ab = ns.RF_PreviewTextColor(s.healAbsorbTextColorMode or "custom",
+        s.healAbsorbTextCustomColor, nil, 1, 0.3, 0.3)
+    c.mode = s.healthTextMode or "none"
+    c.haMode = s.healAbsorbTextMode or "none"
+    return c
+end
+
+-- Preview pet i at w x h, styled and painted (the caller places it).
+PF.PvFrame = function(i, parent, s, w, h, c)
+    local f = PF.pv[i]
+    if not f then
+        f = CreateFrame("Frame", nil, parent)
+        FB.BuildVisuals(f)
+        FB.src[f] = PF.PvStyle
+        PF.pv[i] = f
+    elseif f:GetParent() ~= parent then
+        f:SetParent(parent)
+    end
+    f:SetFrameStrata(parent == UIParent and "HIGH" or parent:GetFrameStrata())
+    f:SetSize(w, h)
+    FB.StyleVisuals(f, s, w, h, c.texPath, c.bgc)
+
+    local pet = PF.PV_PETS[i]
+    local pct = pet.hp
+    local hc = c.hc
+    f._health:SetMinMaxValues(0, 100)
+    f._health:SetValue(pct)
+    f._health:SetStatusBarColor(hc and hc.r or 23/255, hc and hc.g or 172/255, hc and hc.b or 49/255, c.opacity)
+    f._nameText:SetText(pet.name)
+    f._nameText:SetTextColor(c.nr, c.ng, c.nb)
+    -- Made-up health (3000 per percent) and a heal absorb of a quarter of it, in the raid preview's
+    -- proportions.
+    ns.RF_HealthTextInto(f._healthText, c.mode, pct, nil, 3000)
+    f._healthText:SetTextColor(c.tr, c.tg, c.tb, 0.9)
+    ns.FormatHealAbsorbInto(f._healAbsorbText, pct * 750, c.haMode)
+    f._healAbsorbText:SetTextColor(c.ar, c.ag, c.ab, 0.9)
+    f:Show()
+    return f
+end
+
+-- Beside Owner preview: the pet size, side and gap as the real pets take them, the room it needs
+-- around the party frames (pads), and with Hide Self the slot after the last frame (sp: the party
+-- frames' spacing). s: the preview's view; w, h, sp: its party frame size and spacing.
+PF.OwnerPreviewSpec = function(s, w, h, sp)
+    local pw, ph, gap = w, h, sp
+    if ns.RF_PartyKit() then
+        pw, ph, gap = PixelSnap(s.frameWidth or 125), PixelSnap(s.frameHeight or 60), PixelSnap(s.cellSpacing or -1)
+    end
+    local v = PF.View("party")
+    pw = PixelSnap(math.max(10, pw + (v.extraWidth or 0)))
+    ph = PixelSnap(math.max(10, ph + (v.extraHeight or 0)))
+    local side, extra = PF.ResolveOwnerSide(s)
+    gap = gap + PixelSnap(extra)
+    local max = math.max
+    local spec = { owner = true, w = pw, h = ph, side = side, gap = gap, padL = 0, padT = 0, padR = 0, padB = 0 }
+    if side == "right" then
+        spec.padR, spec.padB = gap + pw, max(0, ph - h)
+    elseif side == "left" then
+        spec.padL, spec.padB = gap + pw, max(0, ph - h)
+    elseif side == "below" then
+        spec.padB, spec.padR = gap + ph, max(0, pw - w)
+    else
+        spec.padT, spec.padR = gap + ph, max(0, pw - w)
+    end
+    if s.partyHideSelf then
+        local grow = ns._PartyGrowth(s)
+        spec.selfSlot = true
+        -- The next slot: the party frames' pitch, party target frames along the stack included.
+        sp = sp + ns.PT_AlongPitch(s, s.partyShowTargets == true)
+        if grow == "UP" then
+            spec.sPt, spec.sRp, spec.sX, spec.sY = "BOTTOMLEFT", "TOPLEFT", 0, sp
+            spec.padT, spec.padR = max(spec.padT, sp + ph), max(spec.padR, pw - w)
+        elseif grow == "RIGHT" then
+            spec.sPt, spec.sRp, spec.sX, spec.sY = "TOPLEFT", "TOPRIGHT", sp, 0
+            spec.padR, spec.padB = max(spec.padR, sp + pw), max(spec.padB, ph - h)
+        elseif grow == "LEFT" then
+            spec.sPt, spec.sRp, spec.sX, spec.sY = "TOPRIGHT", "TOPLEFT", -sp, 0
+            spec.padL, spec.padB = max(spec.padL, sp + pw), max(spec.padB, ph - h)
+        else
+            spec.sPt, spec.sRp, spec.sX, spec.sY = "TOPLEFT", "BOTTOMLEFT", 0, -sp
+            spec.padB, spec.padR = max(spec.padB, sp + ph), max(spec.padR, pw - w)
+        end
+    end
+    return spec
+end
+
+-- The pet group beside a preview, or nil without Show Pets on that tab or on Free Move: button size,
+-- count and growth, the group's size, and its top-left offset from the top-left of the boxW x boxH
+-- box it attaches to (the party frames, or the first or last preview group), by the FB.Anchor rules.
+-- Beside Owner (Party tab) returns its own spec instead (spec.owner, see PF.OwnerPreviewSpec).
+-- w, h, sp: the preview's frame size and spacing; ptSpec: the preview's party target frames
+-- (ns.PT_PreviewSpec), whose room the pets clear as the real ones do.
+function ns.PF_PreviewSpec(party, s, w, h, sp, boxW, boxH, ptSpec)
+    local raw = PF.Raw()
+    if not raw or raw[party and "party" or "raid"] ~= true then return end
+    local set = PF.View(party and "party" or "raid")
+    if set.position == "free" then return end
+    if set.position == "owner" then
+        if party then return PF.OwnerPreviewSpec(s, w, h, sp) end
+        return
+    end
+    local before = set.position == "left"
+    local gap, grow, side
+    if party then
+        gap = s.groupSpacing or -1
+        if ns.RF_PartyKit() then
+            local extra
+            before, extra = ns.RF_KitAttach(s, before)
+            gap = gap + extra
+        end
+        gap = gap + ns.PT_PreviewReserve(ptSpec, s.partyHorizontal, before)
+        grow = ns._PartyGrowth(s)
+        if ns.RF_PartyKit() then
+            w, h, sp = PixelSnap(s.frameWidth or 125), PixelSnap(s.frameHeight or 60), PixelSnap(s.cellSpacing or -1)
+        else
+            -- The party frames' pitch, party target frames along the stack included (PF.Layout's).
+            sp = sp + ns.PT_AlongPitch(s, s.partyShowTargets == true)
+        end
+        if s.partyHorizontal then side = before and "UP" or "DOWN"
+        else side = before and "LEFT" or "RIGHT" end
+    else
+        gap = PixelSnap(s.groupSpacing or 8)
+        grow = s.unitGrowth or "DOWN"
+        side = s.groupGrowth or "RIGHT"
+        if before then side = PF.OPPOSITE[side] end
+    end
+
+    local spec = { n = party and 3 or 5, sp = sp, grow = grow, before = before }
+    spec.w = PixelSnap(math.max(10, w + (set.extraWidth or 0)))
+    spec.h = PixelSnap(math.max(10, h + (set.extraHeight or 0)))
+    if grow == "RIGHT" or grow == "LEFT" then
+        spec.bw, spec.bh = spec.n * spec.w + (spec.n - 1) * sp, spec.h
+    else
+        spec.bw, spec.bh = spec.w, spec.n * spec.h + (spec.n - 1) * sp
+    end
+    spec.ox, spec.oy = 0, 0
+    -- Party stacks that grow up or left start at the box's bottom or right edge.
+    if party and grow == "UP" then spec.oy = spec.bh - boxH end
+    if party and grow == "LEFT" then spec.ox = boxW - spec.bw end
+    if side == "RIGHT" then spec.ox = boxW + gap
+    elseif side == "LEFT" then spec.ox = -gap - spec.bw
+    elseif side == "DOWN" then spec.oy = -(boxH + gap)
+    else spec.oy = gap + spec.bh end
+    return spec
+end
+
+-- Shows the spec's pets with the group's top-left at x, y from rel's top-left. s: the settings they
+-- are styled from.
+function ns.PF_ShowPreview(spec, s, parent, rel, x, y)
+    local c = PF.PvColors(s)
+    for i = 1, spec.n do
+        local f = PF.PvFrame(i, parent, s, spec.w, spec.h, c)
+        local off = i - 1
+        local fx, fy = x, y
+        if spec.grow == "RIGHT" then
+            fx = x + off * (spec.w + spec.sp)
+        elseif spec.grow == "LEFT" then
+            fx = x + spec.bw - spec.w - off * (spec.w + spec.sp)
+        elseif spec.grow == "UP" then
+            fy = y - spec.bh + spec.h + off * (spec.h + spec.sp)
+        else
+            fy = y - off * (spec.h + spec.sp)
+        end
+        f:ClearAllPoints()
+        f:SetPoint("TOPLEFT", rel, "TOPLEFT", fx, fy)
+    end
+    for i = spec.n + 1, #PF.pv do PF.pv[i]:Hide() end
+end
+
+-- Beside Owner preview: a pet beside each shown party preview frame, and with Hide Self one after
+-- lastF (the last frame along the growth). s: the settings they are styled from.
+function ns.PF_ShowOwnerPreview(spec, s, parent, lastF)
+    local c = PF.PvColors(s)
+    local n = 0
+    for i = 1, 5 do
+        local o = ns._partyPvFrames[i]
+        if o and o:IsShown() then
+            n = n + 1
+            local f = PF.PvFrame(n, parent, s, spec.w, spec.h, c)
+            f:ClearAllPoints()
+            PF.OwnerPoint(f, o, spec.side, spec.gap)
+        end
+    end
+    if spec.selfSlot and lastF and n < #PF.PV_PETS then
+        n = n + 1
+        local f = PF.PvFrame(n, parent, s, spec.w, spec.h, c)
+        f:ClearAllPoints()
+        f:SetPoint(spec.sPt, lastF, spec.sRp, spec.sX, spec.sY)
+    end
+    for i = n + 1, #PF.pv do PF.pv[i]:Hide() end
+end
+
+function ns.PF_HidePreview()
+    for _, f in ipairs(PF.pv) do f:Hide() end
+end
+
+-- Real-frame previews hide the real frames by alpha; while they do, our own mouse blockers keep the
+-- invisible pet buttons from taking clicks: one over the pet header, and one on each Beside Owner
+-- pet (they sit outside the party frames' blocker). Our frames, so Hide() is combat-legal.
+PF.SetPreviewBlock = function(on)
+    PF.pvBlockOn = on or nil
+    local hdr = PF.container
+    if on and PF.active and hdr then
+        local blk = PF.hdrBlock
+        if not blk then
+            -- Under the header's parent, so it hides with the header's pet-battle and solo hide.
+            blk = CreateFrame("Frame", nil, PF.hider)
+            blk:EnableMouse(true)
+            PF.hdrBlock = blk
+        end
+        blk:SetAllPoints(hdr)
+        blk:SetFrameStrata(hdr:GetFrameStrata())
+        blk:SetFrameLevel(hdr:GetFrameLevel() + 50)
+        blk:Show()
+    elseif PF.hdrBlock then
+        PF.hdrBlock:Hide()
+    end
+    for _, b in ipairs(PF.ownerButtons) do
+        local blk = PF.pvBlock[b]
+        if on and PF.ownerActive then
+            if not blk then
+                blk = CreateFrame("Frame", nil, b)
+                blk:SetAllPoints(b)
+                blk:EnableMouse(true)
+                PF.pvBlock[b] = blk
+            end
+            blk:SetFrameLevel(b:GetFrameLevel() + 50)
+            blk:Show()
+        elseif blk then
+            blk:Hide()
+        end
+    end
+end
+ns._PF_SetPreviewBlock = PF.SetPreviewBlock
+
+-- A frame strata change while blocked: re-seat the blockers.
+function ns._PF_RefreshPreviewBlock()
+    if PF.pvBlockOn then PF.SetPreviewBlock(true) end
+end
+
+-- The header's placement. FB.Anchor remembers the group it followed in PF.chainTgt (none on Free
+-- Move), which the Friendly Boss / Extra Frames probe compares against. A combat call is deferred
+-- to the combat-end flush by FB.Anchor.
+PF.Anchor = function()
+    PF.attachParty = PF.PartyMode()
+    if not InCombatLockdown() then PF.chainTgt = false end
+    FB.Anchor(PF)
+end
+
+function ns.PF_ReAnchor()
+    if not InCombatLockdown() then PF.anchorDirty = nil end
+    PF.PlaceSelfPet()
+    if PF.active then PF.Anchor() end
+end
+
+-- Friendly Boss and Extra Frames can appear, move or go away without a roster change. A group that
+-- moves carries the pets chained after it along, so the header re-anchors only when the group it
+-- follows changes.
+PF.ProbeChain = function()
+    if not PF.active then return end
+    local set = PF.Settings()
+    if not set or set.position == "free" then return end
+    if (PF.ChainAnchor(set) or false) ~= PF.chainTgt then PF.Anchor() end
+end
+
+-- The party layout pass (size, growth, spacing, orientation, the party frames' show/hide edge, the
+-- kit's clearance): re-lays the pets and the party target frames that sit beside the party frames,
+-- delta-gated. The target frames go after the Beside Owner pets they follow and before any
+-- anchoring, so the attached groups are pinned once, on the new reserve.
+function ns.PF_PartyRelayout()
+    if not InCombatLockdown() then
+        if PF.active and PF.PartyMode() then PF.Layout() end
+        if PF.ownerActive then
+            PF.OwnerLayout()
+            PF.SetOwnerWatch()
+        end
+    end
+    ns._PT_Layout()
+    ns.PF_ReAnchor()
+end
+
+-- A party settings reload, which owns the pets styled from the party settings (the Beside Owner pets,
+-- and the header beside the party frames): they check their style (restyled only when it changed)
+-- and repaint. Deferred through combat to the combat-end flush.
+function ns.PF_PartyRestyle()
+    local header = PF.active and PF.PartyMode()
+    if not (header or PF.ownerActive) then
+        PF.partyRestyleDirty = nil
+        return
+    end
+    if InCombatLockdown() then
+        PF.partyRestyleDirty = true
+        return
+    end
+    PF.partyRestyleDirty = nil
+    if PF.ownerActive then
+        PF.OwnerLayout(true)
+        PF.RepaintShown(PF.ownerButtons)
+    end
+    if header then PF.Layout(true) end
+    PF.SyncListeners()
+end
+
+-- Master apply: the options, the raid frames' reloads and the roster flush (below). OOC only;
+-- deferred through combat like the other groups. restyle: a raid settings or profile reload, which
+-- restyles only the pets styled from the raid settings (the party reload that follows it restyles
+-- the others, see ns.PF_PartyRestyle).
+function ns.PF_Apply(restyle)
+    if not db or not db.profile then return end
+    local raw = PF.Raw()
+    if not raw then return end
+    if InCombatLockdown() then
+        PF.applyDirty = true
+        PF.restyleDirty = PF.restyleDirty or restyle
+        return
+    end
+    -- This pass covers a roster change or a combat-deferred apply still waiting for the flush.
+    restyle = restyle or PF.restyleDirty
+    PF.dirty, PF.applyDirty, PF.restyleDirty = nil, nil, nil
+
+    -- Beside Owner. Chosen before the party frames exist (early login), neither kind comes up: the
+    -- next apply brings the pets up. Only their activation edge checks their style here, before
+    -- they show (and paint as they do).
+    local chosen = PF.OwnerChosen()
+    local owner = chosen and ns._partySelfButton ~= nil
+    if owner then
+        local edge = not PF.ownerActive
+        if edge then
+            PF.EnsureOwnerBuilt()
+            PF.ownerActive = true
+            PF.SetOwnerLinks(true)
+        end
+        PF.OwnerLayout(edge)
+        PF.SetOwnerWatch()
+        PF.SetTracking(true)
+        if edge then PF.NotifyReserve() end
+    elseif PF.ownerActive then
+        PF.ownerActive = nil
+        PF.SetOwnerLinks(false)
+        PF.SetOwnerWatch()
+        PF.NotifyReserve()
+    end
+
+    if chosen or not PF.Wanted() or not PF.EnsureBuilt() then
+        PF.active = nil
+        PF.chainTgt = nil
+        if PF.built then PF.container:Hide() end
+        PF.ClearHider()
+        if not owner then PF.SetTracking(false) end
+        if PF.pvBlockOn then PF.SetPreviewBlock(true) end
+        PF.SyncListeners()
+        return
+    end
+
+    -- The activation edge checks the style too: settings can change while the header is down.
+    local edge = not PF.active
+    PF.active = true
+    PF.SetTracking(true)
+    -- Layout also registers the parent's hide (PF.SetHider) and repaints the pets on screen on a
+    -- restyle; the header shows last, laid out, its pets painting as they show. The roster's own
+    -- re-assignments paint in the buttons' unit hook.
+    PF.Layout((restyle and PF.Ctx() == "raid") or edge)
+    ns.PF_ReAnchor()
+    if not PF.container:IsShown() then PF.container:Show() end
+    if PF.pvBlockOn then PF.SetPreviewBlock(true) end
+    PF.SyncListeners()
+end
+
+-- Roster and zoning edges, folded into the raid frames' own passes: the roster change and the zone-in
+-- mark the pets dirty (in combat too), and the raid frames' roster pass, zone-in settle and combat
+-- end each flush once, after their own layout. Both toggles off, nothing is marked.
+function ns.PF_MarkDirty()
+    local raw = PF.Raw()
+    if raw and (raw.party == true or raw.raid == true) then PF.dirty = true end
+end
+
+-- Runs what is waiting: a marked or combat-deferred apply, a combat-deferred party restyle, then a
+-- combat-deferred placement. OOC only; in combat everything stays marked for the combat-end flush.
+function ns.PF_Flush()
+    if InCombatLockdown() then return end
+    if PF.dirty or PF.applyDirty then ns.PF_Apply() end
+    if PF.partyRestyleDirty then ns.PF_PartyRestyle() end
+    -- A combat-deferred party target include edge or attribute seed (secure writes), then a
+    -- combat-deferred party target layout (a kit clearance edge in combat), before the anchor.
+    if ns._ptSelfDirty then ns._PT_SyncSelf() end
+    if ns._ptLayoutDirty then ns._PT_Layout() end
+    if PF.anchorDirty then ns.PF_ReAnchor() end
+end
+
+hooksecurefunc(ns, "FB_Apply", PF.ProbeChain)
+hooksecurefunc(ns, "XF_Apply", PF.ProbeChain)
+
+-- Target, pet and vehicle listeners; each is registered only while pets that need it are on screen
+-- (PF.SyncShownEvents).
+do
+    local ev = ns.TakeShell()
+    ev:SetScript("OnEvent", function(_, event, unit)
+        if not db then return end
+        if event == "PLAYER_TARGET_CHANGED" then
+            PF.EachShown(PF.TargetFlip)
+        else -- UNIT_PET / UNIT_ENTERED_VEHICLE / UNIT_EXITED_VEHICLE
+            PF.OnPetChanged(unit)
+        end
+    end)
+    PF.eventFrame = ev
+end
+
+end -- PF scope block
 
 -------------------------------------------------------------------------------
 --  Show Self First (raid, OOC only): the player's subgroup header sorts via a
@@ -8511,6 +10295,10 @@ local function ReloadFrames(skipButtons)
     -- (growth changes move the anchor points, not just the anchored-to header).
     if ns.FB_Apply then ns.FB_Apply() end
     if ns.XF_Apply then ns.XF_Apply() end
+    -- Pet frames (the ones styled from the raid settings restyle here, the rest in the party
+    -- reload): the login window's pass skips them (OnEnable builds them once the party frames
+    -- exist, which the Beside Owner pets need).
+    if not skipButtons then ns.PF_Apply(true) end
 
     -- 12.1 aura containers reload with every real pass (direct call inside
     -- the body -- immune to the Options file's setup-time capture of ns.ReloadFrames).
@@ -8544,6 +10332,11 @@ EllesmereUI.RegisterDarkModeToggle({
                 p._darkPrevPartyHealthColorMode = p.party_healthColorMode
                 p.party_healthColorMode = "dark"
             end
+            -- The party target frames' own Fill Color flips the same way.
+            if p.partyTargetHealthColorMode ~= "dark" then
+                p._darkPrevPartyTargetHealthColorMode = p.partyTargetHealthColorMode or "class"
+                p.partyTargetHealthColorMode = "dark"
+            end
         else
             if p.healthColorMode == "dark" then
                 p.healthColorMode = p._darkPrevHealthColorMode or "class"
@@ -8553,6 +10346,10 @@ EllesmereUI.RegisterDarkModeToggle({
                 p.party_healthColorMode = p._darkPrevPartyHealthColorMode or "class"
             end
             p._darkPrevPartyHealthColorMode = nil
+            if p.partyTargetHealthColorMode == "dark" then
+                p.partyTargetHealthColorMode = p._darkPrevPartyTargetHealthColorMode or "class"
+            end
+            p._darkPrevPartyTargetHealthColorMode = nil
         end
         if ns.ReloadFrames then ns.ReloadFrames() end
         if ns.ReloadPartyFrames then ns.ReloadPartyFrames() end
@@ -8677,7 +10474,7 @@ ns._ResizePartyButtons = function(w, h)
     -- correct origin. Pure anchor tracking -- no secure re-process, no blink.
     if ns._PositionPartySlots then
         local _, _, pcs = ns.RF_PartyDims(s)
-        ns._PositionPartySlots(bw, bh, PixelSnap(pcs), ns._PartyGrowth(s))
+        ns._PositionPartySlots(bw, bh, PixelSnap(pcs) + ns.PT_AlongPitch(s), ns._PartyGrowth(s))
     end
 end
 
@@ -9189,6 +10986,7 @@ RangeUpdate = function()
     for unit, btn in pairs(unitToButton) do UpdateButtonRange(unit, btn) end
     for unit, btn in pairs(ns._partyUnitToButton) do UpdateButtonRange(unit, btn) end
     for unit, btn in pairs(ns._xfUnitToButton) do UpdateButtonRange(unit, btn) end
+    ns._PF_RangeSeed()
 end
 ns._RangeSeedAll = RangeUpdate
 
@@ -9603,6 +11401,8 @@ local function OnEvent(self, event, arg1, ...)
         elseif kitDirty and ns.ReloadPartyFrames then
             ns.ReloadPartyFrames()
         end
+        -- Pet frames: the roster changes and applies deferred through combat, after the layout above.
+        ns.PF_Flush()
     elseif event == "ENCOUNTER_START" then
         -- Drives the raid/party frame "Out of Boss Combat" tooltip mode (read in
         -- the frame OnEnter via ns._inBossCombat).
@@ -9627,7 +11427,11 @@ local function OnEvent(self, event, arg1, ...)
     elseif event == "GROUP_ROSTER_UPDATE" or event == "PARTY_LEADER_CHANGED" then
         -- Unit tokens reindex on roster changes; a latched rez offer keyed by the
         -- old token would paint on the wrong player, so drop them all.
-        if event == "GROUP_ROSTER_UPDATE" then wipe(ns._rezPend) end
+        if event == "GROUP_ROSTER_UPDATE" then
+            wipe(ns._rezPend)
+            -- Pet frames: flushed once by the roster pass below, or at combat end.
+            ns.PF_MarkDirty()
+        end
         if inCombat then
             ns._rosterDirtyInCombat = true
             -- Check if size tier changed during combat (deferred to REGEN)
@@ -9770,6 +11574,8 @@ local function OnEvent(self, event, arg1, ...)
             if not framesVisible and not ns._partyFramesVisible then
                 if ns.HM_Rebuild then ns.HM_Rebuild() end
             end
+            -- Pet frames: once per roster pass, after the groups they attach to are laid out.
+            ns.PF_Flush()
         end)
     elseif event == "UNIT_PORTRAIT_UPDATE" or event == "PORTRAITS_UPDATED" or event == "UNIT_MODEL_CHANGED" then
         -- Party Frames kit / party portrait only (registered while the party
@@ -9884,6 +11690,8 @@ local function OnEvent(self, event, arg1, ...)
             -- units return to the normal out-of-range fade.
             if event == "UNIT_CONNECTION" then ns._UpdateButtonRange(arg1, btn) end
         end
+        -- The member's pet frame, when one shows.
+        if event == "UNIT_CONNECTION" then ns._PF_OwnerRange(arg1) end
     elseif event == "PARTY_MEMBER_ENABLE" or event == "PARTY_MEMBER_DISABLE" then
         -- Only status text / health color changes (online/offline). The payload
         -- names the unit: repaint its button(s) alone. The full sweeps remain the
@@ -10014,6 +11822,8 @@ local function OnEvent(self, event, arg1, ...)
         -- same guid.
         if ns._ptModelEv and ns.RF_PtRepaintAll then ns.RF_PtRepaintAll("PLAYER_ENTERING_WORLD") end
         C_Timer.After(0.5, function()
+            -- Pet frames: flushed at the end of this settle, or at combat end.
+            ns.PF_MarkDirty()
             -- Zoning in mid-combat (e.g. into a raid where trash is already
             -- pulled) must NOT run the reload here: ReloadFrames calls SetSize on
             -- the protected SecureGroupHeader buttons, which Blizzard blocks in
@@ -10062,6 +11872,8 @@ local function OnEvent(self, event, arg1, ...)
                 -- recomputes the Auto Resize scale and re-registers every anchor.
                 ns.ReloadPartyFrames()
             end
+            -- A tier reload above has already applied the pets; otherwise they apply once here.
+            ns.PF_Flush()
         end)
     end
 end
@@ -10759,6 +12571,14 @@ ns._PositionPartySlots = function(bw, bh, cs, unitGrowth)
         ns._partyHeader:ClearAllPoints()
         ns._partyHeader:SetPoint(basePoint, ns._partyContainerFrame, basePoint, cShiftX, cShiftY)
     end
+    -- The pet frames line up with whichever frame holds slot 0, and your own pet (Beside Owner)
+    -- goes with whichever frame shows you.
+    local first = (useSelf and not pSelfLast and sb) or ns._partyHeader
+    local selfMode = (useSelf and "button") or (hideSelf and "hidden") or "header"
+    if first ~= ns._partyFirstSlot or selfMode ~= ns._partySelfMode then
+        ns._partyFirstSlot, ns._partySelfMode = first, selfMode
+        ns.PF_ReAnchor()
+    end
     return useSelf
 end
 
@@ -10800,6 +12620,972 @@ ns._SizePartyContainer = function(bw, bh, cs, unitGrowth)
     end
 end
 
+-------------------------------------------------------------------------------
+-- Party Targets (opt-in, Party-only)
+--
+-- Secure buttons attached to party-header children and (Include Own Target
+-- with Show Self First / Last) the self button. Their unit resolves as the
+-- owner's current target at click time, so no protected unit mutation is
+-- needed in combat.
+-- Placement: the Position setting (unset: beside stacked frames, below
+-- horizontal ones) plus its offsets. Across the stack (left/right of stacked
+-- frames, above/below horizontal ones) the frames move off the Party Frames
+-- kit's outside auras and follow the Beside Owner pets on that side, as the
+-- pets do, and the groups attached beside the party frames (Friendly Boss,
+-- the pet header) reserve the reach through ns.PT_Reserve. Along the stack
+-- the chosen side is kept exactly and the party frames' pitch opens by the
+-- frames' room (ns.PT_AlongPitch), so they sit between two party frames.
+-- Look: a health bar on the Friendly Boss visuals (the stock edge under a
+-- stock style) with the party texture, name font and border, and their own
+-- Fill Color and Background.
+-- Updates: a party member's target has no unit events, so one hidden 0.5 s
+-- ticker reads the values while such a frame shows, and re-checks a mob's
+-- tap and reaction (its colour); your own target is evented. Names and
+-- colours otherwise repaint on target changes, unit re-assignments, roster
+-- edges and settings pushes only.
+-------------------------------------------------------------------------------
+ns._partyTargetFrames = ns._partyTargetFrames or {}
+ns._ptEnabled = false
+ns._ptDesired = false
+ns._ptInclDesired = false
+
+-- Scope block: 200-local main-chunk cap.
+do
+local EUI = ns.EllesmereUI
+-- Layout state (the last applied size, side, gaps and offsets: the layout's delta gate and the
+-- reserve's source), the colour settings the paint reads (cached by the restyle), the listeners,
+-- and the owner bookkeeping: owner token -> "<token>target", header button -> its target frame.
+local PT = { tgtOf = {}, frameOf = setmetatable({}, { __mode = "k" }), tgtEv = {}, tgtWant = {}, acc = 0,
+             DEF_FILL = { r = 37/255, g = 193/255, b = 29/255 } }
+-- The shared style inputs plus the target frames' own ten (PT_FpExtra).
+PT.FP_N = ns._PF.STYLE_N + 10
+
+-- Owner unit -> its target frame, for UNIT_TARGET. Frames showing your own target stay out: they
+-- read "target" and follow PLAYER_TARGET_CHANGED.
+local PT_BY_UNIT = {}
+
+-- The settings the target frames are styled from: the party ones, as the Beside Owner pets.
+local function PT_Source()
+    return ns._scaledPartyProxy
+end
+
+-- "party1" -> "party1target", built once per token.
+local function PT_TargetOf(u)
+    local t = PT.tgtOf[u]
+    if not t then
+        t = u .. "target"
+        PT.tgtOf[u] = t
+    end
+    return t
+end
+
+-- Your raid token while the party frames run on raid units (arena, Small Raid), else nil.
+local function PT_Me()
+    if not IsInRaid() then return nil end
+    local idx = UnitInRaid("player")
+    if issecretvalue(idx) or not idx then return nil end
+    return "raid" .. idx
+end
+
+-- The unit a frame reads, from its owner's current unit: your own target reads "target" (the token
+-- your target's events carry), anyone else's "<owner>target". Keeps PT_BY_UNIT current. Returns
+-- true when the frame's owner changed.
+local function PT_Classify(frame)
+    local ou, own
+    if frame == PT.selfFrame then
+        own = true
+    else
+        ou = frame._ptOwner:GetAttribute("unit")
+        own = ou ~= nil and (ou == "player" or ou == PT.me)
+    end
+    local key = (not own) and ou or nil
+    local old = frame._ptOwnerUnit
+    local changed = old ~= key or frame._ptOwn ~= own
+    if old ~= key then
+        if old and PT_BY_UNIT[old] == frame then PT_BY_UNIT[old] = nil end
+        if key then PT_BY_UNIT[key] = frame end
+        frame._ptOwnerUnit = key
+    end
+    frame._ptOwn = own
+    frame._ptUnit = (own and "target") or (ou and PT_TargetOf(ou)) or nil
+    return changed
+end
+
+-- Class colour for players and party AI (the custom one where a restricted token still allows it),
+-- grey for a tapped mob, the reaction colour for other NPCs. Returns ok, r, g, b; r/g/b may be
+-- SECRET on the restricted path: only ever handed to a setter, never compared. A mob's tap and
+-- reaction (neither secret) are kept on frame, for the ticker's re-check.
+local function PT_ClassRGB(u, frame)
+    if UnitIsPlayer(u) or (UnitInPartyIsAI and UnitInPartyIsAI(u)) then
+        local _, ct = UnitClass(u)
+        if issecretvalue(ct) then
+            local ok, r, g, b = EUI.GetClassColorForRestrictedUnit(u, ct)
+            if ok then return true, r, g, b end
+            local c = C_ClassColor.GetClassColor(ct)
+            if c then return true, c.r, c.g, c.b end
+            return false
+        end
+        local cc = ct and EUI.GetClassColor(ct)
+        if cc then return true, cc.r, cc.g, cc.b end
+        return false
+    end
+    local tap = UnitIsTapDenied(u)
+    local re = UnitReaction(u, "player")
+    if issecretvalue(re) then re = nil end
+    if frame then frame._ptNpc, frame._ptTap, frame._ptRe = true, tap, re end
+    if tap then return true, 0.6, 0.6, 0.6 end
+    local c = re and FACTION_BAR_COLORS[re]
+    if c then return true, c.r, c.g, c.b end
+    return false
+end
+
+-- The Classic gradient at the unit's current health (the engine evaluates the curve, secret-safe).
+local function PT_PaintClassic(health, u)
+    local c = UnitHealthPercent(u, true, GetClassicHealthCurve())
+    if c and c.GetRGB then health:SetStatusBarColor(c:GetRGB()) end
+end
+
+-- Identity paint: name, fill and background colours, and the value, which jumps (a new unit). Runs
+-- on target, unit and settings edges only. Names and colours can be secret: setters only.
+local function PT_Paint(frame)
+    local u = frame._ptUnit
+    -- Set again below only for a mob whose colour reads its tap and reaction.
+    frame._ptNpc = nil
+    if not (u and UnitExists(u)) then return end
+    frame._nameText:SetText(UnitName(u))
+    local health, bg, mode = frame._health, frame._bg, PT.mode
+    local fillTex = health:GetStatusBarTexture()
+    if mode == "dark" then
+        local r, g, b, a = EUI.GetDarkModeFill()
+        health:SetStatusBarColor(r, g, b, 1)
+        if fillTex then fillTex:SetAlpha(a) end
+        bg:SetColorTexture(EUI.GetDarkModeBg())
+    else
+        if fillTex then fillTex:SetAlpha(1) end
+        local ok, r, g, b = false
+        if (mode ~= "classic" and mode ~= "custom") or PT.bgClass then ok, r, g, b = PT_ClassRGB(u, frame) end
+        if mode == "classic" then
+            PT_PaintClassic(health, u)
+        elseif mode == "custom" then
+            health:SetStatusBarColor(PT.fr, PT.fg, PT.fb, 1)
+        elseif ok then
+            health:SetStatusBarColor(r, g, b, 1)
+        else
+            health:SetStatusBarColor(0.5, 0.5, 0.5, 1)
+        end
+        if ok and PT.bgClass then
+            bg:SetColorTexture(r, g, b, PT.bgA)
+        else
+            bg:SetColorTexture(PT.br, PT.bgg, PT.bb, PT.bgA)
+        end
+    end
+    health:SetValue(GetSafeHealthPercent(u))
+end
+
+-- Value paint (the ticker and your target's health events), smoothed per Smooth Bars; the Classic
+-- gradient follows the value.
+local function PT_PaintValue(frame, u)
+    local health = frame._health
+    local smooth = PT.smooth
+    if smooth then
+        health:SetValue(GetSafeHealthPercent(u), smooth)
+    else
+        health:SetValue(GetSafeHealthPercent(u))
+    end
+    if PT.mode == "classic" then PT_PaintClassic(health, u) end
+end
+
+-- Every target frame on screen, in full (settings pushes: a restyle, Dark Mode and class colours
+-- through ERF:UpdateAllFrames, roster edges). Nothing while off.
+ns._PT_RepaintVisible = function()
+    if not ns._ptEnabled then return end
+    for _, frame in ipairs(ns._partyTargetFrames) do
+        if frame:IsVisible() then PT_Paint(frame) end
+    end
+end
+
+-- The frames on screen drive every per-unit listener. Polled frames (a party member's target):
+-- UNIT_TARGET on their owners' units only (listener k covers frames 2k-1 and 2k, so a frame
+-- showing or hiding re-registers its own listener alone; a target appearing shows its frame
+-- through the unit watch), and the ticker while one shows. Own frames (your target): your target's
+-- events while one shows with Include Own Target on. Nameplates and every other unit stay out.
+-- except: a frame on its way off screen.
+local function PT_Recount(except)
+    local want, poll, own = PT.tgtWant, 0, 0
+    wipe(want)
+    if ns._ptEnabled then
+        for i, f in ipairs(ns._partyTargetFrames) do
+            if f ~= except and f:IsVisible() then
+                if f._ptOwn then
+                    own = own + 1
+                elseif f._ptOwnerUnit then
+                    poll = poll + 1
+                    want[i] = f._ptOwnerUnit
+                end
+            end
+        end
+    end
+    for k = 1, #PT.tgtEv do
+        local ev = PT.tgtEv[k]
+        local u1, u2 = want[2 * k - 1], want[2 * k]
+        if ev.ptU1 ~= u1 or ev.ptU2 ~= u2 then
+            ev.ptU1, ev.ptU2 = u1, u2
+            ev:UnregisterEvent("UNIT_TARGET")
+            if u1 and u2 then
+                ev:RegisterUnitEvent("UNIT_TARGET", u1, u2)
+            elseif u1 or u2 then
+                ev:RegisterUnitEvent("UNIT_TARGET", u1 or u2)
+            end
+        end
+    end
+    local tk = PT.ticker
+    if tk then
+        if poll > 0 then
+            if not tk:IsShown() then
+                PT.acc = 0
+                tk:Show()
+            end
+        elseif tk:IsShown() then
+            tk:Hide()
+        end
+    end
+    local ownOn = (own > 0 and PT.include) and true or false
+    local ev = PT.ownFrame
+    if ev and PT.ownEv ~= ownOn then
+        PT.ownEv = ownOn
+        if ownOn then
+            ev:RegisterEvent("PLAYER_TARGET_CHANGED")
+            ev:RegisterUnitEvent("UNIT_HEALTH", "target")
+            ev:RegisterUnitEvent("UNIT_MAXHEALTH", "target")
+            ev:RegisterUnitEvent("UNIT_FACTION", "target")
+        else
+            ev:UnregisterAllEvents()
+        end
+    end
+end
+
+-- The ticker (hidden while idle): every 0.5 s, the values of the polled frames on screen. A mob's
+-- colour follows its tap and reaction, which raise no events on these units: a change repaints.
+local function PT_Tick(_, elapsed)
+    local acc = PT.acc + elapsed
+    if acc < 0.5 then
+        PT.acc = acc
+        return
+    end
+    PT.acc = 0
+    for _, f in ipairs(ns._partyTargetFrames) do
+        local u = f._ptUnit
+        if u and not f._ptOwn and f:IsVisible() and UnitExists(u) then
+            PT_PaintValue(f, u)
+            if f._ptNpc then
+                local re = UnitReaction(u, "player")
+                if issecretvalue(re) then re = nil end
+                if UnitIsTapDenied(u) ~= f._ptTap or re ~= f._ptRe then PT_Paint(f) end
+            end
+        end
+    end
+end
+
+-- Your target: a new target (or a faction change) repaints in full, its health events the value.
+local function PT_OnOwnEvent(_, event)
+    local full = event == "PLAYER_TARGET_CHANGED" or event == "UNIT_FACTION"
+    for _, f in ipairs(ns._partyTargetFrames) do
+        if f._ptOwn and f:IsVisible() then
+            if full then
+                PT_Paint(f)
+            elseif UnitExists("target") then
+                PT_PaintValue(f, "target")
+            end
+        end
+    end
+end
+
+-- Include Own Target off: the header frame showing you drops its target frame's unit. Written here
+-- out of combat by the rule the party frames' unit snippet applies in combat (PF.OWNER_SNIPPET).
+local function PT_SeedAttrs()
+    local noself = (ns._ptEnabled and not PT.include) and true or nil
+    local me = PT.me
+    for _, frame in ipairs(ns._partyTargetFrames) do
+        if frame ~= PT.selfFrame then
+            if frame:GetAttribute("pt-noself") ~= noself then frame:SetAttribute("pt-noself", noself) end
+            if frame:GetAttribute("pt-me") ~= me then frame:SetAttribute("pt-me", me) end
+            local u = frame._ptOwner:GetAttribute("unit")
+            local show = not (noself and u ~= nil and (u == "player" or u == me))
+            if frame:GetAttribute("useparent-unit") ~= show then frame:SetAttribute("useparent-unit", show) end
+        end
+    end
+end
+
+-- Full refresh (roster, zoning, the enable edge): your raid token, every frame's unit, the
+-- listeners, and a repaint of the frames on screen (a token can pass to another member). The
+-- attribute seed is a secure write: in combat it waits for the combat-end flush.
+ns._PT_RefreshAll = function()
+    if not ns._ptEnabled then return end
+    PT.me = PT_Me()
+    for _, frame in ipairs(ns._partyTargetFrames) do PT_Classify(frame) end
+    if InCombatLockdown() then
+        ns._ptSelfDirty = true
+    else
+        PT_SeedAttrs()
+    end
+    PT_Recount()
+    ns._PT_RepaintVisible()
+end
+
+-- Roster and zoning storms: one refresh on the next frame, after the header re-assigned its buttons.
+-- Nothing while the party frames are hidden (a raid): their show edge refreshes once instead
+-- (ns._UpdatePartyVisibility).
+PT.Flush = function()
+    PT.flushQueued = nil
+    ns._PT_RefreshAll()
+end
+
+local function PT_OnEvent(_, event, unit)
+    if event == "UNIT_TARGET" then
+        local frame = PT_BY_UNIT[unit]
+        if frame and frame:IsVisible() then PT_Paint(frame) end
+    elseif ns._partyFramesVisible and not PT.flushQueued then
+        PT.flushQueued = true
+        C_Timer.After(0, PT.Flush)
+    end
+end
+
+-- The side (top/bottom read as above/below), the extra clearance there, and whether it runs across
+-- the stack. Across, the side resolves through the Party Frames kit, as the Beside Owner pets
+-- resolve theirs; along the stack it is kept as chosen, above stacked kit frames past the buff
+-- lines the kit keeps in the party spacing there (RF_PartyDims). auto: the side an unset Position
+-- takes, whatever is stored.
+local function PT_Side(s, auto)
+    local pos = (not auto and s.partyTargetPosition) or (s.partyHorizontal and "bottom" or "right")
+    local side = (pos == "top" and "above") or (pos == "bottom" and "below") or (pos == "left" and "left") or "right"
+    local vert = side == "above" or side == "below"
+    local extra = 0
+    if (vert and not s.partyHorizontal) or (not vert and s.partyHorizontal) then
+        if side == "above" and ns.RF_PartyKit() then
+            local _, _, cs = ns.RF_PartyDims(s)
+            extra = cs - (s.partyKitSpacing or ns.RF_KIT_SPACING)
+            if extra < 0 then extra = 0 end
+        end
+        return side, extra, false
+    end
+    if ns.RF_PartyKit() then
+        local before = side == "left" or side == "above"
+        before, extra = ns.RF_KitAttach(s, before)
+        if s.partyHorizontal then
+            side = before and "above" or "below"
+        else
+            side = before and "left" or "right"
+        end
+    end
+    return side, extra, true
+end
+
+-- The gap to the frame: the party frames' spacing (under the kit its frame gap, without the buff
+-- lines RF_PartyDims adds above stacked frames).
+local function PT_Gap(s)
+    if ns.RF_PartyKit() then return s.partyKitSpacing or ns.RF_KIT_SPACING end
+    local _, _, sp = ns.RF_PartyDims(s)
+    return sp
+end
+
+-- The reach of target frames laid out as st (the live layout state PT, or a preview spec) past the
+-- party frames on the side a group attaches to (horizontal: the party frames' orientation; before:
+-- left, or above horizontal frames), offsets included. Across the stack: their room there, past
+-- the kit's clearance (the caller adds it) and any Beside Owner pets. Along the stack:
+-- how far they overhang the party frame's edge (a Width or Height past the frame's, an offset).
+local function PT_ReserveOf(st, horizontal, before)
+    local side, r = st.side, 0
+    if st.across then
+        if horizontal then
+            if before and side == "above" then
+                r = st.h + st.gap + st.y
+            elseif not before and side == "below" then
+                r = st.h + st.gap - st.y
+            end
+        elseif before and side == "left" then
+            r = st.w + st.gap - st.x
+        elseif not before and side == "right" then
+            r = st.w + st.gap + st.x
+        end
+    elseif horizontal then
+        r = (st.h - st.ph) / 2 + (before and st.y or -st.y)
+    else
+        r = (st.w - st.pw) / 2 + (before and -st.x or st.x)
+    end
+    return r > 0 and PixelSnap(r) or 0
+end
+
+-- None until the frames are laid out (PT.w is cleared for a full layout). pets: the Beside Owner
+-- pets' room on that side, for a caller that clears them too: across the stack the target frames
+-- sit past them, along it level with them, so there the farther reach counts.
+function ns.PT_Reserve(horizontal, before, pets)
+    pets = pets or 0
+    if not (ns._ptEnabled and PT.w) then return pets end
+    local r = PT_ReserveOf(PT, horizontal, before)
+    if PT.across then return r + pets end
+    return (r > pets) and r or pets
+end
+
+-- The Position the frames actually take (the options dropdown's value): under the Party Frames kit
+-- a side across the stack can move off the kit's buff run. auto: the one an unset setting takes
+-- (beside stacked frames, below horizontal ones, then that kit move); the dropdown stores a pick
+-- of it as unset, so the default keeps following the orientation and the frame style.
+function ns.PT_ShownSide(auto)
+    local side = PT_Side(db.profile, auto)
+    return (side == "above" and "top") or (side == "below" and "bottom") or side
+end
+
+-- The room target frames along the stack (Top/Bottom beside stacked frames, Left/Right beside
+-- horizontal ones) add to the party frames' pitch, so they sit between two frames: their length
+-- on the stacking axis plus the gap past them. From the settings, so every slot placer agrees
+-- whichever runs first. on: the enable state to read (the live one unless given; previews pass
+-- the setting).
+function ns.PT_AlongPitch(s, on)
+    if on == nil then on = ns._ptEnabled end
+    if not on then return 0 end
+    local _, _, across = PT_Side(s)
+    if across then return 0 end
+    return PixelSnap(s.partyHorizontal and (s.partyTargetWidth or 70) or (s.partyTargetHeight or 33))
+        + PixelSnap(PT_Gap(s))
+end
+
+-- One target frame on its side of owner o: off from the owner's edge, then the offsets.
+local function PT_Place(frame, o, side, off, x, y)
+    frame:ClearAllPoints()
+    if side == "left" then
+        frame:SetPoint("RIGHT", o, "LEFT", x - off, y)
+    elseif side == "below" then
+        frame:SetPoint("TOP", o, "BOTTOM", x, y - off)
+    elseif side == "above" then
+        frame:SetPoint("BOTTOM", o, "TOP", x, y + off)
+    else
+        frame:SetPoint("LEFT", o, "RIGHT", x + off, y)
+    end
+end
+
+-- The reserve changed: re-anchor the groups that can attach beside the party frames (a Show in
+-- Dungeons boss group, the pet header). Both only move when their spot changed. OOC only.
+local function PT_NotifyReserve()
+    local FB = ns._FB
+    local fs = FB.Settings()
+    if FB.built and fs and fs.showInDungeons == true then FB.Anchor() end
+    ns.PF_ReAnchor()
+end
+
+-- Size and placement, delta-gated: every party layout pass (ns.PF_PartyRelayout, which the kit
+-- clearance edge reaches through ns.FB_ReAnchor), every Beside Owner pet change (ns._PF's
+-- NotifyReserve) and the Width, Height, Position and offset settings run it. The size is absolute
+-- (never the kit's Frame Scale). A combat call is marked for the combat-end flush (ns.PF_Flush).
+ns._PT_Layout = function()
+    if not ns._ptEnabled then return end
+    if InCombatLockdown() then
+        ns._ptLayoutDirty = true
+        return
+    end
+    ns._ptLayoutDirty = nil
+    local s = db.profile
+    -- The party frames' pitch holds the frames along the stack: a change there re-lays the party
+    -- frames first, and their pass ends back here.
+    if ns._partyHeader and ns.PT_AlongPitch(s) ~= (ns._ptPitchApplied or 0) then
+        ns._LayoutPartyFrames()
+        return
+    end
+    local w = PixelSnap(s.partyTargetWidth or 70)
+    local h = PixelSnap(s.partyTargetHeight or 33)
+    local x = PixelSnap(s.partyTargetOffsetX or 0)
+    local y = PixelSnap(s.partyTargetOffsetY or 0)
+    local pw, ph = ns.RF_PartyDims(s)
+    pw, ph = PixelSnap(pw), PixelSnap(ph)
+    local horiz = s.partyHorizontal and true or false
+    local gap = PixelSnap(PT_Gap(s))
+    local side, extra, across = PT_Side(s)
+    local off = gap + PixelSnap(extra)
+    -- Beside Owner pets on this side of the stack: after them (their gap already clears the kit).
+    local pf = ns._PF
+    if across and pf.ownerActive and pf.ownerSideCur == side then
+        off = pf.ownerGap + ((side == "above" or side == "below") and pf.ownerH or pf.ownerW) + gap
+    end
+    local resized = w ~= PT.w or h ~= PT.h
+    -- The reserve's inputs (PT_ReserveOf): beside stacked frames the width and X offset, beside
+    -- horizontal ones the height and Y offset, and along the stack the party frame's size too. A
+    -- full layout (PT.w cleared) re-pins the attached groups, which read none meanwhile.
+    local reserve = PT.w == nil or side ~= PT.side or across ~= PT.across or gap ~= PT.gap
+        or horiz ~= PT.horiz
+    if not reserve then
+        if horiz then
+            reserve = h ~= PT.h or y ~= PT.y or (not across and ph ~= PT.ph)
+        else
+            reserve = w ~= PT.w or x ~= PT.x or (not across and pw ~= PT.pw)
+        end
+    end
+    PT.pw, PT.ph, PT.horiz = pw, ph, horiz
+    if not (reserve or resized) and off == PT.off and x == PT.x and y == PT.y then return end
+    PT.w, PT.h, PT.side, PT.gap, PT.off, PT.across, PT.x, PT.y = w, h, side, gap, off, across, x, y
+    local sizeVisuals = ns._FB.SizeVisuals
+    for _, frame in ipairs(ns._partyTargetFrames) do
+        if resized then
+            frame:SetSize(w, h)
+            sizeVisuals(frame, w, h)
+            frame._nameText:SetWidth(max(1, w - 6))
+        end
+        PT_Place(frame, frame._ptOwner, side, off, x, y)
+    end
+    if reserve then PT_NotifyReserve() end
+end
+
+-- The target frames' own style inputs after the shared ones: Fill Color and its custom colour,
+-- Background (class or custom colour, darkness) and Smooth Bars.
+local function PT_FpExtra(t)
+    local p, n = db.profile, ns._PF.STYLE_N
+    local fc = p.partyTargetCustomFillColor or PT.DEF_FILL
+    local bc = p.partyTargetCustomBgColor or ns._PF.DEFAULT_BG
+    t[n + 1], t[n + 2], t[n + 3], t[n + 4] = p.partyTargetHealthColorMode, fc.r, fc.g, fc.b
+    t[n + 5], t[n + 6], t[n + 7], t[n + 8] = p.partyTargetBgClassColored, bc.r, bc.g, bc.b
+    t[n + 9], t[n + 10] = p.partyTargetBgDarkness, PT_Source().smoothBars
+end
+
+-- Texture, name font and border from the party settings (the stock edge under a stock style), and
+-- the colour settings the paint reads, fingerprinted together: a reload or setting that changed
+-- none of them touches nothing; one that did repaints the frames on screen, restyling them only
+-- when a shared input changed (a colour setting alone re-reads the colours). A change made while
+-- off lands on the enable edge. Combat-legal: nothing here touches the secure buttons.
+ns._PT_Restyle = function()
+    if not ns._ptEnabled then return end
+    local s = PT_Source()
+    local texPath = ResolveHealthTexture(s)
+    local changed, at = ns._PF.StyleChanged("pt", s, texPath, PT_FpExtra, PT.FP_N)
+    if not changed then return end
+    local p = db.profile
+    local fc = p.partyTargetCustomFillColor or PT.DEF_FILL
+    local bc = p.partyTargetCustomBgColor or ns._PF.DEFAULT_BG
+    PT.mode = p.partyTargetHealthColorMode or "class"
+    PT.fr, PT.fg, PT.fb = fc.r, fc.g, fc.b
+    PT.bgClass = p.partyTargetBgClassColored and true or nil
+    PT.br, PT.bgg, PT.bb = bc.r, bc.g, bc.b
+    PT.bgA = (p.partyTargetBgDarkness or 50) / 100
+    local interp = Enum.StatusBarInterpolation
+    PT.smooth = (s.smoothBars and interp and interp.ExponentialEaseOut) or nil
+    -- 0: nothing styled yet (new frames); up to STYLE_N: a shared input changed.
+    if at <= ns._PF.STYLE_N then
+        local nameSize = s.nameSize or 10
+        local styleBorder = ns._FB.StyleBorder
+        for _, frame in ipairs(ns._partyTargetFrames) do
+            local health, bg = frame._health, frame._bg
+            health:SetStatusBarTexture(texPath)
+            local tex = health:GetStatusBarTexture()
+            bg:ClearAllPoints()
+            if tex then
+                tex:SetHorizTile(false)
+                -- The background covers the missing health only, off the fill's far edge.
+                bg:SetPoint("TOPLEFT", tex, "TOPRIGHT", 0, 0)
+                bg:SetPoint("BOTTOMRIGHT", health, "BOTTOMRIGHT", 0, 0)
+            else
+                bg:SetAllPoints(health)
+            end
+            ApplyFont(frame._nameText, nameSize)
+            styleBorder(frame)
+        end
+    end
+    ns._PT_RepaintVisible()
+end
+
+-- Hover border, as the pets and the boss group.
+local function PT_Enter(self)
+    ns._FB.hov[self] = true
+    ns._FB.ApplyBorderColor(self)
+end
+local function PT_Leave(self)
+    ns._FB.hov[self] = nil
+    ns._FB.ApplyBorderColor(self)
+end
+
+-- A frame coming on screen (its unit appeared, or its party frame showed): its unit re-read and a
+-- full paint. Going off screen: the listeners follow.
+local function PT_OnShow(self)
+    if not ns._ptEnabled then return end
+    PT_Classify(self)
+    PT_Paint(self)
+    PT_Recount()
+end
+local function PT_OnHide(self)
+    PT_Recount(self)
+end
+
+-- The party header re-assigned an owner's unit (in combat too): its target frame follows at once.
+-- The same unit set again (every header pass) returns after the compare.
+local function PT_OwnerAttr(owner, name)
+    if name ~= "unit" or not ns._ptEnabled then return end
+    local frame = PT.frameOf[owner]
+    if frame and PT_Classify(frame) and frame:IsVisible() then
+        PT_Paint(frame)
+        PT_Recount()
+    end
+end
+
+-- Real-frame previews hide the real frames by alpha; while they do, a mouse blocker on each target
+-- frame (they sit outside the party frames' blocker) keeps the invisible buttons from taking
+-- clicks. Our frames, so Hide() is combat-legal; each blocker hides with its target frame.
+ns._PT_SetPreviewBlock = function(on)
+    PT.pvBlockOn = on or nil
+    for _, frame in ipairs(ns._partyTargetFrames) do
+        local blk = frame._ptBlock
+        if on and ns._ptEnabled then
+            if not blk then
+                blk = CreateFrame("Frame", nil, frame)
+                blk:SetAllPoints(frame)
+                blk:EnableMouse(true)
+                frame._ptBlock = blk
+            end
+            blk:SetFrameLevel(frame:GetFrameLevel() + 50)
+            blk:Show()
+        elseif blk then
+            blk:Hide()
+        end
+    end
+end
+
+-- The enable/disable edges, a new frame and a frame strata change while blocked: re-seat the
+-- blockers.
+ns._PT_RefreshPreviewBlock = function()
+    if PT.pvBlockOn then ns._PT_SetPreviewBlock(true) end
+end
+
+local function PT_Build(owner, globalName)
+    local frame = CreateFrame("Button", globalName, owner, "SecureUnitButtonTemplate")
+    frame:SetAttribute("useparent-unit", true)
+    frame:SetAttribute("unitsuffix", "target")
+    frame:SetAttribute("*type1", "target")
+    frame:RegisterForClicks("AnyUp")
+    frame:Hide()
+
+    -- Background, health bar, texts and border frame (the stock edge under a stock style). The
+    -- font comes with the next restyle, before the frame can show. Name only: no health texts.
+    local FB = ns._FB
+    FB.BuildVisuals(frame)
+    local name = frame._nameText
+    name:SetPoint("CENTER", frame._health, "CENTER", 0, 0)
+    name:SetJustifyH("CENTER")
+    name:SetJustifyV("MIDDLE")
+    name:SetTextColor(1, 1, 1, 1)
+    frame._healthText:Hide()
+    frame._healAbsorbText:Hide()
+
+    frame._ptOwner = owner
+    FB.src[frame] = PT_Source
+    frame:HookScript("OnShow", PT_OnShow)
+    frame:HookScript("OnHide", PT_OnHide)
+    frame:HookScript("OnEnter", PT_Enter)
+    frame:HookScript("OnLeave", PT_Leave)
+    -- Header buttons: the unit snippet reaches the frame through a frame ref, and a unit
+    -- re-assignment re-reads it (a lookup table, never a key on the header's button).
+    if owner ~= ns._partySelfButton then
+        PT.frameOf[owner] = frame
+        SecureHandlerSetFrameRef(owner, "ptframe", frame)
+        owner:HookScript("OnAttributeChanged", PT_OwnerAttr)
+    end
+    table.insert(ns._partyTargetFrames, frame)
+    return frame
+end
+
+-- The self button's frame (Show Self First / Last: its unit is "player", so it shows your target;
+-- it hides with the self button while that is unused), built the first time Include Own Target is
+-- on. True when built now. OOC only.
+local function PT_EnsureSelf()
+    if PT.selfFrame or not ns._partySelfButton then return false end
+    PT.selfFrame = PT_Build(ns._partySelfButton, "ERFPartyTargetSelf")
+    -- New frames take the next restyle in full.
+    ns._PF.fp.pt = nil
+    return true
+end
+
+-- One per party header button, built on the first enable. OOC only.
+ns._PT_Create = function()
+    if not ns._ptCreated and ns._partyHeader then
+        ns._ptCreated = true
+        for i = 1, 5 do
+            local owner = ns._partyHeader[i]
+            if owner then PT_Build(owner, "ERFPartyTarget" .. i) end
+        end
+        ns._PF.fp.pt = nil
+    end
+    if ns._ptInclDesired then PT_EnsureSelf() end
+end
+
+-- Include Own Target, applied: the self button's frame (built on first use) watched only while on,
+-- the attributes and unit snippet that gate the header frame showing you, and your target's
+-- listeners. Secure writes: out of combat; a combat call waits for the combat-end flush.
+local function PT_ApplyInclude()
+    if InCombatLockdown() then
+        ns._ptSelfDirty = true
+        return
+    end
+    ns._ptSelfDirty = nil
+    local inc = (ns._ptEnabled and ns._ptInclDesired) and true or nil
+    PT.include = inc
+    if inc and PT_EnsureSelf() then
+        -- Sized, placed and styled before it can show.
+        PT.w = nil
+        ns._PT_Layout()
+        ns._PT_Restyle()
+        ns._PT_RefreshPreviewBlock()
+    end
+    local sf = PT.selfFrame
+    if sf and PT.selfWatched ~= inc then
+        PT.selfWatched = inc
+        if inc then
+            PT_Classify(sf)
+            RegisterUnitWatch(sf)
+        else
+            UnregisterUnitWatch(sf)
+            sf:Hide()
+        end
+    end
+    ns._ptNoSelf = (ns._ptEnabled and not inc) and true or nil
+    PT_SeedAttrs()
+    ns.PF_SyncUnitSnippet()
+    PT_Recount()
+end
+
+-- The combat-end flush (ns.PF_Flush) of a deferred include edge or attribute seed.
+ns._PT_SyncSelf = function()
+    ns._ptSelfDirty = nil
+    if ns._ptEnabled then PT_ApplyInclude() end
+end
+
+ns._PT_Apply = function()
+    if ns._ptDesired == ns._ptEnabled then return end
+    if InCombatLockdown() then
+        if not ns._ptCombatWatcher then
+            local watcher = CreateFrame("Frame")
+            watcher:RegisterEvent("PLAYER_REGEN_ENABLED")
+            watcher:SetScript("OnEvent", function(self)
+                self:UnregisterAllEvents()
+                ns._ptCombatWatcher = nil
+                ns._PT_Apply()
+            end)
+            ns._ptCombatWatcher = watcher
+        end
+        return
+    end
+    if ns._ptDesired then
+        ns._PT_Create()
+        -- The listeners, made once: roster and zoning, UNIT_TARGET (three, two units each), your
+        -- target's events, and the hidden value ticker.
+        if not ns._ptEventFrame then
+            local f = ns.TakeShell()
+            f:SetScript("OnEvent", PT_OnEvent)
+            ns._ptEventFrame = f
+            for k = 1, 3 do
+                f = ns.TakeShell()
+                f:SetScript("OnEvent", PT_OnEvent)
+                PT.tgtEv[k] = f
+            end
+            f = ns.TakeShell()
+            f:SetScript("OnEvent", PT_OnOwnEvent)
+            PT.ownFrame = f
+            f = ns.TakeShell()
+            f:Hide()
+            f:SetScript("OnUpdate", PT_Tick)
+            PT.ticker = f
+        end
+        local events = ns._ptEventFrame
+        events:RegisterEvent("GROUP_ROSTER_UPDATE")
+        events:RegisterEvent("PLAYER_ENTERING_WORLD")
+        ns._ptEnabled = true
+        PT.include = ns._ptInclDesired or nil
+        -- A full layout (the attached groups gain the reserve), a style check and the units, then
+        -- the frames come up: the attributes gating yours are set before the watches.
+        PT.w = nil
+        ns._PT_Layout()
+        ns._PT_Restyle()
+        ns._PT_RefreshAll()
+        PT_ApplyInclude()
+        for _, frame in ipairs(ns._partyTargetFrames) do
+            if frame ~= PT.selfFrame then RegisterUnitWatch(frame) end
+        end
+    else
+        ns._ptEnabled = false
+        ns._ptEventFrame:UnregisterAllEvents()
+        for _, frame in ipairs(ns._partyTargetFrames) do
+            UnregisterUnitWatch(frame)
+            frame:Hide()
+        end
+        PT.include, PT.selfWatched, ns._ptNoSelf = nil, nil, nil
+        ns._ptLayoutDirty, ns._ptSelfDirty = nil, nil
+        -- Every listener and the ticker off; the gate attributes cleared, so a unit snippet kept for
+        -- the pets leaves the target frames alone.
+        PT_Recount()
+        PT_SeedAttrs()
+        ns.PF_SyncUnitSnippet()
+        -- The party frames close the pitch the frames held along the stack, and the attached
+        -- groups take the room back.
+        if (ns._ptPitchApplied or 0) ~= 0 then ns._LayoutPartyFrames() end
+        PT_NotifyReserve()
+    end
+    ns._PT_RefreshPreviewBlock()
+end
+
+ns.PT_SetEnabled = function(on)
+    ns._ptDesired = on and true or false
+    ns._PT_Apply()
+end
+
+-- Include Own Target (options, profile swaps): applied now while on, else on the enable edge.
+ns.PT_SetIncludeSelf = function(on)
+    ns._ptInclDesired = on and true or false
+    if ns._ptEnabled then PT_ApplyInclude() end
+end
+
+-- A Fill Color or Background setting changed (the options): the fingerprint-gated restyle, which
+-- repaints the frames on screen when anything it reads changed. Nothing while off.
+ns.PT_Refresh = function()
+    if ns._ptEnabled then ns._PT_Restyle() end
+end
+
+-- Options preview: a made-up target beside each party preview frame while Party Targets is on, on
+-- the real frames' visuals and with their size, side, offsets and colours. Plain frames, built the
+-- first time a preview shows them; ns.PT_PreviewSpec measures them and the room they need.
+PT.pv, PT.pvSpec = {}, {}
+PT.PV = {
+    { name = "Gnoll Brute", hp = 72, re = 2 },
+    { name = "Kobold Miner", hp = 100, re = 4 },
+    { name = "Defias Thug", hp = 38, re = 2 },
+    { name = "Murloc Raider", hp = 85, re = 2 },
+    { name = "Bristleback Boar", hp = 55, re = 4 },
+}
+
+-- The preview's target layout, or nil while Party Targets is off: as the real frames take it
+-- (after the Beside Owner pets on their side: petSpec, the pets' preview spec), plus how far a
+-- frame reaches past its party frame's edges (pads). s: the preview's view; pw, ph: its party
+-- frame size. One reused table.
+function ns.PT_PreviewSpec(s, pw, ph, petSpec)
+    if s.partyShowTargets ~= true then return nil end
+    local t = PT.pvSpec
+    local w, h = PixelSnap(s.partyTargetWidth or 70), PixelSnap(s.partyTargetHeight or 33)
+    local x, y = PixelSnap(s.partyTargetOffsetX or 0), PixelSnap(s.partyTargetOffsetY or 0)
+    local gap = PixelSnap(PT_Gap(s))
+    local side, extra, across = PT_Side(s)
+    local off = gap + PixelSnap(extra)
+    if across and petSpec and petSpec.owner and petSpec.side == side then
+        off = petSpec.gap + ((side == "above" or side == "below") and petSpec.h or petSpec.w) + gap
+    end
+    t.w, t.h, t.x, t.y, t.gap, t.off, t.side, t.across, t.pw, t.ph = w, h, x, y, gap, off, side, across, pw, ph
+    -- The frame's box from its party frame's centre.
+    local l, b
+    if side == "left" then
+        l, b = x - off - pw / 2 - w, y - h / 2
+    elseif side == "right" then
+        l, b = x + off + pw / 2, y - h / 2
+    elseif side == "below" then
+        l, b = x - w / 2, y - off - ph / 2 - h
+    else
+        l, b = x - w / 2, y + off + ph / 2
+    end
+    t.padL, t.padR = max(0, -pw / 2 - l), max(0, l + w - pw / 2)
+    t.padB, t.padT = max(0, -ph / 2 - b), max(0, b + h - ph / 2)
+    return t
+end
+
+-- The room a preview spec takes beside the preview's party frames (the pets beside them), as
+-- ns.PT_Reserve gives the real frames'.
+function ns.PT_PreviewReserve(spec, horizontal, before)
+    return spec and PT_ReserveOf(spec, horizontal, before) or 0
+end
+
+-- Preview target i at the spec's size: styled from the party settings, painted from the view s
+-- (made-up mobs: Class Color reads their reaction).
+local function PT_PvFrame(i, parent, s, spec)
+    local FB = ns._FB
+    local f = PT.pv[i]
+    if not f then
+        f = CreateFrame("Frame", nil, parent)
+        FB.BuildVisuals(f)
+        FB.src[f] = PT_Source
+        local name = f._nameText
+        name:SetPoint("CENTER", f._health, "CENTER", 0, 0)
+        name:SetJustifyH("CENTER")
+        name:SetJustifyV("MIDDLE")
+        name:SetTextColor(1, 1, 1, 1)
+        f._healthText:Hide()
+        f._healAbsorbText:Hide()
+        PT.pv[i] = f
+    elseif f:GetParent() ~= parent then
+        f:SetParent(parent)
+    end
+    f:SetFrameStrata(parent == UIParent and "HIGH" or parent:GetFrameStrata())
+    local w, h = spec.w, spec.h
+    f:SetSize(w, h)
+    FB.SizeVisuals(f, w, h)
+    local st = PT_Source()
+    local health, bg, name = f._health, f._bg, f._nameText
+    health:SetStatusBarTexture(ResolveHealthTexture(st))
+    local tex = health:GetStatusBarTexture()
+    bg:ClearAllPoints()
+    if tex then
+        tex:SetHorizTile(false)
+        bg:SetPoint("TOPLEFT", tex, "TOPRIGHT", 0, 0)
+        bg:SetPoint("BOTTOMRIGHT", health, "BOTTOMRIGHT", 0, 0)
+    else
+        bg:SetAllPoints(health)
+    end
+    ApplyFont(name, st.nameSize or 10)
+    name:SetWidth(max(1, w - 6))
+    FB.StyleBorder(f)
+    local mock = PT.PV[i]
+    health:SetMinMaxValues(0, 100)
+    health:SetValue(mock.hp)
+    name:SetText(mock.name)
+    local mode = s.partyTargetHealthColorMode or "class"
+    if mode == "dark" then
+        local r, g, b, a = EUI.GetDarkModeFill()
+        health:SetStatusBarColor(r, g, b, 1)
+        if tex then tex:SetAlpha(a) end
+        bg:SetColorTexture(EUI.GetDarkModeBg())
+    else
+        if tex then tex:SetAlpha(1) end
+        local rc = FACTION_BAR_COLORS[mock.re]
+        if mode == "classic" then
+            local p = mock.hp / 100
+            health:SetStatusBarColor(p < 0.5 and 1 or (1 - (p - 0.5) * 2), p > 0.5 and 1 or (p * 2), 0, 1)
+        elseif mode == "custom" then
+            local c = s.partyTargetCustomFillColor or PT.DEF_FILL
+            health:SetStatusBarColor(c.r, c.g, c.b, 1)
+        else
+            health:SetStatusBarColor(rc.r, rc.g, rc.b, 1)
+        end
+        local a = (s.partyTargetBgDarkness or 50) / 100
+        if s.partyTargetBgClassColored then
+            bg:SetColorTexture(rc.r, rc.g, rc.b, a)
+        else
+            local c = s.partyTargetCustomBgColor or ns._PF.DEFAULT_BG
+            bg:SetColorTexture(c.r, c.g, c.b, a)
+        end
+    end
+    f:Show()
+    return f
+end
+
+-- The preview targets beside the party preview frames on screen, parented to parent (skip: your
+-- own frame's index, without Include Own Target), or none without a spec.
+function ns.PT_ShowPreview(spec, s, parent, skip)
+    local n = 0
+    if spec then
+        for i = 1, 5 do
+            local o = ns._partyPvFrames[i]
+            if o and o:IsShown() and i ~= skip then
+                n = n + 1
+                PT_Place(PT_PvFrame(n, parent, s, spec), o, spec.side, spec.off, spec.x, spec.y)
+            end
+        end
+    end
+    for i = n + 1, #PT.pv do PT.pv[i]:Hide() end
+end
+
+function ns.PT_HidePreview()
+    for _, f in ipairs(PT.pv) do f:Hide() end
+end
+end -- Party Targets scope block
+
 -- Layout party frames: apply unitGrowth direction and cell spacing to the header.
 ns._LayoutPartyFrames = function()
     if not ns._partyHeader then return end
@@ -10808,6 +13594,10 @@ ns._LayoutPartyFrames = function()
     local s = db.profile
     local pw, ph, pcs = ns.RF_PartyDims(s)
     local bw, bh, cs = PixelSnap(pw), PixelSnap(ph), PixelSnap(pcs)
+    -- Party target frames along the stack sit between the frames: the pitch opens by their room.
+    local along = ns.PT_AlongPitch(s)
+    ns._ptPitchApplied = along
+    cs = cs + along
     local unitGrowth = ns._PartyGrowth(s)
 
     local hdrPoint, hdrXOff, hdrYOff
@@ -10939,6 +13729,9 @@ ns._LayoutPartyFrames = function()
     -- cell spacing -- has to move it too. OOC only (this function bails in combat). In a raid the
     -- boss group hangs off the raid headers instead, so skip the re-anchor scan there.
     if (not IsInRaid() or ns._PartyInRaid()) and ns.FB_ReAnchor then ns.FB_ReAnchor() end
+    -- The party target frames ride FB_ReAnchor above; this covers the raid branch that skips it
+    -- (delta-gated, a no-op after it).
+    ns._PT_Layout()
 end
 
 -- Party visibility: show/hide based on group state.
@@ -11001,11 +13794,22 @@ ns._UpdatePartyVisibility = function()
     -- Defensive: re-assert full opacity unless a size preview is dimming the
     -- real frames (see UpdateVisibility). Out of combat only (bails above).
     if not ns._sizePreviewTier and ns._partyContainerFrame then
+        local dimmed = ns._partyContainerFrame:GetAlpha() ~= 1
         ns._partyContainerFrame:SetAlpha(1)
         if ns._ptModelOn then ns.RF_PtContainerAlpha(1) end
+        if dimmed then ns._PF_AlphaSync() end
     end
 
     local s = db.profile
+    -- Profile and spec-override swaps: Include Own Target first, so an enable edge below takes it.
+    if ns._ptInclDesired ~= (s.partyTargetIncludeSelf == true) then
+        ns.PT_SetIncludeSelf(s.partyTargetIncludeSelf)
+    end
+    -- An enable edge here refreshes the target frames itself (the show edge below then skips it).
+    local ptWas = ns._ptEnabled
+    if ns._ptDesired ~= (s.partyShowTargets == true) then
+        ns.PT_SetEnabled(s.partyShowTargets)
+    end
     -- Arena and Small Raid mode show party frames even though IsInRaid() is
     -- true. The header binds raid units via showRaid=true; the raid container
     -- is hidden there by UpdateVisibility.
@@ -11065,6 +13869,12 @@ ns._UpdatePartyVisibility = function()
     if ns._fbPartyAttachState ~= visible then
         ns._fbPartyAttachState = visible
         if ns.FB_ReAnchor then ns.FB_ReAnchor() end
+    end
+    -- Party target frames skip roster refreshes while the party frames are hidden: their show edge
+    -- takes one (units, your raid token, the listeners). EDGE only.
+    if ns._ptVisState ~= visible then
+        ns._ptVisState = visible
+        if visible and ptWas then ns._PT_RefreshAll() end
     end
 end
 
@@ -11299,6 +14109,11 @@ ns.ReloadPartyFrames = function(skipButtons)
     if ns.RF_PartyKit() and ns.FB_ReAnchor and not InCombatLockdown() then ns.FB_ReAnchor() end
     -- Portrait events follow the portrait settings (a no-op when unchanged).
     ns.RF_KitPortraitEvents(ns._partyFramesVisible)
+    -- Pets and target frames beside the party frames are styled from the party settings.
+    if not skipButtons then
+        ns.PF_PartyRestyle()
+        ns._PT_Restyle()
+    end
 end
 
 local function RegisterWithUnlockMode()
@@ -13780,7 +16595,7 @@ local function ApplyPreviewData(f, index)
             local modern = (absStyle == "blizzardModern")
             local tex = ns.ResolveAbsorbStyleTex(absStyle, "Interface\\Buttons\\WHITE8X8")
             local alpha = (s.absorbOpacity or 90) / 100
-            local tiled = (absStyle == "striped" or absStyle == "stripedReversed" or absStyle == "stripedThick" or absStyle == "stripedThickR" or absStyle == "largeStripes" or absStyle == "largeStripesR" or absStyle == "largeOutlinedStripes" or absStyle == "largeOutlinedStripesR")
+            local tiled = (absStyle == "striped" or absStyle == "stripedReversed" or absStyle == "stripedThick" or absStyle == "stripedThickR" or absStyle == "largeStripes" or absStyle == "largeStripesR" or absStyle == "largeOutlinedStripes" or absStyle == "largeOutlinedStripesR" or absStyle == "pixelsShieldFill")
             -- (the Party Frames kit's health bar is its own rect)
             local hpW = f.kitG and f.kitG.health.w or w
             local hpH = f.kitG and f.kitG.health.h or healthH
@@ -14061,7 +16876,7 @@ local function ApplyPreviewData(f, index)
             local haAlpha = (s.healAbsorbOpacity or 75) / 100
             local hc = s.healAbsorbColor or { r = 0.8, g = 0.15, b = 0.15 }
             if haStyle == "healBlizzModern" or haStyle == "largeOutlinedStripes" or haStyle == "largeOutlinedStripesR" then hc = { r = 1, g = 1, b = 1 } end
-            local tiled = (haStyle == "striped" or haStyle == "stripedReversed" or haStyle == "stripedThick" or haStyle == "stripedThickR" or haStyle == "largeStripes" or haStyle == "largeStripesR" or haStyle == "largeOutlinedStripes" or haStyle == "largeOutlinedStripesR")
+            local tiled = (haStyle == "striped" or haStyle == "stripedReversed" or haStyle == "stripedThick" or haStyle == "stripedThickR" or haStyle == "largeStripes" or haStyle == "largeStripesR" or haStyle == "largeOutlinedStripes" or haStyle == "largeOutlinedStripesR" or haStyle == "pixelsShieldFill")
             local hpW = f.kitG and f.kitG.health.w or w
             local hpH = f.kitG and f.kitG.health.h or healthH
             local mask = f._healAbsorbBar._mask
@@ -14703,19 +17518,8 @@ local function ApplyPreviewData(f, index)
         f._nameText:SetText("")
         f._nameText:SetText(ns.CapName(name, s))
         ApplyFont(f._nameText, s.nameSize or 10)
-        local nameMode = s.nameColorMode or "class"
-        if nameMode == "accent" then
-            local ar, ag, ab = EllesmereUI.ResolveActiveAccent()
-            if ar then f._nameText:SetTextColor(ar, ag, ab)
-            else f._nameText:SetTextColor(1, 1, 1) end
-        elseif nameMode == "custom" then
-            local c = s.nameCustomColor
-            f._nameText:SetTextColor(c.r, c.g, c.b)
-        else
-            local cc = EllesmereUI.GetClassColor(classToken)
-            if cc then f._nameText:SetTextColor(cc.r, cc.g, cc.b)
-            else f._nameText:SetTextColor(1, 1, 1) end
-        end
+        f._nameText:SetTextColor(ns.RF_PreviewTextColor(s.nameColorMode or "class",
+            s.nameCustomColor, classToken, 1, 1, 1))
         end -- pos ~= "none"
     end
 
@@ -14775,58 +17579,18 @@ local function ApplyPreviewData(f, index)
         f._healthText:SetText("")
         f._healthText:SetText(htTxt or "")
         local mode = s.healthTextMode or "none"
-        -- Resolve health text color (mirrors the preview name-color block above,
-        -- using the preview's classToken since `unit` isn't a real unit here).
-        local htMode = s.healthTextColorMode or "custom"
-        local htr, htg, htb = 1, 1, 1
-        if htMode == "accent" then
-            local ar, ag, ab = EllesmereUI.ResolveActiveAccent()
-            if ar then htr, htg, htb = ar, ag, ab end
-        elseif htMode == "class" then
-            local cc = EllesmereUI.GetClassColor(classToken)
-            if cc then htr, htg, htb = cc.r, cc.g, cc.b end
-        else -- custom
-            local c = s.healthTextCustomColor
-            if c then htr, htg, htb = c.r, c.g, c.b end
-        end
-        if mode == "percent" and not isDead and not isOffline then
-            f._healthText:SetFormattedText("%d%%", healthPct)
+        -- Dead and offline sample members keep only the missing amount.
+        if (isDead or isOffline) and mode ~= "missing" then mode = "none" end
+        if ns.RF_HealthTextInto(f._healthText, mode, healthPct, nil, 12000) then
+            -- The preview's classToken stands in for the unit.
+            local htr, htg, htb = ns.RF_PreviewTextColor(s.healthTextColorMode or "custom",
+                s.healthTextCustomColor, classToken, 1, 1, 1)
             f._healthText:SetTextColor(htr, htg, htb, 0.9)
-        elseif mode == "percentNoSign" and not isDead and not isOffline then
-            f._healthText:SetFormattedText("%d", healthPct)
-            f._healthText:SetTextColor(htr, htg, htb, 0.9)
-        elseif mode == "number" and not isDead and not isOffline then
-            local fakeHP = healthPct * 12000
-            if AbbreviateNumbers then
-                f._healthText:SetText(AbbreviateNumbers(fakeHP))
-            end
-            f._healthText:SetTextColor(htr, htg, htb, 0.9)
-        elseif mode == "numberPercent" and not isDead and not isOffline then
-            local fakeHP = healthPct * 12000
-            local numStr = AbbreviateNumbers and AbbreviateNumbers(fakeHP) or tostring(fakeHP)
-            f._healthText:SetFormattedText("%s | %d%%", numStr, healthPct)
-            f._healthText:SetTextColor(htr, htg, htb, 0.9)
-        elseif mode == "percentNumber" and not isDead and not isOffline then
-            local fakeHP = healthPct * 12000
-            local numStr = AbbreviateNumbers and AbbreviateNumbers(fakeHP) or tostring(fakeHP)
-            f._healthText:SetFormattedText("%d%% | %s", healthPct, numStr)
-            f._healthText:SetTextColor(htr, htg, htb, 0.9)
-        elseif mode == "missing" then
-            local fakeHP = (100 - healthPct) * 12000
-            f._healthText:SetText(C_StringUtil.TruncateWhenZero(fakeHP))
-            if f._healthText:GetText() then
-                if AbbreviateNumbers then
-                    f._healthText:SetText(AbbreviateNumbers(fakeHP))
-                end
-            end
-            f._healthText:SetTextColor(htr, htg, htb, 0.9)
-        else
-            f._healthText:SetText("")
         end
     end
 
     -- Heal absorb text (preview): a representative value so the user can see
-    -- and position it. Mirrors the health-text preview color resolution.
+    -- and position it.
     if f._healAbsorbText then
         local haMode = s.healAbsorbTextMode or "none"
         ApplyFont(f._healAbsorbText, s.healAbsorbTextSize or 9)
@@ -14835,18 +17599,8 @@ local function ApplyPreviewData(f, index)
             f.kitG and f.kitG.health.w or (s.frameWidth or 72) * 0.75)
         if haMode ~= "none" and not isDead and not isOffline then
             ns.FormatHealAbsorbInto(f._healAbsorbText, math.floor(healthPct * 3000), haMode)
-            local haCM = s.healAbsorbTextColorMode or "custom"
-            local hr, hg, hb = 1, 0.3, 0.3
-            if haCM == "accent" then
-                local ar, ag, ab = EllesmereUI.ResolveActiveAccent()
-                if ar then hr, hg, hb = ar, ag, ab end
-            elseif haCM == "class" then
-                local cc = EllesmereUI.GetClassColor(classToken)
-                if cc then hr, hg, hb = cc.r, cc.g, cc.b end
-            else
-                local c = s.healAbsorbTextCustomColor
-                if c then hr, hg, hb = c.r, c.g, c.b end
-            end
+            local hr, hg, hb = ns.RF_PreviewTextColor(s.healAbsorbTextColorMode or "custom",
+                s.healAbsorbTextCustomColor, classToken, 1, 0.3, 0.3)
             f._healAbsorbText:SetTextColor(hr, hg, hb, 0.9)
         else
             f._healAbsorbText:SetText("")
@@ -15202,6 +17956,32 @@ local function RefreshPreview()
         topExtra = 25
     end
 
+    -- Container size (4 groups)
+    local totalW, totalH
+    if groupGrowth == "DOWN" or groupGrowth == "UP" then
+        totalW = groupW
+        totalH = MOVER_GROUPS * groupH + (MOVER_GROUPS - 1) * gs
+    else
+        totalW = MOVER_GROUPS * groupW + (MOVER_GROUPS - 1) * gs
+        totalH = groupH
+    end
+
+    -- Pets (Show Pets on the Raid tab) go before the first or after the last group. The overlay
+    -- grows to hold them; at the real position the groups stay put and the pets hang off them.
+    local petSpec = ns.PF_PreviewSpec(false, s, bw, bh, cs, groupW, groupH)
+    local petX, petY, padL, padT, padR, padB = 0, 0, 0, 0, 0, 0
+    if petSpec then
+        local slot = petSpec.before and 0 or (MOVER_GROUPS - 1)
+        petX = rawGX[slot] - minGX + petSpec.ox
+        petY = rawGY[slot] - maxGY + petSpec.oy
+        if isOverlay then
+            padL = max(0, -petX)
+            padT = max(0, petY)
+            padR = max(0, petX + petSpec.bw - totalW)
+            padB = max(0, petSpec.bh - petY - totalH)
+        end
+    end
+
     -- Hide all preview frames first
     for _, f in ipairs(previewFrames) do f:Hide() end
 
@@ -15234,7 +18014,7 @@ local function RefreshPreview()
             f:ClearAllPoints()
             local fx = gx + (rawUX[u] - minUX)
             local fy = gy + (rawUY[u] - maxUY)
-            f:SetPoint("TOPLEFT", anchor, "TOPLEFT", fx + anchorPad, fy - anchorPad - topExtra)
+            f:SetPoint("TOPLEFT", anchor, "TOPLEFT", fx + anchorPad + padL, fy - anchorPad - topExtra - padT)
             ApplyPreviewData(f, frameIdx)
 
             if f._health and previewHealthValues[frameIdx] then
@@ -15293,16 +18073,13 @@ local function RefreshPreview()
     ns._previewGroupNumberOverlay:SetFrameLevel(9000)
     ns._previewGroupNumberOverlay:Show()
     for _, lbl in ipairs(previewGroupLabels) do lbl:SetParent(ns._previewGroupNumberOverlay) end
-
-    -- Container size (4 groups)
-    local totalW, totalH
-    if groupGrowth == "DOWN" or groupGrowth == "UP" then
-        totalW = groupW
-        totalH = MOVER_GROUPS * groupH + (MOVER_GROUPS - 1) * gs
+    if petSpec then
+        ns.PF_ShowPreview(petSpec, s, reparentTo, anchor,
+            petX + anchorPad + padL, petY - anchorPad - topExtra - padT)
     else
-        totalW = MOVER_GROUPS * groupW + (MOVER_GROUPS - 1) * gs
-        totalH = groupH
+        ns.PF_HidePreview()
     end
+
     local snapW = PixelSnap(max(totalW, 1))
     local snapH = PixelSnap(max(totalH, 1))
     if previewContainer then
@@ -15340,7 +18117,8 @@ local function RefreshPreview()
 
     -- Size and position overlay container
     if isOverlay and overlayContainer then
-        overlayContainer:SetSize(totalW + anchorPad * 2, totalH + anchorPad * 2 + topExtra)
+        overlayContainer:SetSize(totalW + padL + padR + anchorPad * 2,
+            totalH + padT + padB + anchorPad * 2 + topExtra)
         if overlayContainer._title then
             ApplyFont(overlayContainer._title, 13)
             overlayContainer._title:SetText("Overlay Preview")
@@ -15414,6 +18192,10 @@ do
             if rfMouseBlock then rfMouseBlock:Hide() end
             if partyMouseBlock then partyMouseBlock:Hide() end
         end
+        -- The pet frames' own (their header, and the pets beside the party frames), and the
+        -- party target frames' (outside the party container too).
+        ns._PF_SetPreviewBlock(on)
+        ns._PT_SetPreviewBlock(on)
     end
     ns._SetPreviewMouseBlock = setBlock
     ns._RefreshPreviewMouseBlockStrata = function()
@@ -15425,6 +18207,8 @@ do
             partyMouseBlock:SetFrameStrata(ns._partyContainerFrame:GetFrameStrata())
             partyMouseBlock:SetFrameLevel(ns._partyContainerFrame:GetFrameLevel() + 50)
         end
+        ns._PF_RefreshPreviewBlock()
+        ns._PT_RefreshPreviewBlock()
     end
     function ns._SetRealFramesPreviewHidden(on)
         -- Overlay preview is a separate docked panel, so the real frames are NOT
@@ -15437,14 +18221,18 @@ do
             if containerFrame then containerFrame:SetAlpha(a) end
             if ns._partyContainerFrame then ns._partyContainerFrame:SetAlpha(a) end
             if ns._ptModelOn then ns.RF_PtContainerAlpha(a) end
+            if ns._PF.container then ns._PF.container:SetAlpha(a) end
             setBlock(false)
         else
             local a = on and 0 or 1
             if containerFrame then containerFrame:SetAlpha(a) end
             if ns._partyContainerFrame then ns._partyContainerFrame:SetAlpha(a) end
             if ns._ptModelOn then ns.RF_PtContainerAlpha(a) end
+            if ns._PF.container then ns._PF.container:SetAlpha(a) end
             setBlock(on)
         end
+        -- The pets beside the party frames take the container's alpha through their own.
+        ns._PF_AlphaSync()
     end
 end
 
@@ -15524,6 +18312,7 @@ local function HidePreview(skipRestore)
         lbl:SetParent(containerFrame)
         lbl:Hide()
     end
+    ns.PF_HidePreview()
     if skipRestore then return end
     -- The containers were only alpha-hidden (never reparented or moved), so the
     -- restore is a combat-legal SetAlpha(1) plus dropping the mouse blockers. No
@@ -15630,6 +18419,8 @@ ns._ShowSizePreview = function(tier)
     if containerFrame then containerFrame:SetAlpha(0) end
     if ns._partyContainerFrame then ns._partyContainerFrame:SetAlpha(0) end
     if ns._ptModelOn then ns.RF_PtContainerAlpha(0) end
+    if ns._PF.container then ns._PF.container:SetAlpha(0) end
+    ns._PF_AlphaSync()
     ns._SetPreviewMouseBlock(true)
 
     local ov = overrides[tier]
@@ -15885,6 +18676,8 @@ ns._HideSizePreview = function()
     if containerFrame then containerFrame:SetAlpha(1) end
     if ns._partyContainerFrame then ns._partyContainerFrame:SetAlpha(1) end
     if ns._ptModelOn then ns.RF_PtContainerAlpha(1) end
+    if ns._PF.container then ns._PF.container:SetAlpha(1) end
+    ns._PF_AlphaSync()
     ns._SetPreviewMouseBlock(false)
     -- Recompute party visibility (only shows party frames if actually grouped /
     -- Show When Solo). Bails in combat; the alpha restore above suffices there.
@@ -16211,6 +19004,8 @@ local function RefreshPartyPreview()
     local s = ns._pvOverlayProxy or db.profile
     local pw, ph, pcs = ns.RF_PartyDims(s)
     local w, h, spacing = PixelSnap(pw), PixelSnap(ph), PixelSnap(pcs)
+    -- Party target frames along the stack open the frames' pitch, as on the real frames.
+    local pitch = spacing + ns.PT_AlongPitch(s, s.partyShowTargets == true)
     local mode = db.profile.previewMode or "overlay"
 
     BuildPartyPreviewRoles()
@@ -16231,11 +19026,33 @@ local function RefreshPartyPreview()
     local totalW, totalH
     if isVert then
         totalW = w
-        totalH = h * shownCount + spacing * (shownCount - 1)
+        totalH = h * shownCount + pitch * (shownCount - 1)
     else
-        totalW = w * shownCount + spacing * (shownCount - 1)
+        totalW = w * shownCount + pitch * (shownCount - 1)
         totalH = h
     end
+
+    -- Pets (Show Pets on the Party tab) beside the party frames, or beside each frame (Beside
+    -- Owner), and the party target frames beside each frame (after Beside Owner pets on their
+    -- side; pets beside the party frames clear them); the overlay grows to hold them.
+    local ptSpec = ns.PT_PreviewSpec(s, w, h)
+    local petSpec = isOverlay and ns.PF_PreviewSpec(true, s, w, h, spacing, totalW, totalH, ptSpec)
+    if ptSpec and petSpec and petSpec.owner then ptSpec = ns.PT_PreviewSpec(s, w, h, petSpec) end
+    local padL, padT, padR, padB = 0, 0, 0, 0
+    if petSpec and petSpec.owner then
+        padL, padT, padR, padB = petSpec.padL, petSpec.padT, petSpec.padR, petSpec.padB
+    elseif petSpec then
+        padL = math.max(0, -petSpec.ox)
+        padT = math.max(0, petSpec.oy)
+        padR = math.max(0, petSpec.ox + petSpec.bw - totalW)
+        padB = math.max(0, petSpec.bh - petSpec.oy - totalH)
+    end
+    if isOverlay and ptSpec then
+        padL, padT = math.max(padL, ptSpec.padL), math.max(padT, ptSpec.padT)
+        padR, padB = math.max(padR, ptSpec.padR), math.max(padB, ptSpec.padB)
+    end
+    -- Your own frame's target shows only with Include Own Target.
+    local ptSkip = (not s.partyTargetIncludeSelf) and playerSlot or nil
 
     -- Determine parent frame: overlay container for overlay, UIParent for real
     local parentFrame
@@ -16248,31 +19065,33 @@ local function RefreshPartyPreview()
     end
 
     local slot = 0  -- running layout position; skips the hidden player frame
+    local lastF     -- the last frame along the growth
     for i = 1, 5 do
         local f = GetOrCreatePartyPvFrame(i)
         if hideSelf and i == playerSlot then
             f:Hide()
         else
+            lastF = f
             if f:GetParent() ~= parentFrame then f:SetParent(parentFrame) end
             f:SetFrameStrata(isOverlay and "FULLSCREEN_DIALOG" or "HIGH")
             f:ClearAllPoints()
             if isVert then
-                local yOff = slot * (h + spacing)
+                local yOff = slot * (h + pitch)
                 if unitGrowth == "DOWN" then
-                    f:SetPoint("TOPLEFT", parentFrame, "TOPLEFT", anchorPad, -anchorPad - topExtra - yOff)
+                    f:SetPoint("TOPLEFT", parentFrame, "TOPLEFT", anchorPad + padL, -anchorPad - topExtra - padT - yOff)
                 else
                     -- UP fills the same box from the bottom upward (positive
                     -- offsets); the container's extra top height creates the
                     -- title gap, so no per-frame correction is needed here.
-                    f:SetPoint("BOTTOMLEFT", parentFrame, "BOTTOMLEFT", anchorPad, anchorPad + yOff)
+                    f:SetPoint("BOTTOMLEFT", parentFrame, "BOTTOMLEFT", anchorPad + padL, anchorPad + padB + yOff)
                 end
             else
-                local xOff = slot * (w + spacing)
+                local xOff = slot * (w + pitch)
                 if unitGrowth == "LEFT" then xOff = -xOff end
                 if unitGrowth == "RIGHT" then
-                    f:SetPoint("TOPLEFT", parentFrame, "TOPLEFT", anchorPad + xOff, -anchorPad - topExtra)
+                    f:SetPoint("TOPLEFT", parentFrame, "TOPLEFT", anchorPad + padL + xOff, -anchorPad - topExtra - padT)
                 else
-                    f:SetPoint("TOPRIGHT", parentFrame, "TOPRIGHT", -anchorPad + xOff, -anchorPad - topExtra)
+                    f:SetPoint("TOPRIGHT", parentFrame, "TOPRIGHT", -anchorPad - padR + xOff, -anchorPad - topExtra - padT)
                 end
             end
             ApplyPartyPreviewData(f, i)
@@ -16283,7 +19102,8 @@ local function RefreshPartyPreview()
 
     -- Size and position overlay container
     if isOverlay and ns._partyOC then
-        ns._partyOC:SetSize(totalW + anchorPad * 2, totalH + anchorPad * 2 + topExtra)
+        ns._partyOC:SetSize(totalW + padL + padR + anchorPad * 2,
+            totalH + padT + padB + anchorPad * 2 + topExtra)
         ns._partyOC:SetFrameStrata("FULLSCREEN_DIALOG")
         ns._partyOC:SetFrameLevel(10)
         if ns._partyOC._title then
@@ -16302,6 +19122,16 @@ local function RefreshPartyPreview()
             ns._partyOC:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
         end
         ns._partyOC:Show()
+        -- Styled from the party settings, as the preview's own frames are.
+        if petSpec and petSpec.owner then
+            ns.PF_ShowOwnerPreview(petSpec, ns._scaledPartyProxy, ns._partyOC, lastF)
+        elseif petSpec then
+            ns.PF_ShowPreview(petSpec, ns._scaledPartyProxy, ns._partyOC, ns._partyOC,
+                anchorPad + padL + petSpec.ox, -anchorPad - topExtra - padT + petSpec.oy)
+        else
+            ns.PF_HidePreview()
+        end
+        ns.PT_ShowPreview(ptSpec, s, ns._partyOC, ptSkip)
     end
 
     -- Real mode: anchor frames to the actual party container, mirroring the
@@ -16330,17 +19160,28 @@ local function RefreshPartyPreview()
             anchorTo = proxy
             pos = pos or se
         end
+        local cw, ch = anchorTo:GetSize()
+        local realPets = ns.PF_PreviewSpec(true, s, w, h, spacing, cw, ch, ptSpec)
+        if realPets and realPets.owner then
+            ns.PF_ShowOwnerPreview(realPets, ns._scaledPartyProxy, UIParent, lastF)
+        elseif realPets then
+            ns.PF_ShowPreview(realPets, ns._scaledPartyProxy, UIParent, anchorTo, realPets.ox, realPets.oy)
+        else
+            ns.PF_HidePreview()
+        end
+        if ptSpec and realPets and realPets.owner then ptSpec = ns.PT_PreviewSpec(s, w, h, realPets) end
+        ns.PT_ShowPreview(ptSpec, s, UIParent, ptSkip)
         if pos then
             local stepX, stepY = 0, 0
             local basePoint = "TOPLEFT"
             if unitGrowth == "RIGHT" then
-                stepX = w + spacing
+                stepX = w + pitch
             elseif unitGrowth == "LEFT" then
-                stepX = -(w + spacing); basePoint = "TOPRIGHT"
+                stepX = -(w + pitch); basePoint = "TOPRIGHT"
             elseif unitGrowth == "UP" then
-                stepY = h + spacing; basePoint = "BOTTOMLEFT"
+                stepY = h + pitch; basePoint = "BOTTOMLEFT"
             else -- DOWN
-                stepY = -(h + spacing)
+                stepY = -(h + pitch)
             end
             -- Centered growth: mirror _PositionPartySlots, which shifts the stack by
             -- (5 - shown)/2 slots so the shown frames sit centered in the 5-slot
@@ -16416,6 +19257,8 @@ local function HidePartyPreview(skipRestore)
         if ns._partyPvFrames[i] then ns._partyPvFrames[i]:Hide() end
     end
     if ns._partyOC then ns._partyOC:Hide() end
+    ns.PF_HidePreview()
+    ns.PT_HidePreview()
     if skipRestore then return end
     -- The containers were only alpha-hidden (never reparented or moved); restore
     -- is a combat-legal SetAlpha(1) plus dropping the mouse blockers. See
@@ -16707,7 +19550,7 @@ function ERF:OnEnable()
     do
         local s = db.profile
         local pw, ph, pcs = ns.RF_PartyDims(s)
-        ns._SizePartyContainer(PixelSnap(pw), PixelSnap(ph), PixelSnap(pcs), ns._PartyGrowth(s))
+        ns._SizePartyContainer(PixelSnap(pw), PixelSnap(ph), PixelSnap(pcs) + ns.PT_AlongPitch(s), ns._PartyGrowth(s))
         local pos = s.partyUnlockPos
         -- Skip the saved-pos SetPoint when element-anchored with resolved
         -- geometry: the unlock anchor system owns the position.
@@ -16727,6 +19570,9 @@ function ERF:OnEnable()
     if ns.FB_Apply then ns.FB_Apply() end
     -- Extra Frames: initial activation (raid-only member duplicates)
     if ns.XF_Apply then ns.XF_Apply() end
+    -- Pet frames: built and styled here, once (in the login window, so a combat /reload has them);
+    -- the deferred reloads below find their style unchanged.
+    ns.PF_Apply(true)
 
     -- DEFERRED LOGIN PASS, BUDGET-FRAGMENTED. Starts on the first frame
     -- after the loading screen (timers never fire during it). Everything
@@ -16796,7 +19642,7 @@ function ERF:OnEnable()
         if InCombatLockdown() then ns._partyGeomDirtyInCombat = true; return end
         local s = ns.db.profile
         local pw, ph, pcs = ns.RF_PartyDims(s)
-        ns._SizePartyContainer(PixelSnap(pw), PixelSnap(ph), PixelSnap(pcs), ns._PartyGrowth(s))
+        ns._SizePartyContainer(PixelSnap(pw), PixelSnap(ph), PixelSnap(pcs) + ns.PT_AlongPitch(s), ns._PartyGrowth(s))
         local pos = s.partyUnlockPos
         -- Skip the saved-pos SetPoint when element-anchored with resolved
         -- geometry: the unlock anchor system owns the position.
@@ -16841,7 +19687,8 @@ function ERF:OnEnable()
         if ns.UpdatePowerEventRegistration then ns.UpdatePowerEventRegistration() end
         -- Re-apply click-cast / hovercast bindings for the new profile.
         if ns.CC_ApplyBindings then ns.CC_ApplyBindings() end
-        -- Friendly Boss Frames and Extra Frames re-read the swapped profile.
+        -- Friendly Boss Frames and Extra Frames re-read the swapped profile (the pet frames did at
+        -- the tails of the raid and party reloads above).
         if ns.FB_Apply then ns.FB_Apply() end
         if ns.XF_Apply then ns.XF_Apply() end
         -- Real-preview effective overlay: RunRefreshers reaches here synchronously from

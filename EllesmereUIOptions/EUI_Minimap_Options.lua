@@ -141,6 +141,30 @@ initFrame:SetScript("OnEvent", function(self)
                 -- Rebuild: the Width | Height Offset row exists only on the rect layout.
                 EllesmereUI:RefreshPage(true)
               end }));  y = y - h
+        -- Inline cog on Visibility: Opacity of the shown map (showing and hiding stay
+        -- with Visibility). Greyed while the map never shows; the checklist refreshes
+        -- the page on close, which re-runs the cog's disabled state.
+        if not EllesmereUI._prebuilding then
+            EllesmereUI.BuildInlineCog(visRow._leftRegion, {
+                title = "Minimap Opacity",
+                disabled = function()
+                    local m = MinimapDB()
+                    return m ~= nil and (EllesmereUI.VisOverrideValue(m) or m.visibility) == "never"
+                end,
+                disabledTooltip = "This option requires a Visibility other than Never",
+                rows = {
+                    { type="slider", label="Opacity", min=10, max=100, step=1,
+                      tooltip="Fades the minimap while it is shown. Visibility still decides when it shows.",
+                      get=function() local m = MinimapDB(); return (m and m.opacity) or 100 end,
+                      set=function(v)
+                          local m = MinimapDB(); if not m then return end
+                          m.opacity = v
+                          -- One SetAlpha, not a full apply pass.
+                          if _G._EMM_ApplyMapAlpha then _G._EMM_ApplyMapAlpha() end
+                      end },
+                },
+            })
+        end
 
         -- Row 2: Size | Interactable Button Size
         _, h = W:DualRow(parent, y,

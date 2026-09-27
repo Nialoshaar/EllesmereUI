@@ -7951,14 +7951,8 @@ local function UpdateMerchantItemLevels()
                         if ilvl and ilvl > 0 then
                             fs:SetText(ilvl)
                             local quality = select(3, C_Item.GetItemInfo(link))
-                            local r, g, b = 1, 1, 1
-                            if EllesmereUI.GetItemLevelColor then
-                                local c = EllesmereUI.GetItemLevelColor(link, quality)
-                                if c then r, g, b = c.r or 1, c.g or 1, c.b or 1 end
-                            elseif quality then
-                                r, g, b = C_Item.GetItemQualityColor(quality)
-                            end
-                            fs:SetTextColor(r, g, b, 1)
+                            local c = EllesmereUI.GetItemLevelColor(link, quality)
+                            fs:SetTextColor(c.r or 1, c.g or 1, c.b or 1, 1)
                         end
                     end
                 end

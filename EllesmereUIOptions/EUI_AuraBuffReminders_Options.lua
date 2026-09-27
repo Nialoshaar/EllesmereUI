@@ -293,6 +293,18 @@ initFrame:SetScript("OnEvent", function(self)
         return icons
     end
 
+    -- x of the first preview icon's center from the container's TOP, following the live grow
+    -- direction: Grow Right pins the row's left end and Grow Left its right end to the page's
+    -- content column (container edge + CONTENT_PAD); Grow Centered centers the row.
+    local function PreviewStartX(d, count, sz, spacing, boxW)
+        local growDir = d and d.growDirection
+        local edgeX = boxW / 2 - EllesmereUI.CONTENT_PAD
+        if growDir == "RIGHT" then return -edgeX + (sz / 2) end
+        local totalW = (count * sz) + ((count - 1) * spacing)
+        if growDir == "LEFT" then return edgeX - totalW + (sz / 2) end
+        return -(totalW / 2) + (sz / 2)
+    end
+
     local function UpdatePreviewHeader()
         if not _previewIcons or #_previewIcons == 0 then return end
         local d = DDB()
@@ -316,8 +328,7 @@ initFrame:SetScript("OnEvent", function(self)
         local GT = _G._EABR_GLOW_TYPES
         local Stop = _G._EABR_StopAllGlows
 
-        local count = #_previewIcons
-        local totalW = (count * sz) + ((count - 1) * spacing)
+        local startX = PreviewStartX(d, #_previewIcons, sz, spacing, _previewContainer:GetWidth())
 
         for i, pIcon in ipairs(_previewIcons) do
             local btn = pIcon.frame
@@ -326,7 +337,6 @@ initFrame:SetScript("OnEvent", function(self)
             btn:SetAlpha(opacity)
             ns.ApplyPreviewIconShape(btn, d.iconShape or "none")
             btn:ClearAllPoints()
-            local startX = -(totalW / 2) + (sz / 2)
             btn:SetPoint("TOP", btn:GetParent(), "TOP", startX + (i - 1) * (sz + spacing), 0)
 
             if _G._EABR_ApplyIconBorder then
@@ -429,9 +439,7 @@ initFrame:SetScript("OnEvent", function(self)
         local ICON_SIZE = _G._EABR_ICON_SIZE or 40
         local sz = math.floor(ICON_SIZE * baseScale + 0.5)
         local spacing = d and d.iconSpacing or 8
-        local count = #_previewIcons
-        local totalW = (count * sz) + ((count - 1) * spacing)
-        local startX = -(totalW / 2) + (sz / 2)
+        local startX = PreviewStartX(d, #_previewIcons, sz, spacing, _previewContainer:GetWidth())
         for i, pIcon in ipairs(_previewIcons) do
             local btn = pIcon.frame
             if btn then
@@ -546,14 +554,12 @@ initFrame:SetScript("OnEvent", function(self)
             if pIcon.frame then pIcon.frame:Hide() end
         end
         wipe(_previewIcons)
-        local count = #icons
-        local totalW = (count * sz) + ((count - 1) * spacing)
+        local startX = PreviewStartX(d, #icons, sz, spacing, hdrW)
 
         for i, iconData in ipairs(icons) do
             local btn = CreateFrame("Button", nil, container)
             btn:SetSize(sz, iconH)
             btn:EnableMouse(true)
-            local startX = -(totalW / 2) + (sz / 2)
             btn:SetPoint("TOP", container, "TOP", startX + (i - 1) * (sz + spacing), 0)
             btn:SetAlpha(opacity)
 
@@ -682,6 +688,8 @@ initFrame:SetScript("OnEvent", function(self)
         { key="othersMissing", label="Others are missing my buff" },
         { key="iAmMissing",    label="I am missing others' buffs" },
     }
+    local GROW_DIR_VALUES = { CENTER = "Grow Centered", LEFT = "Grow Left", RIGHT = "Grow Right" }
+    local GROW_DIR_ORDER  = { "CENTER", "LEFT", "RIGHT" }
 
     -- Values are stored explicitly (true/false) rather than nil-for-on: the
     -- SavedVariables layer re-merges default keys on load, so an absent
@@ -1052,6 +1060,20 @@ initFrame:SetScript("OnEvent", function(self)
                   RefreshAll()
                   UpdatePreviewHeader()
               end }
+        );  y = y - h
+
+        -- Row 2: Grow Direction
+        _, h = W:DualRow(parent, y,
+            { type="dropdown", text="Grow Direction",
+              values=GROW_DIR_VALUES, order=GROW_DIR_ORDER,
+              tooltip="Which part of the row stays in place as reminders appear and disappear.",
+              getValue=function() local d = DDB(); return d and d.growDirection or "CENTER" end,
+              setValue=function(v)
+                  EllesmereUI.SetAuraBuffGrowDir(v)
+                  RefreshAll()
+                  RelayoutPreviewIcons()
+              end },
+            EllesmereUI.BlankRowCfg()
         );  y = y - h
 
         -----------------------------------------------------------------------

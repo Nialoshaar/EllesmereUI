@@ -1660,7 +1660,7 @@ function ns.CdmApplyBlizzIconArt(frame)
         host:EnableMouse(false)
         fc.blizzHost = host
         local ov = host:CreateTexture(nil, "OVERLAY", nil, 5)
-        if classic then ov:SetTexture(ns.CDM_CLASSIC_RING) else ov:SetAtlas(ns.CDM_BLIZZ_OVERLAY) end
+        if classic then ov:SetTexture(ns.CDM_CLASSIC_RING) else ns.CdmStockAtlas(ov, ns.CDM_BLIZZ_OVERLAY) end
         if ov.SetSnapToPixelGrid then ov:SetSnapToPixelGrid(false); ov:SetTexelSnappingBias(0) end
         fc.blizzOverlay = ov
         -- Own frames carry no viewer mask or swipe art: the rounded kit adds
@@ -2186,6 +2186,8 @@ local function EvalCdReadySound(frame, fd, primeOnly)
         return
     end
     local fc2 = _ecmeFC[frame]
+    -- Hidden by its Talent Conditions (TalentCondFilterPass): stays silent.
+    if fc2 and fc2.tcHidden then fd._cdReadyArmed = false; return end
     local sid2 = fc2 and fc2.spellID
     local bk2 = fc2 and fc2.barKey
     if not sid2 or not bk2 then return end
@@ -2275,6 +2277,7 @@ local function HookCdReadyAvailableAlert(frame, fd)
         local sida = fca and fca.spellID
         local bka = fca and fca.barKey
         if not sida or not bka then return end
+        if fca.tcHidden then return end  -- hidden by its Talent Conditions
         if bka == ns.FOCUSKICK_BAR_KEY then return end
         if bka:sub(1, 7) == "__ghost" then return end
         local ssa = ResolveSpellSettings(f, sida, ns.GetBarSpellData(bka))
@@ -5242,6 +5245,214 @@ end
 -- nothing). OnShow/OnHide track the frame's own shown flag, matching the old
 -- IsShown() gate exactly (alpha/parent-only hiding behaves identically).
 local _pcActive = {}
+
+-------------------------------------------------------------------------------
+--  Out of Range Coloring for spells added by Spell ID (opt-in, per spell).
+--
+--  Blizzard's viewer frames tint themselves out of range; a spell added by ID
+--  has no viewer frame, so its own-frame icon never did. Mirrors
+--  CooldownViewerCooldownItemMixin: the check (C_Spell.EnableSpellRangeCheck)
+--  is armed on the icon's Show only when the spell has a range, range is read
+--  once there, then only SPELL_RANGE_CHECK_UPDATE repaints (the engine
+--  re-dispatches it across target changes), and out of range outranks the
+--  resource tint. Override edges (SPELL_UPDATE_ICON,
+--  COOLDOWN_VIEWER_SPELL_OVERRIDE_UPDATED, SPELLS_CHANGED) re-point the check
+--  at the live form. The preset pass only paints the stored answer. Writes go
+--  to our own texture only. Zero cost unless a spell opts in: nothing is
+--  armed, the listener shell is taken on the first opted Show, and its events
+--  drop when the last opted icon hides.
+--
+--  Registrations are per SPELL and shared with Blizzard's viewer and the
+--  override arming in the main file: a release never disables an id either of
+--  them still holds, and CustomSpellRangeHolds is the same rule from their side.
+-------------------------------------------------------------------------------
+do
+    local refs = {}      -- armed spell id -> number of frames holding it
+    local armCount = 0   -- shown opted frames (armed, or on a form with no range); the listener is live while > 0
+    local listener
+
+    function ns.CustomSpellRangeHolds(spellID)
+        return refs[spellID] ~= nil
+    end
+
+    -- Custom-spell icon tint: out of range first (Blizzard's RefreshIconColor
+    -- order), else the resource dim. The range tint is written RGBA as Blizzard
+    -- writes it; the dim keeps its 3-arg writes.
+    local function PaintTint(f, sid, onRealCD)
+        local tex = f._tex
+        if not tex then return end
+        if f._rangeOut then
+            -- Out of range the icon is range-driven: the dim memo goes (left set, it
+            -- would hold the drain unsettled after the spell turned usable) and the
+            -- tint write is edge-gated. PaintTint is the only colour writer here.
+            f._lastVertexDim = nil
+            if not f._rangeTinted then
+                local c = CooldownViewerConstants and CooldownViewerConstants.ITEM_NOT_IN_RANGE_COLOR
+                if c then
+                    tex:SetVertexColor(c:GetRGBA())
+                    f._rangeTinted = true
+                end
+            end
+            return
+        end
+        -- Leaving the range tint needs a white write even when the dim memo is clean.
+        local wasTinted = f._rangeTinted
+        if wasTinted then f._rangeTinted = nil end
+        if not onRealCD then
+            local isUsable, notEnoughMana = C_Spell.IsSpellUsable(sid)
+            if notEnoughMana then
+                tex:SetVertexColor(0.5, 0.5, 1.0)
+            elseif not isUsable then
+                tex:SetVertexColor(0.4, 0.4, 0.4)
+            elseif f._lastVertexDim or wasTinted then
+                tex:SetVertexColor(1, 1, 1)
+            end
+            f._lastVertexDim = (not isUsable) or nil
+        elseif f._lastVertexDim or wasTinted then
+            tex:SetVertexColor(1, 1, 1)
+            f._lastVertexDim = nil
+        end
+    end
+    ns.PaintCustomSpellTint = PaintTint
+
+    -- Out of range is a readable false only: nil (no target) and a secret answer
+    -- both read as in range.
+    local function ReadOut(id)
+        local r = C_Spell.IsSpellInRange(id)
+        if not (issecretvalue and issecretvalue(r)) and r == false then return true end
+        return nil
+    end
+
+    -- Apply one out-of-range flip and repaint (every caller is an edge: Show,
+    -- range event, override edge, options). A repaint that lands dimmed wakes
+    -- the drain: the write happened outside the pass, and a dim is only polled
+    -- for its usable edge while the drain is awake.
+    local function SetRangeOut(f, out)
+        if f._rangeOut == out then return end
+        f._rangeOut = out
+        local sid = f._cachedPresetSID
+        if sid then
+            PaintTint(f, sid, f._lastOnRealCD)
+            if f._lastVertexDim then ns._MarkPresetCdDirty() end
+        end
+    end
+
+    local function OnRangeEvent(_, event, spellID)
+        local named = not (issecretvalue and issecretvalue(spellID))
+            and type(spellID) == "number"
+        if event == "SPELL_RANGE_CHECK_UPDATE" then
+            -- Blizzard's own registrations are nearly every dispatch, so a readable
+            -- id no icon here armed returns before any frame is touched. An
+            -- unreadable id (instanced secrecy) re-reads every armed frame. Only
+            -- the in/out answer is re-read: arming stays with Sync.
+            if named and not refs[spellID] then return end
+            for f in pairs(_pcActive) do
+                local armed = f._rangeArmedSID
+                if armed and (not named or armed == spellID) then
+                    SetRangeOut(f, ReadOut(armed))
+                end
+            end
+            return
+        end
+        -- Override edges re-point the opted icons at their live form. The icon
+        -- and override events name the base spell (nil = every spell);
+        -- SPELLS_CHANGED names none.
+        for f in pairs(_pcActive) do
+            if f._rangeOpted and (not named or f._cachedPresetSID == spellID) then
+                ns.SyncCustomSpellRange(f)
+            end
+        end
+    end
+
+    -- Hold or drop one frame's opt-in and its armed id. id is the live form to
+    -- arm, nil while that form has no range: an opted frame stays on the
+    -- override edges either way, so a form that gains a range arms. The range
+    -- event itself is held only while some id is armed.
+    local function SetArm(f, id, opted)
+        opted = opted or nil
+        if f._rangeOpted ~= opted then
+            f._rangeOpted = opted
+            armCount = armCount + (opted and 1 or -1)
+            if opted and armCount == 1 then
+                if not listener then
+                    listener = ns.TakeShell()
+                    listener:SetScript("OnEvent", OnRangeEvent)
+                end
+                listener:RegisterEvent("SPELL_UPDATE_ICON")
+                listener:RegisterEvent("COOLDOWN_VIEWER_SPELL_OVERRIDE_UPDATED")
+                listener:RegisterEvent("SPELLS_CHANGED")
+            elseif armCount == 0 and listener then
+                listener:UnregisterAllEvents()
+            end
+        end
+        local prev = f._rangeArmedSID
+        if prev == id then return end
+        local hadArm = next(refs) ~= nil
+        f._rangeArmedSID = id
+        if prev then
+            local n = (refs[prev] or 1) - 1
+            refs[prev] = (n > 0) and n or nil
+            if not refs[prev] and not ns.BlizzardArmsRange(prev) then
+                local held = false
+                if ns._oorArmed then
+                    for _, ov in pairs(ns._oorArmed) do
+                        if ov == prev then held = true; break end
+                    end
+                end
+                if not held then C_Spell.EnableSpellRangeCheck(prev, false) end
+            end
+        end
+        if id then
+            if not refs[id] then C_Spell.EnableSpellRangeCheck(id, true) end
+            refs[id] = (refs[id] or 0) + 1
+        end
+        local hasArm = next(refs) ~= nil
+        if hasArm ~= hadArm then
+            if hasArm then
+                listener:RegisterEvent("SPELL_RANGE_CHECK_UPDATE")
+            else
+                listener:UnregisterEvent("SPELL_RANGE_CHECK_UPDATE")
+            end
+        end
+    end
+
+    -- Resolve one custom-spell frame: hold or drop its opt-in, arm, re-point
+    -- (live override) or release its range check, then read range once.
+    -- Called on edges only: Show, override edges and the options toggle.
+    function ns.SyncCustomSpellRange(f)
+        local sid = f._cachedPresetSID
+        if not sid then
+            local m = f._pfKey and f._pfKey:match(":(%d+)$")
+            sid = m and tonumber(m)
+            f._cachedPresetSID = sid
+        end
+        local want, opted
+        local cas = sid and ns._cdmAnyCustomRangeColor and ns.GetEffectiveCustomActiveState(sid)
+        if cas and cas.outOfRangeColoring then
+            opted = true
+            local ovr = C_SpellBook.FindSpellOverrideByID(sid)
+            local live = (ovr and ovr > 0) and ovr or sid
+            if C_Spell.SpellHasRange(live) then want = live end
+        end
+        SetArm(f, want, opted)
+        SetRangeOut(f, want and ReadOut(want) or nil)
+    end
+
+    function ns.ReleaseCustomSpellRange(f)
+        SetArm(f, nil, nil)
+    end
+
+    -- Options toggle (and the gate latching on): re-resolve every shown
+    -- custom-spell icon right away.
+    function ns.RefreshCustomSpellRange()
+        for f in pairs(_pcActive) do
+            if f._isCustomSpellFrame and not f._isCustomBuffFrame then
+                ns.SyncCustomSpellRange(f)
+            end
+        end
+    end
+end
+
 local function _RegisterPresetLive(f, fkey)
     f._pfKey = fkey
     f:HookScript("OnShow", function(self)
@@ -5253,10 +5464,17 @@ local function _RegisterPresetLive(f, fkey)
             self._itemWalkArm = true
             self._countArm = true
         end
+        -- Out of Range Coloring arms (or re-arms) on this edge.
+        if ns._cdmAnyCustomRangeColor and self._isCustomSpellFrame
+           and not self._isCustomBuffFrame then
+            ns.SyncCustomSpellRange(self)
+        end
         if ns._MarkPresetCdDirty then ns._MarkPresetCdDirty() end
     end)
     f:HookScript("OnHide", function(self)
         _pcActive[self] = nil
+        -- A hidden icon holds no range registration; its Show re-arms it.
+        if self._rangeOpted then ns.ReleaseCustomSpellRange(self) end
     end)
     if f:IsShown() then _pcActive[f] = true end
 end
@@ -5593,7 +5811,15 @@ local function GetOrCreateItemPresetFrame(barKey, itemID)
         GameTooltip_SetDefaultAnchor(GameTooltip, self)
         -- Pot presets tooltip the resolved display variant (may be another
         -- rank / Fleeting / the swapped-in partner pot), not the primary.
-        GameTooltip:SetItemByID(self._displayItemID or self._presetItemID)
+        -- Other presets tooltip the first owned family member (the id the
+        -- count walk points _itemCdSource at), so a warlock holding only a
+        -- Demonic Healthstone sees that stone; nothing owned -> the primary.
+        local tipID = self._displayItemID
+        if not tipID then
+            local _, owned = ns._ReadItemPresetCount(self)
+            tipID = owned
+        end
+        GameTooltip:SetItemByID(tipID or self._presetItemID)
         -- Re-assert the cursor anchor after content is set (item setters can drop
         -- it under "Anchor to Cursor", leaving the tip invisible). No-op otherwise.
         if EllesmereUI and EllesmereUI._repointTooltipAtCursor then
@@ -5858,6 +6084,21 @@ local function IsPresetFamilyFrame(f)
     return (pd and pd.altItemIDs and f._presetItemID == pd.itemID) and true or false
 end
 
+-- Count (charges included) of a non-pot item preset frame: the primary id, else the
+-- sum of the family alts. Returns total and first owned id. On ns: 200-local cap.
+function ns._ReadItemPresetCount(f)
+    local total = C_Item.GetItemCount(f._presetItemID, false, true) or 0
+    local owned = total > 0 and f._presetItemID or nil
+    if total == 0 and IsPresetFamilyFrame(f) then
+        for _, altID in ipairs(f._presetData.altItemIDs) do
+            local c = C_Item.GetItemCount(altID, false, true) or 0
+            total = total + c
+            if not owned and c > 0 then owned = altID end
+        end
+    end
+    return total, owned
+end
+
 -- Guard: after ENCOUNTER_END clears item-preset caches, subsequent events
 -- fire before Blizzard has finished resetting potion CDs. Without this guard
 -- the update loop re-caches stale cooldown data from C_Item.GetItemCooldown.
@@ -6043,22 +6284,11 @@ local function ProcessPresetCooldowns()
                     -- hiding the swipe when that geometry is only a GCD.
                     ApplyPresetGCDSwipe(f, sid, cdInfo)
                     -- Resource check: dim vertex color when not enough resources
-                    -- Only for custom spells (not racials -- racials don't cost resources)
+                    -- Only for custom spells (not racials -- racials don't cost resources).
+                    -- Out of Range Coloring (opt-in) outranks the dim; its answer
+                    -- (f._rangeOut) is kept by events and only painted here.
                     if f._isCustomSpellFrame and f._tex then
-                        if not onRealCD then
-                            local isUsable, notEnoughMana = C_Spell.IsSpellUsable(sid)
-                            if notEnoughMana then
-                                f._tex:SetVertexColor(0.5, 0.5, 1.0)
-                            elseif not isUsable then
-                                f._tex:SetVertexColor(0.4, 0.4, 0.4)
-                            elseif f._lastVertexDim then
-                                f._tex:SetVertexColor(1, 1, 1)
-                            end
-                            f._lastVertexDim = (not isUsable) or nil
-                        elseif f._lastVertexDim then
-                            f._tex:SetVertexColor(1, 1, 1)
-                            f._lastVertexDim = nil
-                        end
+                        ns.PaintCustomSpellTint(f, sid, onRealCD)
                     end
                     if f._lastVertexDim then anyUnsettled = true end
                     -- "Show Charges" (opt-in, CD/utility custom spells only):
@@ -6208,22 +6438,16 @@ local function ProcessPresetCooldowns()
                     -- count-armed FOREVER and never skipped them (probe capture #12).
                     f._countArm = false
                 elseif f._countArm ~= false then
-                    -- Count-on-edge: item counts only move with bag contents
-                    -- (BAG_UPDATE_DELAYED) or a use-cast, both of which arm.
+                    -- Count-on-edge: item counts move with bag contents
+                    -- (BAG_UPDATE_DELAYED), a use-cast, or a charge-only
+                    -- change (BAG_UPDATE_COOLDOWN recheck), all of which arm.
                     -- This content edge also re-points the single watched cd
                     -- id (f._itemCdSource): first owned id wins; while
                     -- nothing is owned the LAST owned id is kept (the shared
                     -- cd lives on the id that was just used).
                     f._countArm = false
-                    total = C_Item.GetItemCount(f._presetItemID, false, true) or 0
-                    local owned = total > 0 and f._presetItemID or nil
-                    if total == 0 and IsPresetFamilyFrame(f) then
-                        for _, altID in ipairs(f._presetData.altItemIDs) do
-                            local c = C_Item.GetItemCount(altID, false, true) or 0
-                            total = total + c
-                            if not owned and c > 0 then owned = altID end
-                        end
-                    end
+                    local owned
+                    total, owned = ns._ReadItemPresetCount(f)
                     if owned then f._itemCdSource = owned end
                     f._cachedTotal = total
                 else
@@ -6307,12 +6531,7 @@ local function CheckItemPresenceForHide()
                     -- (partner family counts while the swap toggle is on).
                     total = f._displayCount or 0
                 else
-                    total = C_Item.GetItemCount(f._presetItemID, false, true) or 0
-                    if total == 0 and IsPresetFamilyFrame(f) then
-                        for _, altID in ipairs(f._presetData.altItemIDs) do
-                            total = total + (C_Item.GetItemCount(altID, false, true) or 0)
-                        end
-                    end
+                    total = ns._ReadItemPresetCount(f)
                 end
                 if (total > 0) ~= f._hidePresenceCached then changed = true end
             end
@@ -6380,6 +6599,32 @@ _racialCdListener:SetScript("OnEvent", function(_, event, a1, a2, a3, a4)
         return
     end
     if event == "BAG_UPDATE_COOLDOWN" then
+        -- Charge-only item count changes (a used Healthstone charge, a Soulwell
+        -- refill) move no bag contents, so no BAG_UPDATE fires; a used charge
+        -- lands with this event, after the cast arm already read the old count.
+        -- Re-read the shown non-pot item counts and arm only on a real change.
+        -- A count crossing zero also re-runs the Hide Items if Missing check,
+        -- which otherwise only bag-content edges drive.
+        local hit, crossed
+        for f in pairs(_pcActive) do
+            if f._isItemPresetFrame and f._presetItemID and not f._displayItemID
+               and f._cachedTotal and f._countArm == false then
+                local old, n = f._cachedTotal, ns._ReadItemPresetCount(f)
+                if n ~= old then
+                    f._countArm = true
+                    hit = true
+                    if (n == 0) ~= (old == 0) then crossed = true end
+                end
+            end
+        end
+        if hit then
+            _presetCdDirty = true
+            _pcAllSettled = false
+            -- Fast lane like a cast: the new count lands after the cast's own pass, inside the 1 Hz cap.
+            ns._pcLast = 0
+            if ns.ArmBuffTicker then ns.ArmBuffTicker() end
+            if crossed then CheckItemPresenceForHide() end
+        end
         -- THE item-cooldown edge: fires when any item cooldown starts, ends
         -- early or is modified. Re-walk the item chains on the next pass;
         -- between these edges the cached start/dur drives the display.
@@ -6390,7 +6635,8 @@ _racialCdListener:SetScript("OnEvent", function(_, event, a1, a2, a3, a4)
         -- settled there is no running item cd to end or modify, and an item
         -- cd can only START via edges that own UNGATED lanes (player cast,
         -- bag content, equipment, encounter reset), so ambient chatter has
-        -- nothing to report.
+        -- nothing to report. The count recheck above stays ungated on purpose:
+        -- it is the only charge-only count refresh and arms only on a change.
         if not _pcAllSettled then
             for f in pairs(_pcActive) do
                 if f._isItemPresetFrame then f._itemWalkArm = true end
@@ -7344,12 +7590,7 @@ local function CollectAndReanchor()
                                     if dispID then
                                         total = f._displayCount or 0
                                     else
-                                        total = C_Item.GetItemCount(itemID, false, true) or 0
-                                        if total == 0 and IsPresetFamilyFrame(f) then
-                                            for _, altID in ipairs(f._presetData.altItemIDs) do
-                                                total = total + (C_Item.GetItemCount(altID, false, true) or 0)
-                                            end
-                                        end
+                                        total = ns._ReadItemPresetCount(f)
                                     end
                                     f._hidePresenceCached = (total > 0)
                                     skipMissing = (total == 0)
@@ -7731,6 +7972,12 @@ local function CollectAndReanchor()
         end
     end
 
+    -- Talent Conditions: a cooldown whose per-spell conditions do not hold this pass is
+    -- dropped like an unlearned spell (EllesmereUICdmTalentConditions.lua). A replacement
+    -- buff follows its cooldown's conditions. Session-gated: skipped entirely until some
+    -- spell has a condition.
+    if ns._cdmAnyTalentCond then ns.TalentCondFilterPass(cdFrames) end
+
     -- Pre-build claim set for racial/custom spell checks: collect all spellIDs already
     -- claimed by Blizzard frames across all bars. This replaces the O(frames *
     -- FindSpellOverrideByID) inner loop with a set lookup.
@@ -7944,12 +8191,7 @@ local function CollectAndReanchor()
                                     if dispID then
                                         total = f._displayCount or 0
                                     else
-                                        total = C_Item.GetItemCount(itemID, false, true) or 0
-                                        if total == 0 and IsPresetFamilyFrame(f) then
-                                            for _, altID in ipairs(f._presetData.altItemIDs) do
-                                                total = total + (C_Item.GetItemCount(altID, false, true) or 0)
-                                            end
-                                        end
+                                        total = ns._ReadItemPresetCount(f)
                                     end
                                     f._hidePresenceCached = (total > 0)
                                     skipMissing = (total == 0)
@@ -9104,7 +9346,8 @@ function _AC.BuildStyle(bd, fixedIcon)
     local texCoord
     local SH = ns.CDM_SHAPES
     if shape == "cropped" then
-        texCoord = { zoom, 1 - zoom, zoom + 0.10, 1 - zoom - 0.10 }
+        local trim = ns.CdmCropTrim(bd)
+        texCoord = { zoom, 1 - zoom, zoom + trim, 1 - zoom - trim }
     elseif customShape and SH and SH.masks[shape] then
         local visRatio = (128 - 2 * (SH.insets[shape] or 17)) / 128
         local grow = ((1 / visRatio) - 1) * 0.5
@@ -9131,7 +9374,7 @@ function _AC.BuildStyle(bd, fixedIcon)
     return {
         width = SZ,
         height = (shape == "cropped")
-            and _AC.SnapPx(math.floor(rawSZ * 0.80 + 0.5)) or SZ,
+            and _AC.SnapPx(math.floor(rawSZ * ns.CdmCropFactor(bd) + 0.5)) or SZ,
         iconCrop = true, iconZoom = zoom,
         texCoord = texCoord,
         cooldownReverse = true,
@@ -9220,7 +9463,7 @@ function _AC.InitExtra(button, d)
         if style.cdm.classic then
             d.cdmBlizzOverlay:SetTexture(ns.CDM_CLASSIC_RING)
         else
-            d.cdmBlizzOverlay:SetAtlas(ns.CDM_BLIZZ_OVERLAY)
+            ns.CdmStockAtlas(d.cdmBlizzOverlay, ns.CDM_BLIZZ_OVERLAY)
         end
         d.cdmBlizzOverlay:SetSnapToPixelGrid(false)
         d.cdmBlizzOverlay:SetTexelSnappingBias(0)
@@ -9589,7 +9832,7 @@ function _AC.Build(rec, barKey, bd, sids, sig, cis)
         -- elementWidth/Height feed the engine's flow math (the style sizes the
         -- button itself). Without them the flow spaces icons at the engine
         -- default, so any bar not at that size overlaps or gaps -- and a cropped
-        -- bar, whose buttons are 0.80 tall, is off on both axes. Every group
+        -- bar, whose buttons are shorter (ns.CdmCropFactor), is off on both axes. Every group
         -- shares one layout: their styles differ only in the fixed art.
         local st = AK.styles[styleKey]
         local gapPx = _AC.SnapPx(gap)
@@ -9840,6 +10083,10 @@ function ns.UpdateCustomBuffAuraTracking()
                             .. "|" .. tostring(bd.growDirection or "CENTER")
                             .. "|" .. (bd.verticalOrientation and 1 or 0)
                             .. "|" .. tostring(bd.spacing or 2)
+                            -- Adjust Crop changes the button height the flow lays out, so it
+                            -- is geometry. Appended only while cropped: every other bar keeps
+                            -- its exact signature.
+                            .. ((bd.iconShape == "cropped") and ("|crop" .. ns.CdmCropPercent(bd)) or "")
                             .. (ciSig or "")
                         local rec = _AC.bars[bd.key]
                         if not rec then rec = {}; _AC.bars[bd.key] = rec end
@@ -11059,7 +11306,13 @@ do
                 tex:SetVertexColor(1, 1, 1, 1); tex:SetAlpha(1)
                 return true
             elseif p.useBlizzardStyle then
-                tex:SetAtlas("UI-HUD-ActionBar-IconFrame-Down", false)
+                -- The bars' own pressed art: the retail sheet on WoW Forever
+                -- (EllesmereUI.StockAtlas) unless the bars wear its own look.
+                if EllesmereUI.IS_FOREVER == true and p.useForeverStyle == true then
+                    tex:SetAtlas("UI-HUD-ActionBar-IconFrame-Down", false)
+                else
+                    EllesmereUI.StockAtlas(tex, "UI-HUD-ActionBar-IconFrame-Down", false)
+                end
                 tex:SetVertexColor(1, 1, 1, 1); tex:SetAlpha(1)
                 return true
             elseif pType == 6 then

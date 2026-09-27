@@ -312,6 +312,7 @@ sortBtn:SetScript("OnLeave", function(self)
 end)
 sortBtn:SetScript("OnClick", function()
     if bankSortLocked then return end
+    PlaySound(SOUNDKIT.UI_BAG_SORTING_01)
     LockBankSort()
     -- Bank cleanup is Blizzard's, and it reads the same fill-direction setting
     -- the bags module's MultiBag sort uses. Right-to-left starts at the first
@@ -820,6 +821,8 @@ local function EnsureBankTabConfigFrame()
     cancelBTCBtn._label:SetText(EllesmereUI.L("Cancel"))
     cancelBTCBtn:SetScript("OnClick", function() EUI_BankTabConfigFrame:Hide() end)
     if EUI.MakeBorder then cancelBTCBtn._border = EUI.MakeBorder(cancelBTCBtn, 1, 1, 1, 0.5, EUI.PP) end
+    -- Controller cursor: Cancel finds this dialog's Cancel button.
+    if EUI.PadCP() then EUI_BankTabConfigFrame.CloseButton = cancelBTCBtn end
 
     function EUI_BankTabConfigFrame:OpenBankTabSettings(tabData, tabId)
         self:Hide()
@@ -2696,6 +2699,9 @@ eventFrame:RegisterEvent("PLAYER_ACCOUNT_BANK_TAB_SLOTS_CHANGED")
 eventFrame:RegisterEvent("PLAYER_MONEY")
 eventFrame:SetScript("OnEvent", function(_, event)
     if event == "BANKFRAME_OPENED" then
+        -- WoW Forever's Gamepad interface style at login: Blizzard's bank
+        -- (left in place) carries the D-pad navigation; ours stays closed.
+        if ns.PadUIStandDown() then return end
         -- Detect portable warbank (AccountBanker = warband only, no character bank)
         _warbandOnly = C_PlayerInteractionManager
             and C_PlayerInteractionManager.IsInteractingWithNpcOfType(Enum.PlayerInteractionType.AccountBanker)
@@ -2721,6 +2727,14 @@ eventFrame:SetScript("OnEvent", function(_, event)
         local bankScale = BP().bagScale or 1
         EUI_Bank:SetScale(bankScale)
         EUI_Bank:Show()
+        -- Controller cursor: scroll step buttons and a visible scrollbar,
+        -- built only once a controller is in use.
+        if EUI_Bank._padBuilt or EUI.PadInUse() then
+            EUI_Bank._padBuilt = true
+            local on = EUI.PadInUse()
+            track.PadSync(on)
+            ns.PadSidebarSync(sidebarHdr, sidebarSF, sidebarChild, "bankSidebarCollapsed", on)
+        end
         -- Auto-open bags alongside bank if not already visible
         if EUI_Bags and not EUI_Bags:IsVisible() then
             EUI_Bags:Show()
@@ -2752,6 +2766,7 @@ eventFrame:SetScript("OnEvent", function(_, event)
         end)
 
     elseif event == "BANKFRAME_CLOSED" then
+        if ns.PadUIStandDown() then return end  -- Forever Gamepad style: ours never opened
         _warbandOnly = false
         _lastTSMBankType = nil
         WipeTransferState()
@@ -2838,6 +2853,11 @@ local loader = CreateFrame("Frame")
 loader:RegisterEvent("PLAYER_LOGIN")
 loader:SetScript("OnEvent", function(self)
     self:UnregisterAllEvents()
+    -- WoW Forever with the Gamepad interface style at login: Blizzard's bank
+    -- keeps the D-pad navigation, so it goes back under its own parent.
+    if EUI.IS_FOREVER and BankFrame and ns.PadUIStandDown() then
+        BankFrame:SetParent(UIParent)
+    end
     -- Apply default view based on setting
     if BankDefaultsToOne() then
         _selectedView = -1
@@ -2846,6 +2866,8 @@ loader:SetScript("OnEvent", function(self)
     if EUI and EUI.RegisterEscapeClose then
         EUI.RegisterEscapeClose(EUI_Bank)
     end
+    -- Controller cursor: Cancel finds the bank's close button.
+    if EUI.PadCP() then EUI_Bank.CloseButton = close end
 
     -- Auto-shift DressUpFrame to the right of the bank when both are open
     local dressUp = _G.DressUpFrame

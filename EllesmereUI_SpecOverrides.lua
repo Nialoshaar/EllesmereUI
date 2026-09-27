@@ -131,7 +131,7 @@ local PxCo = {
         windowBorderSize = true, iconBorderSize = true,
         hoverBorderSize = true, targetBorderSize = true, borderWidth = true,
         party_borderSize = true, party_hoverBorderSize = true,
-        party_targetBorderSize = true,
+        party_targetBorderSize = true, castBorderSize = true,
     },
     memo = {},
 }
@@ -5541,6 +5541,9 @@ local function WatchTick()
     SampleAttribution()
     local root = _G.EllesmereUIFrame
     if not (root and root:IsShown()) then return end
+    -- Folded to the mini window: nothing on the panel can be edited, so skip the
+    -- profile diff; the unfold re-baselines the snapshot (RegisterOnCollapse below).
+    if EllesmereUI._panelCollapsed then return end
     -- Hidden search prebuild mid-session: its selector setters and lazy page
     -- seeding write db.profile; absorb the whole tick (resync) so those writes
     -- can never diff into captures.
@@ -5576,6 +5579,15 @@ local function WatchTick()
     _watchResync = false
     _watchSnap = SnapshotProfiles()
 end
+
+-- Unfolding from the mini window: absorb whatever changed the profiles while the
+-- panel was folded (WatchTick skipped them), so the first widget edit after it
+-- (ProcessNotifiedWrites diffs against the same snapshot) captures only itself.
+EllesmereUI:RegisterOnCollapse(function(on)
+    if not on and (_editGroup or Cond._edit) and _watchSnap then
+        _watchSnap = SnapshotProfiles()
+    end
+end)
 
 -- Page rebuilds lazily seed defaults into profiles; absorb those writes instead of
 -- capturing them (fast-path refreshes don't rebuild rows and keep capture armed).
@@ -5837,7 +5849,8 @@ end
 
 local function EnsureEditBanner()
     if editBanner then return editBanner end
-    local root = _G.EllesmereUIFrame or UIParent
+    -- The panel body, so the banner hides with the window when it collapses.
+    local root = EllesmereUI._panelBody or UIParent
     editBanner = CreateFrame("Frame", nil, root)
     editBanner:SetSize(680, 44)
     -- Sits ON TOP of the visible panel: banner bottom flush with the window's
@@ -5921,7 +5934,7 @@ local function SetEditOverlayShown(shown)
     if shown and not editOverlay then
         local root = _G.EllesmereUIFrame
         if not root then return end
-        editOverlay = CreateFrame("Frame", nil, root)
+        editOverlay = CreateFrame("Frame", nil, EllesmereUI._panelBody)
         editOverlay:SetAllPoints(root)
         editOverlay:SetFrameLevel(root:GetFrameLevel() + 1)
         editOverlay:EnableMouse(false)
@@ -6550,7 +6563,8 @@ local nameIconPopup
 -- icon grid built from defs, Create runs onCreate(p). Callers set the title,
 -- button label, name text and icon selection on every show.
 local function BuildNameIconPopup(defs, onCreate)
-    local p = CreateFrame("Frame", nil, UIParent)
+    -- Controller cursor: overlay parent (UIParent unless a controller cursor is loaded).
+    local p = CreateFrame("Frame", nil, EllesmereUI.OverlayParent())
     p:SetSize(380, 300)
     p:SetPoint("CENTER", UIParent, "CENTER", 0, 60)
     p:SetFrameStrata("FULLSCREEN_DIALOG")
@@ -6642,6 +6656,11 @@ local function BuildNameIconPopup(defs, onCreate)
     cancel:SetScript("OnLeave", function() if xbrd and xbrd.SetColor then xbrd:SetColor(1, 1, 1, 0.22) end end)
     cancel:SetScript("OnClick", function() p:Hide() end)
 
+    -- Controller cursor: its cancel press backs out through Cancel, and the
+    -- panel is a blocker, not a stop.
+    if EllesmereUI.PadCP() then p.CloseButton = cancel end
+    EllesmereUI.TrackOverlay(p)
+    EllesmereUI.PadHint(p, "nodepass")
     return p
 end
 
@@ -6717,6 +6736,8 @@ local function ShowNameIconPopup(specIDs, editing)
         end
     end
     nameIconPopup:Show()
+    -- Controller cursor: move it into the popup.
+    EllesmereUI.PadFocus(nameIconPopup)
 end
 
 local function StartGroupCreation()
@@ -7348,7 +7369,7 @@ function EllesmereUI.SpecOverrides_ToggleCardsPopup(anchorBtn)
         return
     end
     if not cardsPopup then
-        local p = CreateFrame("Frame", nil, _G.EllesmereUIFrame or UIParent)
+        local p = CreateFrame("Frame", nil, EllesmereUI._panelBody or UIParent)
         p:Hide()   -- born hidden so the first Show() fires OnShow (click-off arming)
         p:SetSize(280, 100)
         p:SetFrameStrata("DIALOG")
@@ -7525,13 +7546,16 @@ function Cond.ShowNameIconPopup(conds, keyStr, existing)
         end
     end
     p:Show()
+    -- Controller cursor: move it into the popup.
+    EllesmereUI.PadFocus(p)
 end
 
 -- ---- condition picker popup (checklist + keybind capture) -------------------
 function Cond.ShowPickerPopup(existing)
     local p = Cond._pickerPopup
     if not p then
-        p = CreateFrame("Frame", nil, UIParent)
+        -- Controller cursor: overlay parent (UIParent unless a controller cursor is loaded).
+        p = CreateFrame("Frame", nil, EllesmereUI.OverlayParent())
         p:SetSize(340, 100)
         p:SetPoint("CENTER", UIParent, "CENTER", 0, 60)
         p:SetFrameStrata("FULLSCREEN_DIALOG")
@@ -7731,6 +7755,11 @@ function Cond.ShowPickerPopup(existing)
             p:Hide()
         end)
 
+        -- Controller cursor: its cancel press backs out through Cancel, and the
+        -- panel is a blocker, not a stop.
+        if EllesmereUI.PadCP() then p.CloseButton = cancel end
+        EllesmereUI.TrackOverlay(p)
+        EllesmereUI.PadHint(p, "nodepass")
         Cond._pickerPopup = p
     end
     p._editing = existing
@@ -7748,6 +7777,8 @@ function Cond.ShowPickerPopup(existing)
         or L("New Conditional Group"))
     p._syncKeyRow()
     p:Show()
+    -- Controller cursor: move it into the popup.
+    EllesmereUI.PadFocus(p)
 end
 
 -- ---- cards popup: UNIFIED with the spec overrides popup ----------------------

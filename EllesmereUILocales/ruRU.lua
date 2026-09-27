@@ -392,7 +392,7 @@ L["Custom Item"]                   = "Свой предмет"
 L["Potions & Healthstone"]         = "Зелья и камень здоровья"
 L["Manage shown buffs through Blizzard CDM Settings"] = "Настроить в Blizzard CDM"
 L["This bar will always be attached to your focus target's nameplate"] = "Эта полоса всегда будет прикреплена к индикатору здоровья вашего фокуса."
-L["CDM Buttons can have all their glow and active\nstates changed on a per icon (or synced to the bar)\nbasis. Click on a button to show that button's settings."] = "Свечение кнопок CDM настраивается отдельно\n(или синхронно с панелью).\nНажмите на кнопку для настроек."
+L["CDM buttons can have their glow and active states\nset per icon or synced to the bar. Click a button\nto show its settings."] = "Свечение кнопок CDM настраивается отдельно\n(или синхронно с панелью).\nНажмите на кнопку для настроек."
 L["Buff Bar"]                      = "Панель баффов"
 
 -- == Nameplates ==============================================================

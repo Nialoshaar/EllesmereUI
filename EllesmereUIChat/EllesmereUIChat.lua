@@ -228,17 +228,44 @@ function ns.ChatStyle()
         if not c then return "eui" end
         v = (c.useClassicStyle and "classic") or (c.useBlizzardStyle and "blizzard") or "eui"
         ns._chatStyle = v
+        -- The WoW Forever variant of Blizzard Style, latched with it: the
+        -- Forever client, Blizzard Style, and the sibling useForeverStyle
+        -- flag set together with the Blizzard one (_chatForeverFlag). Unlike
+        -- the other modules' Forever latches it also needs the kit's frame
+        -- art (EllesmereUI.ForeverBorder): a client without it renders plain
+        -- Blizzard Style.
+        ns._chatForeverFlag = v == "blizzard" and EllesmereUI.IS_FOREVER == true
+            and c.useForeverStyle == true
+        ns._chatForever = ns._chatForeverFlag and EllesmereUI.ForeverBorderOK()
     end
     return v
+end
+-- WoW Forever variant: ChatStyle() still reads "blizzard" (every stock site
+-- stays as it is); this gates the Forever-only pieces. False off Forever.
+function ns.ChatForever()
+    if ns._chatStyle == nil then ns.ChatStyle() end
+    return ns._chatForever == true
+end
+-- The variant as the profile flags latched it, art or not: what a profile
+-- flag comparison must read (ChatForever() stays false where the art is
+-- missing, so comparing it to profile flags would never settle).
+function ns.ChatForeverFlag()
+    if ns._chatStyle == nil then ns.ChatStyle() end
+    return ns._chatForeverFlag == true
 end
 -- Both stock styles: Blizzard's own chat frame art and input box are revealed
 -- in place (only the suppression is skipped); our panel paint, borders and
 -- input chrome stand down. The display engine and every text feature run as
 -- in the EllesmereUI look.
 function ns.ChatStock() return ns.ChatStyle() ~= "eui" end
+-- Blizzard's own chat frame art and input box revealed: the stock styles
+-- minus WoW Forever, which strips them like the EllesmereUI look and draws
+-- its bronze kit on our panel instead (options still gate as Blizzard Style).
+function ns.ChatStockArt() return ns.ChatStock() and not ns.ChatForever() end
 -- Blizzard Style only: Blizzard's real tab strip is revealed as well. Classic
--- keeps the ghost tabs over the invisible strip, painted with the vanilla sheet.
-function ns.ChatBlizzTabs() return ns.ChatStyle() == "blizzard" end
+-- and WoW Forever keep the ghost tabs over the invisible strip, painted with
+-- their own tab art.
+function ns.ChatBlizzTabs() return ns.ChatStyle() == "blizzard" and not ns.ChatForever() end
 -- Stock-aware reads of the EllesmereUI-only layout settings (the band behind
 -- the tabs, input on top, the panel and sidebar borders).
 function ECHAT.ExtendBgBehindTabs(cfg) return cfg.extendBgBehindTabs == true and not ns.ChatStock() end
@@ -448,6 +475,8 @@ function ECHAT.ApplyBackground()
             end
         end
     end
+    -- WoW Forever: the colour and texture fill the kit's framed boxes instead.
+    if ns.ChatForever() then ECHAT.FV_PaintFills(texPath, BG_R, BG_G, BG_B, BG_A) end
     local cf1 = _G.ChatFrame1
     if cf1 and CFD(cf1).sidebar then
         local sbBg = CFD(cf1).sidebar:GetRegions()
@@ -1142,6 +1171,11 @@ local function EnsureChatClampInsets()
     if ns.ChatStock() then
         local x = (ECHAT.STOCK_BG_X or 8) + 4
         wl, wr, wt, wb = -x, x, ECHAT.STOCK_CLAMP_TOP, -ECHAT.STOCK_CLAMP_BOTTOM
+        -- WoW Forever: the kit's frame reaches FV.X past each side and its
+        -- own input box further down.
+        if ns.ChatForever() then
+            wl, wr, wb = -ECHAT.FV.X, ECHAT.FV.X, -ECHAT.FV_PanelDrop(GetEditBoxHeight())
+        end
     end
     local l, r, t, b = cf1:GetClampRectInsets()
     if l ~= wl or r ~= wr or t ~= wt or b ~= wb then
@@ -1289,8 +1323,9 @@ function ECHAT.SyncChatFrameState()
     -- and the text frame it hosts -- runs one strata up, in MEDIUM, where the
     -- tab strip and the panel border already live; it takes no mouse, so
     -- hyperlink hit zones are unaffected. The EllesmereUI look keeps the
-    -- chat frame's strata, one level below it.
-    local stockLvl = ns.ChatStock()
+    -- chat frame's strata, one level below it, and so does WoW Forever
+    -- (Blizzard's art stripped; the hosted combat log must draw over ours).
+    local stockLvl = ns.ChatStockArt()
     for i = 1, 20 do
         local cf = _G["ChatFrame" .. i]
         if cf then
@@ -2784,6 +2819,9 @@ function ECHAT.ApplyInputPosition()
     -- the sidebar sits flush against Blizzard's border.
     local stock = ns.ChatStock()
     local stockX = ECHAT.STOCK_BG_X + 4
+    -- WoW Forever: our input box in its own bronze frame under the message
+    -- frame (EllesmereUIChat_Forever.lua records the panel insets).
+    local fv = ns.ChatForever()
 
     for i = 1, 20 do
         local cf = _G["ChatFrame" .. i]
@@ -2794,7 +2832,11 @@ function ECHAT.ApplyInputPosition()
             local bg = CFD(cf).bg
             local div = CFD(cf).inputDiv
 
-            if stock then
+            if fv then
+                ECHAT.FV_SeatInput(cf, eb, inputHeight)
+                ECHAT.ApplyInputTopStrip(cf)
+                if ECHAT.PositionChatPanel then ECHAT.PositionChatPanel(cf) end
+            elseif stock then
                 CFD(cf)._bgIns = { l = -stockX, r = stockX, t = 7, b = -10 }
                 ECHAT.ApplyInputTopStrip(cf)
                 if ECHAT.PositionChatPanel then ECHAT.PositionChatPanel(cf) end
@@ -4005,8 +4047,9 @@ local function SkinEditBox(cf)
 
     -- Stock styles keep Blizzard's own input box: its art (and the chat-type
     -- focus border), anchors, height and text insets are left alone; only
-    -- the font follows the chat's, like the chat text itself.
-    if not ns.ChatStock() then
+    -- the font follows the chat's, like the chat text itself. WoW Forever
+    -- hides that art like the EllesmereUI look and seats the box in its kit.
+    if not ns.ChatStockArt() then
     for _, texName in ipairs({
         name .. "EditBoxLeft", name .. "EditBoxMid", name .. "EditBoxRight",
         name .. "EditBoxFocusLeft", name .. "EditBoxFocusMid", name .. "EditBoxFocusRight",
@@ -4019,18 +4062,22 @@ local function SkinEditBox(cf)
     if eb.focusRight then eb.focusRight:SetAlpha(0) end
 
     -- Flush below the chat frame, for ALL frames including temp 11+.
+    if ns.ChatForever() then
+        ECHAT.FV_PlaceEditBox(cf, eb, GetEditBoxHeight())
+    else
     eb:ClearAllPoints()
     eb:SetPoint("TOPLEFT", cf, "BOTTOMLEFT", -10, -8)
     eb:SetPoint("TOPRIGHT", cf, "BOTTOMRIGHT", 5, -8)
     eb:SetHeight(GetEditBoxHeight())
-    end -- not stock
+    end
+    end -- not stock art
 
     -- Same outline as the chat frames and ECHAT.ApplyFonts (both read
     -- GetOutlineFlag), so the input box always matches the rest of chat --
     -- hardcoding "" here leaves it un-outlined with the drop shadow showing.
     local ebSize = GetEditBoxFontSize(cf:GetID())
     eb:SetFont(GetEditBoxFont(), ebSize, GetOutlineFlag())
-    if not ns.ChatStock() then eb:SetTextInsets(8, 8, 0, 0) end
+    if not ns.ChatStockArt() then eb:SetTextInsets(8, 8, 0, 0) end
 
     -- Custom font for the header ("Say:", "Party:", ...) and suffix. Called at
     -- skin time and on focus-gained (covers chat-type switches). NEVER call
@@ -4254,14 +4301,15 @@ local function SkinChatFrame(cf)
         -- Stock styles: one strata above the chat frame, whose revealed
         -- background would otherwise draw over our text (see
         -- SyncChatFrameState); the chat frame's own strata otherwise.
-        bg:SetFrameStrata(ns.ChatStock() and "MEDIUM" or cf:GetFrameStrata())
-        bg:SetFrameLevel(ns.ChatStock() and (cf:GetFrameLevel() + 1) or max(0, cf:GetFrameLevel() - 1))
+        bg:SetFrameStrata(ns.ChatStockArt() and "MEDIUM" or cf:GetFrameStrata())
+        bg:SetFrameLevel(ns.ChatStockArt() and (cf:GetFrameLevel() + 1) or max(0, cf:GetFrameLevel() - 1))
         bg:SetShown(cf:IsShown())
 
         local bgTex = bg:CreateTexture(nil, "BACKGROUND")
         bgTex._euiOwned = true
         bgTex:SetAllPoints()
-        -- Unpainted under the stock styles (Blizzard's own background shows).
+        -- Unpainted under the stock styles (Blizzard's own background shows;
+        -- WoW Forever fills its own framed boxes).
         bgTex:SetColorTexture(BG_R, BG_G, BG_B, ns.ChatStock() and 0 or BG_A)
 
         -- NO cf:HookScript("OnShow") to mirror visibility: FCF_OpenTemporary- Window
@@ -4270,6 +4318,8 @@ local function SkinChatFrame(cf)
         -- by reload with a whisper open) that closure would run INSIDE the open and
         -- taint the rest of it. The state watcher carries shown-state instead.
         CFD(cf).bg = bg
+        -- WoW Forever: the bronze message and input frames, on our panel.
+        if ns.ChatForever() then ECHAT.FV_BuildPanel(cf, bg, GetEditBoxHeight()) end
     end
 
     -- Sidebar: icon panel beside the main chat frame. Parented to UIParent so it
@@ -4578,7 +4628,8 @@ local function SkinChatFrame(cf)
             end)
 
             CFD(cf).durabilityPct = durabilityPct
-            anchor = durabilityPct
+            -- A percent inside its button is not a tail (as friends above).
+            anchor = durabilityBtn._sbTailInside and durabilityBtn or durabilityPct
         end
 
         -- Friends/Guild/Durability have bespoke creators (count or percent text
@@ -4695,7 +4746,8 @@ local function SkinChatFrame(cf)
         settingsBtn:SetScript("OnClick", function()
             if InCombatLockdown() then return end
             local mf = EUI._mainFrame
-            if mf and mf:IsShown() and EUI:GetActiveModule() == "EllesmereUIChat" then
+            -- Folded to the mini window: fall through to ShowModule, which unfolds it.
+            if mf and mf:IsShown() and not EUI._panelCollapsed and EUI:GetActiveModule() == "EllesmereUIChat" then
                 mf:Hide()
             else
                 EUI:ShowModule("EllesmereUIChat")
@@ -4846,8 +4898,9 @@ local function SkinChatFrame(cf)
         -- against the chat frame inside Blizzard's dock pass, tainting it.
         C_Timer.After(0, function()
             -- Stock styles keep Blizzard's own size grabber (art, anchor and
-            -- alpha); only the follower arming below applies.
-            local stock = ns.ChatStock()
+            -- alpha); only the follower arming below applies. WoW Forever
+            -- strips Blizzard's frame art, so it takes ours.
+            local stock = ns.ChatStockArt()
             if not stock then
             resizeBtn:SetSize(18, 18)
             resizeBtn:ClearAllPoints()
@@ -4913,8 +4966,9 @@ local function SkinChatFrame(cf)
     -- Strip ALL Blizzard textures from the chat frame. Texture objects only, and
     -- skips anything we created (marked with _euiOwned). The stock styles skip
     -- the strip: that art -- the chat background and border Blizzard's own
-    -- hover fade animates -- IS their look (a pure skip, no new write).
-    local stockArt = ns.ChatStock()
+    -- hover fade animates -- IS their look (a pure skip, no new write). WoW
+    -- Forever strips it (its bronze frames are ours).
+    local stockArt = ns.ChatStockArt()
     if cf.GetRegions and not stockArt then
         for i = 1, select("#", cf:GetRegions()) do
             local region = select(i, cf:GetRegions())
@@ -4945,6 +4999,9 @@ local function SkinChatFrame(cf)
         local qbf = _G.CombatLogQuickButtonFrame_Custom
         if qbf and not CFD(qbf).skinned then
             CFD(qbf).skinned = true
+            -- WoW Forever: the bar keeps Blizzard's seat, inside the kit's
+            -- frame round the combat log (ApplyInputPosition), on its fill.
+            local fv = ns.ChatForever()
 
             if qbf.GetRegions then
                 for i = 1, select("#", qbf:GetRegions()) do
@@ -4957,6 +5014,7 @@ local function SkinChatFrame(cf)
 
             -- Flush: filter bar bottom meets bg top (cf top + 3), width matches
             -- the panel.
+            if not fv then
             qbf:ClearAllPoints()
             qbf:SetPoint("BOTTOMLEFT", cf, "TOPLEFT", -10, 3)
             qbf:SetPoint("BOTTOMRIGHT", cf, "TOPRIGHT", 10, 3)
@@ -4965,6 +5023,7 @@ local function SkinChatFrame(cf)
             local qbfBg = qbf:CreateTexture(nil, "BACKGROUND")
             qbfBg:SetAllPoints()
             qbfBg:SetColorTexture(BG_R, BG_G, BG_B, 1)
+            end
 
 
             -- Bottom divider separating filter tabs from messages
@@ -4985,7 +5044,11 @@ local function SkinChatFrame(cf)
                     local fs = btn:GetFontString()
                     if not fs then return end
                     local isActive = btn.GetChecked and btn:GetChecked()
-                    if isActive then
+                    if fv then
+                        -- WoW Forever: the kit's gold and tan.
+                        local c = isActive and ECHAT.FV.gold or ECHAT.FV.tan
+                        fs:SetTextColor(c[1], c[2], c[3], isActive and 1 or 0.8)
+                    elseif isActive then
                         local eg = EUI.ELLESMERE_GREEN or EG
                         fs:SetTextColor(eg.r, eg.g, eg.b, 1)
                     else
@@ -5711,8 +5774,9 @@ initFrame:SetScript("OnEvent", function(self)
                 ECHAT.ApplyBorders()
                 -- Stock styles: the Blizzard chat art re-seat rides the same
                 -- deferred cadence (see SeatStockBackground); later windows
-                -- are seated by the state sync.
-                if ns.ChatStock() then
+                -- are seated by the state sync. Not under WoW Forever: its
+                -- input box is placed like the EllesmereUI look's.
+                if ns.ChatStockArt() then
                     ECHAT._stockSeatArmed = true
                     for i = 1, 20 do
                         local cf = _G["ChatFrame" .. i]

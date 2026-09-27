@@ -590,7 +590,11 @@ initFrame:SetScript("OnEvent", function(self)
                     Set("borderTextureOffsetY", nil)
                     Set("borderTextureShiftX", nil)
                     Set("borderTextureShiftY", nil)
-                    if v ~= "solid" then
+                    local selC = EllesmereUI.GetBorderSelectColor(v)
+                    if selC then
+                        -- The style's select colour (Pixels grey).
+                        Set("borderR", selC.r); Set("borderG", selC.g); Set("borderB", selC.b); Set("borderA", 1)
+                    elseif v ~= "solid" then
                         Set("borderR", 1); Set("borderG", 1); Set("borderB", 1); Set("borderA", 1)
                     else
                         Set("borderR", 0); Set("borderG", 0); Set("borderB", 0); Set("borderA", 1)

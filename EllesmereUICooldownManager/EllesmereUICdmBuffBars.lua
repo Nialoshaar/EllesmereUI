@@ -2633,7 +2633,7 @@ ns.ApplyTBBBlizzIconArt = function(bar, iSize)
             bar._blizzIconMask = mask
         end
         local ov = icon:CreateTexture(nil, "OVERLAY", nil, 5)
-        if classic then ov:SetTexture(ns.CDM_CLASSIC_RING) else ov:SetAtlas(ns.CDM_BLIZZ_OVERLAY) end
+        if classic then ov:SetTexture(ns.CDM_CLASSIC_RING) else ns.CdmStockAtlas(ov, ns.CDM_BLIZZ_OVERLAY, true) end
         ov:SetSnapToPixelGrid(false)
         ov:SetTexelSnappingBias(0)
         bar._blizzIconOverlay = ov

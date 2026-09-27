@@ -16,6 +16,9 @@ EllesmereUI.Lite = EUILite
 -- that vanilla lacks gates on this, never on WOW_PROJECT_ID (Forever is
 -- classed as mainline on purpose).
 EllesmereUI.IS_FOREVER = (EUI_CLIENT_FOREVER == true)
+-- Global cooldown reference spell: Forever reports nothing on 61304 and uses
+-- Classic's 29515.
+EllesmereUI.GCD_SPELL = EllesmereUI.IS_FOREVER and 29515 or 61304
 
 -- The options-panel scale is exposed as a fixed-step dropdown ("EUI Options
 -- Panel Scale"), NOT a free slider, and its getValue matches exact percentages

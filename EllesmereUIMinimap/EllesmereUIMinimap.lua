@@ -147,6 +147,8 @@ local defaults = {
             lock          = false,
             position      = nil,
             visibility    = "always",
+            -- Opacity (Visibility cog), percent 10-100: the alpha of the shown map (EBS._MapAlpha).
+            opacity       = 100,
             visOnlyInstances = false,
             visHideHousing   = false,
             visHideMounted   = false,
@@ -558,7 +560,10 @@ local _flyoutBuilt = false
 
 local function EnsureFlyoutPanel()
     if not flyoutPanel then
-        flyoutPanel = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
+        -- Controller cursor: the shared overlay parent (UIParent without a
+        -- controller UI, so nothing changes then); tracked once scripts are set.
+        local overlayParent = EllesmereUI.OverlayParent()
+        flyoutPanel = CreateFrame("Frame", nil, overlayParent, "BackdropTemplate")
         flyoutPanel:SetFrameStrata("DIALOG")
         flyoutPanel:SetBackdrop({
             bgFile   = "Interface\\ChatFrame\\ChatFrameBackground",
@@ -592,6 +597,12 @@ local function EnsureFlyoutPanel()
         flyoutPanel:HookScript("OnHide", function(self)
             self:SetScript("OnUpdate", nil)
         end)
+        -- Controller cursor: its cancel button presses the toggle (closing the
+        -- grid); the layer shows exactly while the grid does.
+        if overlayParent ~= UIParent then
+            flyoutPanel.CloseButton = flyoutToggle
+            EllesmereUI.TrackOverlay(flyoutPanel)
+        end
     end
 end
 
@@ -3099,7 +3110,7 @@ local function LayoutIndicatorFrames(minimap, p, circleMode)
                 -- texture lives on it directly).
                 local ring = ci.tracking:CreateTexture(nil, "BACKGROUND")
                 ring:SetAllPoints(ci.tracking)
-                ring:SetAtlas("ui-hud-minimap-button")
+                EBS._StockAtlas(ring, "ui-hud-minimap-button")
                 ci.tracking._blizzRing = ring
             end
             ci.tracking:ClearAllPoints()
@@ -3292,6 +3303,15 @@ local function LayoutIndicatorFrames(minimap, p, circleMode)
         -- their own native dress (the common minimap-button library draws
         -- exactly that look).
         if arcR then EBS._ClassicRingButton(flyoutToggle, 0.12, flyoutToggle._norm, flyoutToggle._pushed, flyoutToggle._hl) end
+        -- WoW Forever: a row starting at the bottom-left corner starts past
+        -- the queue eye Action Bars parks there (half the 45px eye, the gap
+        -- and half a ring button, as arc length).
+        if arcR and EllesmereUI.IS_FOREVER and rowMode.arc == 225 then
+            local ab = EllesmereUI._ModuleNS.EllesmereUIActionBars
+            if ab and ab.AB_ForeverEyeParked() then
+                arcT = arcT + arcDir * (22.5 + rowGap + flyoutToggle:GetWidth() / 2) / arcR
+            end
+        end
         flyoutToggle:ClearAllPoints()
         local flyoutVisible = flyoutToggle:IsShown()
         if flyoutVisible then
@@ -3934,6 +3954,11 @@ EBS._MinimapStyle = function()
         if not m then return "eui" end
         v = (m.useClassicStyle and "classic") or (m.useBlizzardStyle and "blizzard") or "eui"
         EBS._styleLatch = v
+        -- The WoW Forever variant of Blizzard Style, latched with it: the
+        -- Forever client, Blizzard Style, and the sibling useForeverStyle
+        -- flag set together with the Blizzard one.
+        EBS._foreverLatch = v == "blizzard" and EllesmereUI.IS_FOREVER == true
+            and m.useForeverStyle == true
     end
     return v
 end
@@ -3941,9 +3966,23 @@ end
 -- placement they share).
 EBS._MinimapBlizz = function() return EBS._MinimapStyle() ~= "eui" end
 EBS._MinimapClassic = function() return EBS._MinimapStyle() == "classic" end
+-- WoW Forever variant: the style still reads "blizzard" (every stock site
+-- stays as it is); this gates the Forever-only pieces. False off Forever.
+EBS._MinimapForever = function()
+    if EBS._styleLatch == nil then EBS._MinimapStyle() end
+    return EBS._foreverLatch == true
+end
+-- SetAtlas for a stock-look texture: EllesmereUI.StockAtlas (retail art
+-- where the Forever client swaps the name), native under the WoW Forever
+-- look. Plain SetAtlas on retail.
+EBS._StockAtlas = function(tex, name, ...)
+    if EBS._MinimapForever() then return tex:SetAtlas(name, ...) end
+    return EllesmereUI.StockAtlas(tex, name, ...)
+end
 -- Published on the module ns for the Style page and the profile-switch check.
 EllesmereUI._ModuleNS[ADDON_NAME].MinimapBlizz = EBS._MinimapBlizz
 EllesmereUI._ModuleNS[ADDON_NAME].MinimapStyle = EBS._MinimapStyle
+EllesmereUI._ModuleNS[ADDON_NAME].MinimapForever = EBS._MinimapForever
 
 -- Zoom button anchor, shared by the apply pass and the SetPoint re-assert
 -- hooks: EUI stacks them at the bottom-right corner; the stock styles place
@@ -3988,32 +4027,64 @@ end
 -- and moving Blizzard's frame here would drag the cluster children anchored
 -- to it (tracking, indicator frame, clock) along and inflate the cluster's
 -- Edit Mode layout rect. Idempotent per apply pass.
+-- On WoW Forever the same compass atlas draws that client's square ring, and
+-- Blizzard re-sizes the backdrop, the compass and its rotate-mode underlay to
+-- the atlas (unscaled) on every Rotate Minimap change: there the backdrop and
+-- compass are pinned by two corners round the map centre, which no SetSize
+-- can undo, and the underlay follows the compass rect.
 EBS._ApplyBlizzMinimapChrome = function(minimap, mapSize)
     local s = mapSize / 198
     local d = GetFFD(minimap)
     local compass = _G.MinimapCompassTexture
+    -- WoW Forever look only: plain Blizzard Style keeps its own geometry everywhere.
+    local fv = EBS._MinimapForever() == true
+    local hw, hh, barY = nil, nil, 24
+    if fv then
+        local rw, rh = EBS._ForeverRingSize()
+        hw, hh = rw * s / 2, rh * s / 2
+        barY = rh / 2 - 89
+    end
     -- MinimapBackdrop is the Minimap's own child frame carrying the compass ring
     -- (and the landing page button, which this module positions itself).
     local backdrop = _G.MinimapBackdrop
     if backdrop and backdrop ~= minimap then
         if backdrop:GetParent() ~= minimap then backdrop:SetParent(minimap) end
         backdrop:ClearAllPoints()
-        backdrop:SetPoint("CENTER", minimap, "CENTER", 0, 0)
-        backdrop:SetSize(215 * s, 226 * s)
+        if fv then
+            backdrop:SetPoint("TOPLEFT", minimap, "CENTER", -hw, hh)
+            backdrop:SetPoint("BOTTOMRIGHT", minimap, "CENTER", hw, -hh)
+        else
+            backdrop:SetPoint("CENTER", minimap, "CENTER", 0, 0)
+            backdrop:SetSize(215 * s, 226 * s)
+        end
         backdrop:SetFrameLevel(minimap:GetFrameLevel() + 3)
         backdrop:SetAlpha(1)
         backdrop:Show()
     end
     if compass then
         compass:ClearAllPoints()
-        compass:SetPoint("CENTER", minimap, "CENTER", 0, 0)
-        compass:SetSize(215 * s, 226 * s)
+        if fv then
+            compass:SetPoint("TOPLEFT", minimap, "CENTER", -hw, hh)
+            compass:SetPoint("BOTTOMRIGHT", minimap, "CENTER", hw, -hh)
+            -- Rotate mode: the fixed circle under the turning chevron (a
+            -- Forever-only region; Blizzard shows and hides it itself).
+            local underlay = _G.MinimapCompassTextureUnderlay
+            if underlay then
+                underlay:ClearAllPoints()
+                underlay:SetAllPoints(compass)
+            end
+        else
+            compass:SetPoint("CENTER", minimap, "CENTER", 0, 0)
+            compass:SetSize(215 * s, 226 * s)
+        end
         compass:SetAlpha(1)
         compass:Show()
     end
     -- Top bar: the stock 175x16 kit, bottom edge 24px above the map's top,
     -- centred 5px right of the map centre in the stock cluster; scaled, so
-    -- the offsets stay unscaled.
+    -- the offsets stay unscaled. Forever's taller ring grows the stock
+    -- container, which lifts the bar to (ring height / 2 - 89) above the map
+    -- (37.5 for the 253px ring), clear of the north chevron.
     local header = d.blizzHeader
     if not header then
         header = CreateFrame("Frame", nil, minimap)
@@ -4025,10 +4096,71 @@ EBS._ApplyBlizzMinimapChrome = function(minimap, mapSize)
         d.blizzHeader = header
     end
     header:ClearAllPoints()
-    header:SetPoint("BOTTOM", minimap, "TOP", 5, 24)
+    header:SetPoint("BOTTOM", minimap, "TOP", 5, barY)
     header:SetScale(s)
     header:SetFrameLevel(minimap:GetFrameLevel() + 4)
     header:Show()
+end
+
+-- WoW Forever's compass atlas size (a 253px square there), read once.
+EBS._ForeverRingSize = function()
+    if not EBS._fvRingW then
+        local info = C_Texture.GetAtlasInfo("UI-HUD-Minimap-Frame")
+        EBS._fvRingW = info and info.width or 253
+        EBS._fvRingH = info and info.height or 253
+    end
+    return EBS._fvRingW, EBS._fvRingH
+end
+
+-- WoW Forever: the queue eye's stock spot on the ring (Blizzard's Forever
+-- layout: 68 left of and 68 below the 198px map's centre, scaled with the
+-- map), for Action Bars to park the eye on. The map frame and the offsets;
+-- nil unless the map wears Blizzard's ring on that client (Blizzard Style or
+-- its WoW Forever variant).
+EBS._QueueEyeSpot = function()
+    if not EllesmereUI.IS_FOREVER or EBS._MinimapStyle() ~= "blizzard" then return nil end
+    local s = (EBS.db.profile.minimap.mapSize or 140) / 198
+    return Minimap, -68 * s, -68 * s
+end
+EllesmereUI._ModuleNS[ADDON_NAME].MinimapQueueEyeSpot = EBS._QueueEyeSpot
+
+-- WoW Forever look: the day/night orb Blizzard hangs on the ring's upper
+-- right (its own sits in the cluster this module hides). Stock geometry: a
+-- 42px bronze rim over a 33px sun or moon disc, centred 53 right of and 89
+-- above the 198px map's centre; never drawn below its native size, while the
+-- offset still scales with the map. Above the compass so the rotating chevron
+-- passes under it, below the ping blocker, mouse-transparent like the stock
+-- one; a child of the map, so it hides with it. Built once under the latch;
+-- the disc repaints only on DIEL_CYCLE_CHANGED.
+EBS._ApplyForeverDiel = function(minimap, mapSize)
+    local d = GetFFD(minimap)
+    local orb = d.foreverDiel
+    if not orb then
+        local rim = C_Texture.GetAtlasInfo("UI-HUD-Minimap-Frame-Cycle")
+        if not rim then return end
+        orb = CreateFrame("Frame", nil, minimap)
+        orb:SetSize(rim.width, rim.height)
+        orb:EnableMouse(false)
+        local disc = orb:CreateTexture(nil, "BACKGROUND", nil, 0)
+        disc:SetPoint("CENTER")
+        local border = orb:CreateTexture(nil, "OVERLAY", nil, 1)
+        border:SetAllPoints()
+        border:SetAtlas("UI-HUD-Minimap-Frame-Cycle")
+        local function Paint(isDay)
+            disc:SetAtlas(isDay and "UI-HUD-Minimap-DayCycle" or "UI-HUD-Minimap-NightCycle", true)
+        end
+        orb:RegisterEvent("DIEL_CYCLE_CHANGED")
+        orb:SetScript("OnEvent", function(_, _, isDay) Paint(isDay) end)
+        Paint(C_DateAndTime.IsDayTime())
+        d.foreverDiel = orb
+    end
+    local s = mapSize / 198
+    local k = math.max(1, s)
+    orb:SetScale(k)
+    orb:ClearAllPoints()
+    orb:SetPoint("CENTER", minimap, "CENTER", 53 * s / k, 89 * s / k)
+    orb:SetFrameLevel(minimap:GetFrameLevel() + 5)
+    orb:Show()
 end
 
 -- Classic WoW UI: the stock zoom button wearing the vanilla button files at
@@ -4199,15 +4331,14 @@ local function ApplyMinimap()
     -- settings-override transitions), before the deferred sweep corrects it. Render the profile's visibility directly instead.
     do
         local vis = EllesmereUI.EvalVisibility and p and EllesmereUI.EvalVisibility(p)
+        -- Opacity in every state: a hidden map carries it into its next Show().
+        EBS._WriteMapAlpha(minimap, p)
         if not EllesmereUI.EvalVisibility or vis == true then
-            minimap:SetAlpha(1)
             minimap:Show()
         elseif vis == "mouseover" then
             -- Idle state is a real Hide(), not alpha 0 -- see UpdateMinimapVisibility.
-            minimap:SetAlpha(1)
             if minimap:IsMouseOver() then minimap:Show() else minimap:Hide() end
         elseif vis then
-            minimap:SetAlpha(1)
             minimap:Show()
         else
             minimap:Hide()
@@ -4261,6 +4392,13 @@ local function ApplyMinimap()
         -- Blizzard Style keeps the stock compass ring (placed once the map has
         -- its size); Classic WoW UI draws its own ring and hides it like EUI.
         if frame and not (blizz and not EBS._MinimapClassic() and name == "MinimapCompassTexture") then frame:Hide() end
+    end
+    -- WoW Forever's Rotate Minimap shows a fixed ring under the compass, and
+    -- Blizzard re-shows it on every rotate change without touching its alpha;
+    -- the looks that hide the compass keep it invisible the same way.
+    if EllesmereUI.IS_FOREVER and EBS._MinimapStyle() ~= "blizzard" then
+        local underlay = _G.MinimapCompassTextureUnderlay
+        if underlay then underlay:SetAlpha(0) end
     end
     -- The addon compartment is placed (or parked) by EBS._ApplyAddonCompartment
     -- at the end of this pass, once the map has its final size and position.
@@ -4329,6 +4467,13 @@ local function ApplyMinimap()
             EBS._ApplyClassicMinimapChrome(minimap, mapSize)
         else
             EBS._ApplyBlizzMinimapChrome(minimap, mapSize)
+            if EllesmereUI.IS_FOREVER and EBS._MinimapForever() then EBS._ApplyForeverDiel(minimap, mapSize) end
+            -- WoW Forever: a queue eye Action Bars parks on the ring follows a
+            -- resize (its anchor on the map already follows a move).
+            if EllesmereUI.IS_FOREVER then
+                local ab = EllesmereUI._ModuleNS.EllesmereUIActionBars
+                if ab then ab.AB_ForeverEyeRelayout() end
+            end
         end
         if GetFFD(minimap).borderHost then GetFFD(minimap).borderHost:Hide() end
         if GetFFD(minimap).circBorder then GetFFD(minimap).circBorder:Hide() end
@@ -5217,6 +5362,40 @@ end
 -------------------------------------------------------------------------------
 --  Visibility (registered with the shared EllesmereUI visibility dispatcher)
 -------------------------------------------------------------------------------
+-- Opacity (the Visibility cog): the alpha every SHOWN state of the map uses. Hiding
+-- stays a real Show()/Hide() in every mode; this only dims a map that is on screen, so
+-- every path that shows the map (the apply pass, the visibility pass, the mouseover
+-- reveal) writes this value, never a bare 1. Frame alpha is inherited, so everything
+-- parented to the map (border, stock chrome, text boxes, buttons, other addons' pins)
+-- dims with it; the engine-drawn blips do not (see the mouseover note below).
+-- SetAlpha is not a protected call, so it is legal in combat too.
+-- Floor 10: below it the map is invisible yet still takes clicks, pings and the wheel;
+-- hiding it is Visibility's job. EBS fields: this file is near the main-chunk local cap.
+-- An open Farming HUD owns the reparented map, so it stays at full alpha until the
+-- HUD's hide edge hands the Opacity back.
+function EBS._MapAlpha(p)
+    if FarmHud and FarmHud:IsShown() then return 1 end
+    local o = p and p.opacity
+    if type(o) ~= "number" then return 1 end
+    return Clamp(o, 10, 100) / 100
+end
+
+-- Write the map alpha only when it differs from the stored one (GetAlpha returns the
+-- stored float, hence the tolerance); a secret stored alpha is simply overwritten.
+function EBS._WriteMapAlpha(mm, p)
+    local a = EBS._MapAlpha(p)
+    local cur = mm:GetAlpha()
+    if (issecretvalue and issecretvalue(cur)) or math.abs(cur - a) > 0.001 then
+        mm:SetAlpha(a)
+    end
+end
+
+-- Opacity setting change or HUD edge: one alpha write, whatever the visibility state.
+function EBS._ApplyMapAlpha()
+    local p = EBS.db and EBS.db.profile and EBS.db.profile.minimap
+    if Minimap and p and p.enabled then EBS._WriteMapAlpha(Minimap, p) end
+end
+
 -- Currently registered secure driver string, nil when none is registered.
 local _mmDriverStr
 
@@ -5254,11 +5433,15 @@ local function UpdateMinimapVisibility()
         return
     end
 
+    -- Opacity first, in every branch (the driver's, and in combat): the alpha is ours
+    -- whoever owns Show()/Hide(), and a hidden map carries it into its next Show().
+    EBS._WriteMapAlpha(minimap, p)
+
     -- Minimap:Show()/Hide() is protected during lockdown, and combat transitions deliver
     -- inside lockdown (PLAYER_REGEN_DISABLED already reports InCombatLockdown), so
     -- skipping the update would leave "Out of Combat" permanently visible and "In Combat"
-    -- permanently hidden. Alpha is no stand-in: engine-drawn map surface/blips ignore
-    -- frame alpha. A secure state driver is the only thing that can legally hide this frame mid-combat, so combat-dependent selections get one; others keep plain Show()/Hide().
+    -- permanently hidden. Alpha is no stand-in: engine-drawn blips ignore frame alpha,
+    -- and a transparent map still takes the mouse. A secure state driver is the only thing that can legally hide this frame mid-combat, so combat-dependent selections get one; others keep plain Show()/Hide().
     local vm = EllesmereUI.GetActiveVisibilityModes(p, "visibility")
     -- Mouseover cannot be expressed as a macro conditional, and the poll's own Show()/Hide() would fight a driver, so those selections stay on Lua.
     local want = EllesmereUI.VisDependsOnCombat(p, "visibility")
@@ -5274,11 +5457,8 @@ local function UpdateMinimapVisibility()
         end
         _mmDriverStr = want
     end
-    if _mmDriverStr then
-        -- The driver owns Show()/Hide() from here. Alpha stays ours and must be full: leftover mouseover transparency would keep the frame invisible anyway.
-        minimap:SetAlpha(1)
-        return
-    end
+    -- The driver owns Show()/Hide() from here; the alpha set above is all this pass adds.
+    if _mmDriverStr then return end
 
     if InCombatLockdown() then return end
     local vis = EllesmereUI.EvalVisibility(p)
@@ -5288,10 +5468,8 @@ local function UpdateMinimapVisibility()
         -- screen until the first hover. Hide() is also exactly what the shared
         -- mouseover poll applies, so both ends of the mode agree. Shown (not hidden)
         -- while the cursor already sits on the map, so a re-apply mid-hover cannot blink.
-        minimap:SetAlpha(1)
         if minimap:IsMouseOver() then minimap:Show() else minimap:Hide() end
     elseif vis then
-        minimap:SetAlpha(1)
         minimap:Show()
     else
         minimap:Hide()
@@ -5357,6 +5535,9 @@ do
     end
 
     local function CreateMenuFrame()
+        -- Never register this with the controller cursor (nor the escape
+        -- proxy): it stays shown while parked off-screen, so the cursor would
+        -- count it as open forever and hold the D-pad.
         menuFrame = CreateFrame("Frame", "EllesmereUIMicroMenu", UIParent, "BackdropTemplate")
         menuFrame:SetFrameStrata("TOOLTIP")
         menuFrame:SetBackdrop({
@@ -5525,6 +5706,7 @@ function EBS:OnInitialize()
     _G._EMM_DB           = EBS.db
     _G._EMM_ApplyMinimap = ApplyMinimap
     _G._EMM_FullRebuildMinimap = FullRebuildMinimap
+    _G._EMM_ApplyMapAlpha = EBS._ApplyMapAlpha
 
     -- Register visibility updater + mouseover target
     EllesmereUI.RegisterVisibilityUpdater(UpdateMinimapVisibility)
@@ -5539,6 +5721,9 @@ function EBS:OnInitialize()
             if not (p and p.enabled) then return false end
             -- Hover-gated sets only reveal while their conditions pass.
             return EllesmereUI.VisWantsMouseover(p, "visibility")
+        end, function()
+            -- A hover reveal shows the map at its Opacity, not full alpha.
+            return EBS._MapAlpha(EBS.db and EBS.db.profile and EBS.db.profile.minimap)
         end)
     end
 end
@@ -5675,7 +5860,9 @@ do
             if host then host:SetAlpha(alpha) end
         end
 
-        FarmHud:HookScript("OnShow", function() ToggleMinimapBorders(false) end)
-        FarmHud:HookScript("OnHide", function() ToggleMinimapBorders(true) end)
+        -- The HUD owns the map while shown (full alpha, see EBS._MapAlpha); its hide
+        -- edge hands our Opacity back.
+        FarmHud:HookScript("OnShow", function() ToggleMinimapBorders(false); EBS._ApplyMapAlpha() end)
+        FarmHud:HookScript("OnHide", function() ToggleMinimapBorders(true); EBS._ApplyMapAlpha() end)
     end)
 end

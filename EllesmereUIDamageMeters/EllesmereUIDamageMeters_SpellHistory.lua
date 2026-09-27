@@ -1103,8 +1103,9 @@ local function BuildBarWindow()
 
         -- Header (inside the classic box's line; flush on every other look)
         local ci = ns.DMClassicInset()
+        -- (Its fixed 22, plus the Forever header band's rail under the variant.)
         local hdr = CreateFrame("Frame", nil, frame)
-        hdr:SetHeight(22)
+        hdr:SetHeight(22 + ns.DMFvRail(22))
         hdr:SetPoint("TOPLEFT", frame, "TOPLEFT", ci, -ci); hdr:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -ci, -ci)
         hdr:SetFrameLevel(frame:GetFrameLevel() + 5)
         hdr:EnableMouse(true)
@@ -1115,7 +1116,7 @@ local function BuildBarWindow()
         frame._hdrBg = hdrBg
 
         local title = hdr:CreateFontString(nil, "OVERLAY")
-        title:SetPoint("LEFT", hdr, "LEFT", 6, 0)
+        title:SetPoint("LEFT", hdr, "LEFT", 6, ns.DMHdrLift(22))
         SetFont(title, 11)
         title:SetText("Spell History")
         frame._title = title
@@ -1133,7 +1134,7 @@ local function BuildBarWindow()
         local function MakeHdrBtn(texFile, xOff, tooltip, onClick, artKey)
             local btn = CreateFrame("Button", nil, hdr)
             btn:SetSize(btnSize, btnSize)
-            btn:SetPoint("RIGHT", hdr, "RIGHT", xOff, 0)
+            btn:SetPoint("RIGHT", hdr, "RIGHT", xOff, ns.DMHdrLift(22))
             btn:SetFrameLevel(hdr:GetFrameLevel() + 2)
             local icon = btn:CreateTexture(nil, "ARTWORK")
             icon:SetAllPoints()
@@ -1161,7 +1162,8 @@ local function BuildBarWindow()
 
         -- Btn 1 (rightmost): Settings
         MakeHdrBtn(MEDIA .. "dm_settings.png", -(btnPad + 2), "Settings", function()
-            if ns._optionsOpen then
+            -- Folded to the mini window: fall through to ShowModule, which unfolds it.
+            if ns._optionsOpen and not EUI._panelCollapsed then
                 EUI:Hide()
                 return
             end
@@ -1194,7 +1196,7 @@ local function BuildBarWindow()
         end)
 
         -- Btn 3: Resize (width drag)
-        local resizeBtnHdr = MakeHdrBtn(MEDIA .. "dm_width_resize.png", -(btnSize * 2 + btnPad * 3 + 2), "Resize Width", function() end)
+        local resizeBtnHdr = MakeHdrBtn(MEDIA .. "dm_width_resize.png", -(btnSize * 2 + btnPad * 3 + 2), "Resize Width", function() end, "resize")
         -- Override: drag to resize width
         local resizeStartX, resizeStartW
         local resizeFrame = CreateFrame("Frame")
@@ -1260,7 +1262,7 @@ local function BuildBarWindow()
     ns.DMPaintHeaderBg(_barWin._hdrBg, hR, hG, hB, dmCfg.hdrBgAlpha or 1, sh.bgR or 0, sh.bgG or 0, sh.bgB or 0)
 
     local tR, tG, tB
-    if dmCfg.hdrTextUseAccent ~= false then tR, tG, tB = GetAccentRGB()
+    if dmCfg.hdrTextUseAccent ~= false then tR, tG, tB = ns.DMTitleRGB()
     else local tc = dmCfg.hdrTextColor; tR = tc and tc.r or 1; tG = tc and tc.g or 1; tB = tc and tc.b or 1 end
     _barWin._title:SetTextColor(tR, tG, tB, 1)
 
@@ -1278,7 +1280,7 @@ local function BuildBarWindow()
 
     -- Size: width from DB, height auto-calculated from maxBars (plus the
     -- classic box's inset above and below)
-    local hdrH = hideTop and 0 or 22
+    local hdrH = hideTop and 0 or (22 + ns.DMFvRail(22))
     local maxBars = sh.maxBars or 5
     local _, _, stride = ns._RowMetrics(sh.shBarHeight or 18, dmCfg.barSpacing or 2, _barWin:GetEffectiveScale())
     local autoH = hdrH + maxBars * stride + ci * 2

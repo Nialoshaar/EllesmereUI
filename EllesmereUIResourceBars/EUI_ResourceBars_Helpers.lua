@@ -140,6 +140,9 @@ ns.IsBarTypeSecondary = function()
 	local info = gsr and gsr()
 	if info and info.power == "IRONFUR_BAR" then return true end            -- Guardian Ironfur bar
 	if info and info.power == "IGNOREPAIN_BAR" then return true end         -- Prot Warrior Ignore Pain bar
+	-- WoW Forever: no bar-type class resource exists there (the runtime never
+	-- builds one), so the retail spec positions below do not apply.
+	if EllesmereUI.IS_FOREVER then return false end
 	if cf == "DRUID" and spec == 1 then return true end                     -- Balance (Astral Power bar)
 	if cf == "SHAMAN" and spec == 1 then return true end                    -- Elemental
 	if cf == "PRIEST" and spec == 3 then return true end                    -- Shadow

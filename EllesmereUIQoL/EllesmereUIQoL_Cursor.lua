@@ -28,6 +28,7 @@ local sin, cos = _G.sin or math.sin, _G.cos or math.cos  -- WoW globals are degr
 local GetTime = GetTime
 local GetCursorPosition = GetCursorPosition
 local GetSpellCooldown = C_Spell.GetSpellCooldown
+local GCD_SPELL = EllesmereUI.GCD_SPELL
 local UnitCastingInfo = UnitCastingInfo
 local UnitChannelInfo = UnitChannelInfo
 
@@ -407,6 +408,17 @@ local function CreateRing(parent, radius, ringTex, r, g, b, a)
         self:Show()
     end
 
+    -- Secret-value path: the engine draws the real cooldown from the duration
+    -- object; ceiling only bounds how long the ring frame stays shown
+    function ring:StartRingFromDuration(durObj, ceiling)
+        self.dur = 0
+        self.maxDur = ceiling
+        self._fg:Hide()
+        self._cd:SetCooldownFromDurationObject(durObj)
+        self._cd:Show()
+        self:Show()
+    end
+
     function ring:StopRing()
         self._cd:Hide()
         self._fg:Hide()
@@ -436,6 +448,25 @@ local gcdAttached = true  -- follows cursor by default
 local function GCD_DB()
     local p = ECL.db and ECL.db.profile
     return p and p.gcd or {}
+end
+
+-- Start the ring from the live GCD (does nothing when no GCD is running).
+-- Called from the cast events and from the combat-start visibility pass.
+local function ArmGCDRing()
+    if not gcdRing then return end
+    local cdData = GetSpellCooldown(GCD_SPELL)
+    if not cdData then return end
+    local d, s = cdData.duration, cdData.startTime
+    if issecretvalue(d) or issecretvalue(s) then
+        -- Restricted combat hides the numbers: hand the GCD's duration object to
+        -- the swipe (the Resource Bars GCD bar's native path). isActive is never
+        -- secret and skips a GCD that already ended (the SUCCEEDED of a hard cast).
+        if not cdData.isActive then return end
+        local durObj = C_Spell.GetSpellCooldownDuration(GCD_SPELL)
+        if durObj then gcdRing:StartRingFromDuration(durObj, 1.6) end
+    elseif d and d > 0 and d <= 1.6 and s and s > 0 then
+        gcdRing:StartRing(GetTime() - s, d)
+    end
 end
 
 local function CreateGCDCircle()
@@ -468,26 +499,24 @@ local function CreateGCDCircle()
         if g2.combatOnly and not InCombatLockdown() then return end
         -- On cancelled/failed/interrupted casts the GCD resets stop the ring
         if event == "UNIT_SPELLCAST_FAILED" or event == "UNIT_SPELLCAST_INTERRUPTED" or event == "UNIT_SPELLCAST_STOP" then
-            local cdData = GetSpellCooldown(61304)
-            if not cdData or not cdData.duration or cdData.duration <= 0 or not cdData.startTime or cdData.startTime <= 0 then
+            local cdData = GetSpellCooldown(GCD_SPELL)
+            local stillActive = false
+            if cdData then
+                -- A secret read (restricted combat) keeps the ring: the GCD may still
+                -- be running (same rule as the Resource Bars GCD bar stop handler).
+                local d, s = cdData.duration, cdData.startTime
+                if issecretvalue(d) or issecretvalue(s) then
+                    stillActive = true
+                else
+                    stillActive = (d and d > 0 and s and s > 0) and true or false
+                end
+            end
+            if not stillActive then
                 gcdRing:StopRing()
             end
             return
         end
-        -- Query GCD via the reference spell; duration may be a secret number
-        -- so wrap the comparison in pcall to avoid taint errors
-        local cdData = GetSpellCooldown(61304)
-        if not cdData or not cdData.startTime then return end
-        local ok, elapsed, dur = pcall(function()
-            local d = cdData.duration
-            local s = cdData.startTime
-            if d and d > 0 and d <= 1.6 and s and s > 0 then
-                return GetTime() - s, d
-            end
-        end)
-        if ok and elapsed then
-            gcdRing:StartRing(elapsed, dur)
-        end
+        ArmGCDRing()
     end)
 
     gcdRoot:Hide()
@@ -653,6 +682,11 @@ UpdateVisibility = function()
                 gcdRoot:SetScript("OnUpdate", nil)
             else
                 gcdRoot:Show()
+                -- Combat Only: the pull cast lands before combat starts, so the
+                -- OnEvent gate dropped its GCD; pick up whatever of it remains
+                if g.combatOnly and gcdRing and gcdRing.maxDur <= 0 then
+                    ArmGCDRing()
+                end
                 -- Re-apply cursor tracking since cursor visibility may have changed.
                 -- Skip while unlocked: the mover owns position, and re-arming this
                 -- would fight it (see the same gate in ApplyGCDCircle).

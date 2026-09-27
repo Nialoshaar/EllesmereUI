@@ -5,7 +5,7 @@
 ## Group: EllesmereUI
 ## Notes: Essential tools for WoW Forever.
 ## Author: Ellesmere
-## Version: 9.2.9
+## Version: 9.3
 ## Dependencies: EllesmereUI
 ## IconTexture: Interface\AddOns\EllesmereUI\media\eg-logo.tga
 
@@ -17,4 +17,6 @@ EllesmereUIForeverEssentials_FlightTimerData.lua
 EllesmereUIForeverEssentials_FlightTimer.lua
 
 # Threat (threat meter)
+EllesmereUIForeverEssentials_ThreatData.lua
+EllesmereUIForeverEssentials_Window.lua
 EllesmereUIForeverEssentials_ThreatMeter.lua
