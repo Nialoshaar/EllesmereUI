@@ -252,10 +252,18 @@ local function ApplyShellStyle(winKey)
     end
 end
 
+-- Outside painters that follow a window's style (the Friends module's own
+-- window chrome) repaint on the same live refresh as the shells.
+local _styleCallbacks = {}
+function WSkin.OnStylesChanged(fn)
+    _styleCallbacks[#_styleCallbacks + 1] = fn
+end
+
 -- Re-resolve every registered shell (style switches + Modern color edits apply
 -- live; no reload). Exposed on EllesmereUI so the options page can call it.
 function WSkin.RefreshStyles()
     for winKey in pairs(_shells) do ApplyShellStyle(winKey) end
+    for _, fn in ipairs(_styleCallbacks) do pcall(fn) end
 end
 if EUI then EUI._WSkinRefreshStyles = WSkin.RefreshStyles end
 
@@ -276,6 +284,29 @@ function WSkin.AdoptShell(winKey, frame, atlasTex, overlayTex)
     if not entry then entry = {}; _shells[winKey] = entry end
     entry[frame] = true
     ApplyShellStyle(winKey)
+end
+
+-- Cover-fit the shell backdrop into a fw x fh rect: native aspect 561x433,
+-- centred crop of the overflow, never stretched. Pure, no hooks: Shell calls
+-- it from its size hook; the Friends module calls it when it paints.
+function WSkin.CoverFit(tex, fw, fh)
+    -- SECRECY TEST FIRST. `fw == 0` is itself a COMPARISON, so on a frame
+    -- whose size is secret (any window sized from widget content -- the
+    -- delve picker and the choice windows both are) it throws before a
+    -- later issecretvalue guard could reject it:
+    --   "attempt to compare local 'fw' (a secret number value)"
+    if issecretvalue(fw) or issecretvalue(fh) then return end
+    if not fw or fw == 0 or not fh or fh == 0 then return end
+    local fa = fw / fh
+    if fa > BG_ASPECT then
+        local visV = BASE_V * (BG_ASPECT / fa)
+        local trimV = (BASE_V - visV) / 2
+        tex:SetTexCoord(BASE_L, BASE_R, BASE_T + trimV, BASE_B - trimV)
+    else
+        local visU = BASE_U * (fa / BG_ASPECT)
+        local trimU = (BASE_U - visU) / 2
+        tex:SetTexCoord(BASE_L + trimU, BASE_R - trimU, BASE_T, BASE_B)
+    end
 end
 
 -- Full shell build for a window pack: fade Blizzard art, lay both backdrop
@@ -302,25 +333,7 @@ function WSkin.Shell(winKey, frame, opts)
 
         -- Cover-fit: crop the atlas so it fills the frame without stretching.
         local function UpdateBgTexCoords()
-            local fw, fh = frame:GetSize()
-            -- SECRECY TEST FIRST. `fw == 0` is itself a COMPARISON, so on a
-            -- frame whose size is secret (any window sized from widget content
-            -- -- the delve picker and the choice windows both are) it throws
-            -- before the issecretvalue guard below could reject it:
-            --   "attempt to compare local 'fw' (a secret number value)"
-            -- The guard existed but ran one line too late.
-            if issecretvalue and (issecretvalue(fw) or issecretvalue(fh)) then return end
-            if not fw or fw == 0 or not fh or fh == 0 then return end
-            local fa = fw / fh
-            if fa > BG_ASPECT then
-                local visV = BASE_V * (BG_ASPECT / fa)
-                local trimV = (BASE_V - visV) / 2
-                bg:SetTexCoord(BASE_L, BASE_R, BASE_T + trimV, BASE_B - trimV)
-            else
-                local visU = BASE_U * (fa / BG_ASPECT)
-                local trimU = (BASE_U - visU) / 2
-                bg:SetTexCoord(BASE_L + trimU, BASE_R - trimU, BASE_T, BASE_B)
-            end
+            WSkin.CoverFit(bg, frame:GetSize())
         end
         -- One script hook instead of three setter hooks: it also fires for
         -- anchor-driven resizes the setters never saw.
@@ -1140,6 +1153,14 @@ local function UpdateAllTabs()
     end
 end
 WSkin.UpdateAllTabs = UpdateAllTabs
+
+-- Visual selection only; nil returns to the native tab system's selection.
+-- Keep the override outside the frame so Blizzard's tab state stays untouched.
+function WSkin.SetTabSelection(tab, selected)
+    if not tab or tab:IsForbidden() then return end
+    GetFFD(tab).selOverride = selected
+    UpdateTabVisual(tab)
+end
 
 local _tabHooked = false
 local function EnsureTabHooks()

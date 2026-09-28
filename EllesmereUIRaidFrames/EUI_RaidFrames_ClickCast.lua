@@ -126,21 +126,65 @@ local REZ_BY_CLASS = {
     WARLOCK     = { battle = 20707 },
 }
 
--- Union of every dispel/external/rez spell ID (exposed as ns.CC_PRESET_SPELL_IDS)
-local PRESET_SPELL_IDS = {}
-for _, s in ipairs(DISPEL_SPELLS) do PRESET_SPELL_IDS[s.id] = true end
-for _, s in ipairs(EXTERNAL_SPELLS) do PRESET_SPELL_IDS[s.id] = true end
-for _, kit in pairs(REZ_BY_CLASS) do
-    for _, sid in pairs(kit) do PRESET_SPELL_IDS[sid] = true end
+-- WoW Forever: the vanilla spells. An entry's alts are its higher ranks and a
+-- rez slot lists every rank ID, rank 1 first; /cast by name casts the highest
+-- rank the character knows. Each class's dispels run in priority order (the
+-- first known line fires), Paladin is the only class with an external, and
+-- there is no group rez and no Warlock entry.
+if EllesmereUI.IS_FOREVER then
+    DISPEL_SPELLS = {
+        { id = 527,   name = "Dispel Magic",        class = "PRIEST", alts = { 988 } },
+        { id = 552,   name = "Abolish Disease",     class = "PRIEST" },
+        { id = 528,   name = "Cure Disease",        class = "PRIEST" },
+        { id = 4987,  name = "Cleanse",             class = "PALADIN" },
+        { id = 1152,  name = "Purify",              class = "PALADIN" },  -- before Cleanse is learned
+        { id = 2782,  name = "Remove Curse",        class = "DRUID" },
+        { id = 2893,  name = "Abolish Poison",      class = "DRUID" },
+        { id = 8946,  name = "Cure Poison",         class = "DRUID" },
+        { id = 526,   name = "Cure Poison",         class = "SHAMAN" },
+        { id = 2870,  name = "Cure Disease",        class = "SHAMAN" },
+        { id = 475,   name = "Remove Lesser Curse", class = "MAGE" },
+        { id = 19505, name = "Devour Magic",        class = "WARLOCK", pet = true, alts = { 19731, 19734, 19736 } }, -- Felhunter
+    }
+    EXTERNAL_SPELLS = {
+        { id = 6940, name = "Blessing of Sacrifice",  class = "PALADIN", alts = { 20729 } },
+        { id = 1022, name = "Blessing of Protection", class = "PALADIN", alts = { 5599, 10278 } },
+    }
+    REZ_BY_CLASS = {
+        PRIEST  = { single = { 2006, 2010, 10880, 10881, 20770 } },
+        PALADIN = { single = { 7328, 10322, 10324, 20772, 20773 } },
+        SHAMAN  = { single = { 2008, 20609, 20610, 20776, 20777 } },
+        DRUID   = { battle = { 20484, 20739, 20742, 20747, 20748 } },
+    }
 end
-ns.CC_PRESET_SPELL_IDS = PRESET_SPELL_IDS
 
 -- Every rez spell ID across all classes; exempt from the exists/nodead corpse
--- filter in macro building (corpses are a rez's only valid target).
+-- filter in macro building (corpses are a rez's only valid target). A kit slot
+-- holds one spell ID or a list of rank IDs.
 local REZ_SPELL_IDS = {}
 for _, kit in pairs(REZ_BY_CLASS) do
-    for _, sid in pairs(kit) do REZ_SPELL_IDS[sid] = true end
+    for _, slot in pairs(kit) do
+        if type(slot) == "table" then
+            for _, sid in ipairs(slot) do REZ_SPELL_IDS[sid] = true end
+        else
+            REZ_SPELL_IDS[slot] = true
+        end
+    end
 end
+
+-- Union of every dispel/external/rez spell ID, alternate ranks included
+-- (exposed as ns.CC_PRESET_SPELL_IDS)
+local PRESET_SPELL_IDS = {}
+for _, list in ipairs({ DISPEL_SPELLS, EXTERNAL_SPELLS }) do
+    for _, s in ipairs(list) do
+        PRESET_SPELL_IDS[s.id] = true
+        if s.alts then
+            for _, alt in ipairs(s.alts) do PRESET_SPELL_IDS[alt] = true end
+        end
+    end
+end
+for sid in pairs(REZ_SPELL_IDS) do PRESET_SPELL_IDS[sid] = true end
+ns.CC_PRESET_SPELL_IDS = PRESET_SPELL_IDS
 
 -- True when a binding is a rez spell (by stored ID, with a name fallback for
 -- legacy bindings saved before IDs were stored). Fallback name lookup is cached
@@ -336,7 +380,12 @@ end
 -- and a binding with no stored id cannot be judged, so it counts as known.
 local PET_SPELL_IDS = {}
 for _, sp in ipairs(DISPEL_SPELLS) do
-    if sp.pet then PET_SPELL_IDS[sp.id] = true end
+    if sp.pet then
+        PET_SPELL_IDS[sp.id] = true
+        if sp.alts then
+            for _, alt in ipairs(sp.alts) do PET_SPELL_IDS[alt] = true end
+        end
+    end
 end
 
 local function IsSpellIDKnown(id)
@@ -715,8 +764,18 @@ local function BuildRezLines(binding, guard, standalone)
     local kit = REZ_BY_CLASS[pClass]
     if not kit then return nil end
     local bank = Enum.SpellBookSpellBank and Enum.SpellBookSpellBank.Player
+    -- A slot is one spell ID or a list of rank IDs. The first rank found in the
+    -- book answers: every rank shares the name, and /cast by name casts the
+    -- highest rank known.
     local function Known(sid)
         if not sid then return nil end
+        if type(sid) == "table" then
+            for i = 1, #sid do
+                local name = Known(sid[i])
+                if name then return name end
+            end
+            return nil
+        end
         if C_SpellBook.IsSpellInSpellBook and bank then
             if not C_SpellBook.IsSpellInSpellBook(sid, bank, true) then return nil end
         end
@@ -936,6 +995,7 @@ function ns.CC_GetBindingIcon(b)
         local kit = REZ_BY_CLASS[pc]
         if kit then
             local sid = kit.battle or kit.group or kit.single
+            if type(sid) == "table" then sid = sid[1] end
             if sid then
                 local tex = C_Spell.GetSpellTexture and C_Spell.GetSpellTexture(sid)
                 if tex then return tex end
@@ -2353,7 +2413,9 @@ function ns.CC_BuildPage(pageName, parent, yOffset)
     if hasDynamicRez then
         local kit = REZ_BY_CLASS[pClass]
         if kit then
-            for _, sid in pairs(kit) do
+            for _, slot in pairs(kit) do
+                -- Every rank of a slot shares one name.
+                local sid = type(slot) == "table" and slot[1] or slot
                 local name = C_Spell and C_Spell.GetSpellName and C_Spell.GetSpellName(sid)
                 if name then boundSpells[name] = true end
             end
@@ -2552,7 +2614,7 @@ function ns.CC_BuildPage(pageName, parent, yOffset)
             delBtn:SetFrameLevel(tile:GetFrameLevel() + 2)
             local delTex = delBtn:CreateTexture(nil, "ARTWORK")
             delTex:SetAllPoints()
-            delTex:SetAtlas("common-icon-delete")
+            EllesmereUI.SetDeleteIcon(delTex)
             delTex:SetDesaturated(true)
             delTex:SetVertexColor(0.75, 0.75, 0.75)
             delTex:SetAlpha(0.5)

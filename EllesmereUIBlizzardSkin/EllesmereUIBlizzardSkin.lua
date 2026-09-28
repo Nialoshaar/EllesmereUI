@@ -101,6 +101,12 @@ do
           keys = { "queuestatus", "delvepicker", "playerchoice", "trade" } },
         { marker = "bnetToastStyleSeeded", keys = { "bnettoast" } },
     }
+    -- Retail only: this shipment is when the Friends List card started
+    -- skinning retail's friends window. WoW Forever's card has driven its own
+    -- friends skin since that file shipped, so those accounts stay as set.
+    if not EllesmereUI.IS_FOREVER then
+        BATCHES[#BATCHES + 1] = { marker = "socialLegacySkinSeeded", keys = { "socialui" } }
+    end
     local function SeedBatch(marker, newKeys)
         if EllesmereUIDB[marker] then return end
         EllesmereUIDB[marker] = true

@@ -218,6 +218,7 @@ K.lastAvgIlvl = nil
 -- from its sampler (swatch "Dynamic").
 local ICON_DEFAULTS = {
     gold        = { 0.886, 0.675, 0.478 },  -- E2AC7A
+    bags        = { 0.886, 0.675, 0.478 },  -- E2AC7A, same bag art as gold
     travel      = { 0.596, 0.804, 0.961 },  -- 98CDF5
     currency    = { 0.886, 0.675, 0.478 },  -- E2AC7A
     greatvault  = { 0.569, 0.502, 1 },  -- 9180FF

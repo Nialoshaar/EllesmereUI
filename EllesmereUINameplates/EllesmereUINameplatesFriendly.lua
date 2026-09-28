@@ -1039,8 +1039,7 @@ local friendlyFrameCache = CreateFramePool("Frame", UIParent, nil, nil, false, f
 
     plate.health = CreateFrame("StatusBar", nil, plate)
     plate.health:SetFrameLevel(10)
-    -- WoW Forever: shifted left so the bar and its level box centre on the unit.
-    plate.health:SetPoint("CENTER", -ns.NP_ForeverNameDX(plate), FRIENDLY_PLATE_Y_OFFSET)
+    plate.health:SetPoint("CENTER", 0, FRIENDLY_PLATE_Y_OFFSET)
     plate.health:SetSize(GetFriendlyHealthBarWidth(), GetFriendlyHealthBarHeight())
     plate.health:SetStatusBarTexture("Interface\\Buttons\\WHITE8x8")
 
@@ -1374,12 +1373,10 @@ function FriendlyFrame:UpdateSubText()
         -- Both texts hang off the HEALTH BAR (a frame) with computed numbers:
         -- the name's bottom sits at off, so the guild line's top sits 1px
         -- under it. Chaining the line off the name's rect instead is what
-        -- made it jitter on moving plates. WoW Forever centres both over the
-        -- bar and its level box together.
-        local dx = ns.NP_ForeverNameDX(self)
-        self.name:SetPoint("BOTTOM", self.health, "TOP", dx, off)
+        -- made it jitter on moving plates.
+        self.name:SetPoint("BOTTOM", self.health, "TOP", 0, off)
         self.subText1:ClearAllPoints()
-        self.subText1:SetPoint("TOP", self.health, "TOP", dx, off - 1)
+        self.subText1:SetPoint("TOP", self.health, "TOP", 0, off - 1)
     end
 end
 
@@ -1643,9 +1640,8 @@ function ns.RefreshFriendlyPlateSize()
 end
 
 -- WoW Forever's Show Level Box flipped (ns.RefreshAllSettings): each shown
--- friendly plate gains or parks its box, the bar and name re-centring with
--- it, and a side raid marker re-gaps off the bar. A pooled plate catches up
--- through its next ApplyBorder.
+-- friendly plate gains or parks its box, and a side raid marker re-gaps off
+-- the bar. A pooled plate catches up through its next ApplyBorder.
 function ns.NP_ForeverFriendlyBoxes()
     local h = GetFriendlyHealthBarHeight()
     for _, plate in pairs(friendlyPlates) do

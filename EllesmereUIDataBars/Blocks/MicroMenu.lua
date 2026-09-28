@@ -569,7 +569,8 @@ ns.BlockFactories.micromenu = function(blockCfg, slot, content, barCtx)
             ns.Tip_AddDouble('|cFFFFFFFF' .. L["ACH_POINTS"] .. '|r', '|cFF' .. hexAccent .. pts .. '|r', 1, 1, 1, r, g, b)
         end
 
-        if name == 'journal' then
+        -- Delve Journey and Companion Level rows: WoW Forever has no Delves.
+        if name == 'journal' and not EllesmereUI.IS_FOREVER then
             local hexAccent = format('%02x%02x%02x', floor(r * 255), floor(g * 255), floor(b * 255))
             ns.Tip_AddLine(" ")
             local delveRank, delveMax = 0, '?'

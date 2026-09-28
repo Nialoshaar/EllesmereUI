@@ -1143,6 +1143,49 @@ initFrame:SetScript("OnEvent", function(self)
             })
         end
 
+        if not EllesmereUI.IS_FOREVER then
+            local seasonRow
+            seasonRow, h = W:DualRow(parent, y,
+                { type="toggle", text="Season Panel",
+                  tooltip="Show an Omnium Folio shortcut to the right of the socket panel during Midnight seasons. The cog adds a Great Vault shortcut.",
+                  getValue=function() return not (EllesmereUIDB and EllesmereUIDB.charSheetSeasonPanel == false) end,
+                  setValue=function(v)
+                      if not EllesmereUIDB then EllesmereUIDB = {} end
+                      EllesmereUIDB.charSheetSeasonPanel = v
+                      if EllesmereUI._refreshCharSheetSocketPanel then EllesmereUI._refreshCharSheetSocketPanel() end
+                      EllesmereUI:RefreshPage()
+                  end },
+                { type="toggle", text="Hide Slot Flyout Arrows",
+                  tooltip="Hide the arrows beside equipment slots on the Equipment tab. The slot flyouts remain usable.",
+                  getValue=function() return EllesmereUIDB and EllesmereUIDB.charSheetHideSlotFlyoutArrows == true end,
+                  setValue=function(v)
+                      if not EllesmereUIDB then EllesmereUIDB = {} end
+                      EllesmereUIDB.charSheetHideSlotFlyoutArrows = v
+                      if EllesmereUI._refreshCharSheetSlotFlyoutArrows then EllesmereUI._refreshCharSheetSlotFlyoutArrows() end
+                  end }
+            );  y = y - h
+            AttachDisabledOverlay(seasonRow)
+
+            -- Inline cog on Season Panel: the Great Vault shortcut is its own opt-in.
+            if not EllesmereUI._prebuilding then
+                EllesmereUI.BuildInlineCog(seasonRow._leftRegion, {
+                    disabled = function() return EllesmereUIDB and EllesmereUIDB.charSheetSeasonPanel == false end,
+                    disabledTooltip = "Season Panel",
+                    title = "Season Panel Settings",
+                    rows = {
+                        { type="toggle", label="Great Vault Shortcut",
+                          tooltip="Add a Great Vault button to the Season Panel.",
+                          get=function() return EllesmereUIDB and EllesmereUIDB.charSheetSeasonVault == true or false end,
+                          set=function(v)
+                              if not EllesmereUIDB then EllesmereUIDB = {} end
+                              EllesmereUIDB.charSheetSeasonVault = v
+                              if EllesmereUI._refreshCharSheetSocketPanel then EllesmereUI._refreshCharSheetSocketPanel() end
+                          end },
+                    },
+                })
+            end
+        end
+
         _, h = W:Spacer(parent, y, 10);  y = y - h
 
         ---------------------------------------------------------------------------
@@ -2100,8 +2143,14 @@ initFrame:SetScript("OnEvent", function(self)
         {
             key   = "socialui",
             title = "Friends List",
-            desc  = "The Social window frame, border, title bar, Battle.net bar, search boxes, filter dropdowns and buttons. List contents and the side tab icons stay untouched.",
-            reloadMsg = "Changing the Friends List reskin requires a UI reload to fully swap between Blizzard and Ellesmere styles.",
+            -- Retail: the Friends List module repaints its window to this card
+            -- live. WoW Forever: the card drives that client's friends pack.
+            desc  = EllesmereUI.IS_FOREVER
+                and "The Social window frame, border, title bar, Battle.net bar, search boxes, filter dropdowns and buttons. List contents and the side tab icons stay untouched."
+                or "The friends window backdrop, frame border, tabs, search boxes, bottom buttons and close button. Friend entries stay untouched; Blizz Default keeps the Friends List module's own flat look.",
+            reloadMsg = EllesmereUI.IS_FOREVER
+                and "Changing the Friends List reskin requires a UI reload to fully swap between Blizzard and Ellesmere styles."
+                or nil,
             setEnabled = function(v)
                 if not EllesmereUIDB then EllesmereUIDB = {} end
                 EllesmereUIDB.reskinSocialUI = v
@@ -2149,11 +2198,18 @@ initFrame:SetScript("OnEvent", function(self)
         },
     }
 
-    -- WoW Forever keeps Blizzard's micro menu art: its pack is not registered
-    -- there (WindowPacks), so the card is not offered either.
+    -- WoW Forever drops the cards for windows it does not skin or has no use
+    -- for: the micro menu keeps Blizzard's art (its pack is not registered
+    -- there, see WindowPacks), the Group Finder, Delve Tier Picker and
+    -- Housing Dashboard never load on that client, and the Great Vault has
+    -- no content there. Their saved enable keys stay untouched.
     if EllesmereUI.IS_FOREVER then
+        local foreverDropped = {
+            micromenu = true, lfg = true, greatvault = true,
+            delvepicker = true, housing = true,
+        }
         for i = #WINDOWS, 1, -1 do
-            if WINDOWS[i].key == "micromenu" then table.remove(WINDOWS, i) end
+            if foreverDropped[WINDOWS[i].key] then table.remove(WINDOWS, i) end
         end
     end
 
@@ -2187,7 +2243,8 @@ initFrame:SetScript("OnEvent", function(self)
             if not EllesmereUIDB.blizzWindowSkinStyles then EllesmereUIDB.blizzWindowSkinStyles = {} end
             EllesmereUIDB.blizzWindowSkinStyles[win.key] = style
         end
-        local crossed = (old == "off") ~= (style == "off")
+        -- A card with no reloadMsg swaps live both ways (retail Friends List).
+        local crossed = win.reloadMsg ~= nil and ((old == "off") ~= (style == "off"))
         -- eui<->modern applies live (shell backdrops swap in place).
         if EllesmereUI._WSkinRefreshStyles then EllesmereUI._WSkinRefreshStyles() end
         if crossed and not suppressPopup then
@@ -3300,6 +3357,9 @@ initFrame:SetScript("OnEvent", function(self)
                 EllesmereUIDB.lfgSavedRoles = nil
                 EllesmereUIDB.showMythicRating = nil
                 EllesmereUIDB.showPvpItemLevel = nil
+                EllesmereUIDB.charSheetSeasonPanel = nil
+                EllesmereUIDB.charSheetSeasonVault = nil
+                EllesmereUIDB.charSheetHideSlotFlyoutArrows = nil
                 EllesmereUIDB.flyoutItemLevels = nil
                 EllesmereUIDB.showCharSheetDurability = nil
                 EllesmereUIDB.charSheetDurabilityLocation = nil
@@ -3329,6 +3389,8 @@ initFrame:SetScript("OnEvent", function(self)
             if EllesmereUI._applyTooltipCursorAnchor then EllesmereUI._applyTooltipCursorAnchor() end
             if EllesmereUI._applyTooltipFixedAnchor then EllesmereUI._applyTooltipFixedAnchor() end
             if EllesmereUI._applyTooltipHealthStrip then EllesmereUI._applyTooltipHealthStrip() end
+            if EllesmereUI._refreshCharSheetSocketPanel then EllesmereUI._refreshCharSheetSocketPanel() end
+            if EllesmereUI._refreshCharSheetSlotFlyoutArrows then EllesmereUI._refreshCharSheetSlotFlyoutArrows() end
         end,
     })
 

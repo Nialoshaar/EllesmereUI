@@ -360,6 +360,134 @@ do
 end
 
 -------------------------------------------------------------------------------
+--  Bank bag slots (WoW Forever)
+--  Forever's character bank tabs are bag slots: a bought tab holds nothing
+--  until a bag is placed in it (Blizzard's Camelot BankFrame bag buttons).
+-------------------------------------------------------------------------------
+local RefreshBankBags
+if EUI.IS_FOREVER then
+    local BANK_BAG_SLOTS = Enum.BagIndex.Characterbanktab
+
+    local bagsWin = CreateFrame("Frame", nil, EUI_Bank)
+    bagsWin:Hide()
+    bagsWin:SetFrameLevel(EUI_Bank:GetFrameLevel() + 20)
+    bagsWin:EnableMouse(true)
+    bagsWin:SetClampedToScreen(true)
+    local winBg = bagsWin:CreateTexture(nil, "BACKGROUND")
+    winBg:SetAllPoints()
+    winBg:SetColorTexture(0.02, 0.02, 0.02, 0.95)
+    EUI.PanelPP.CreateBorder(bagsWin, 0.1, 0.1, 0.1, 1, 1, "OVERLAY", 7)
+
+    local bagsBtn = CreateFrame("Button", nil, header)
+    bagsBtn:SetSize(24, 24)
+    bagsBtn:SetPoint("RIGHT", sortBtn, "LEFT", -6, 0)
+    bagsBtn.icon = bagsBtn:CreateTexture(nil, "ARTWORK")
+    bagsBtn.icon:SetAllPoints()
+    bagsBtn.icon:SetAtlas("bag-main")
+    bagsBtn.icon:SetAlpha(0.9)
+    bagsWin:SetPoint("BOTTOMRIGHT", bagsBtn, "TOPRIGHT", 0, 2)
+
+    bagsBtn:SetScript("OnEnter", function(self)
+        self.icon:SetAlpha(1)
+        if not bagsWin:IsShown() then EUI.ShowWidgetTooltip(self, "Show Bags") end
+    end)
+    bagsBtn:SetScript("OnLeave", function(self)
+        self.icon:SetAlpha(0.9)
+        EUI.HideWidgetTooltip()
+    end)
+    bagsBtn:SetScript("OnClick", function()
+        if bagsWin:IsShown() then
+            bagsWin:Hide()
+        else
+            EUI.HideWidgetTooltip()
+            bagsWin:Show()
+        end
+    end)
+
+    local function PickupBag(self)
+        if self.bought then C_Container.PickupContainerItem(BANK_BAG_SLOTS, self.bagSlot) end
+    end
+
+    local slots = {}
+    local function GetOrCreateBagSlot(idx)
+        if slots[idx] then return slots[idx] end
+        local btn = CreateFrame("Button", nil, bagsWin)
+        btn:SetSize(SLOT_SIZE, SLOT_SIZE)
+        btn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+        btn:RegisterForDrag("LeftButton")
+        btn.icon = btn:CreateTexture(nil, "ARTWORK")
+        btn.icon:SetAllPoints()
+        btn.Count = btn:CreateFontString(nil, "OVERLAY")
+        EllesmereUI.ApplyIconTextFont(btn.Count, GetFont(), BP().bagCountFontSize or 11, "bags")
+        btn.Count:SetPoint("BOTTOMRIGHT", -2, 2)
+        btn.Count:SetTextColor(1, 1, 1)
+        ns.CreateInsetBorder(btn)
+        btn:SetScript("OnClick", PickupBag)
+        btn:SetScript("OnDragStart", PickupBag)
+        btn:SetScript("OnReceiveDrag", PickupBag)
+        btn:SetScript("OnEnter", function(self)
+            SetInsetBorderColor(self, 1, 1, 1, 1)
+            if self.hasBag then
+                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                GameTooltip:SetBagItem(BANK_BAG_SLOTS, self.bagSlot)
+                GameTooltip:Show()
+            else
+                EUI.ShowWidgetTooltip(self, self.bought and BANK_BAG or BANK_BAG_PURCHASE)
+            end
+        end)
+        btn:SetScript("OnLeave", function(self)
+            SetInsetBorderColor(self, self._bdrR, self._bdrG, self._bdrB, 1)
+            GameTooltip:Hide()
+            EUI.HideWidgetTooltip()
+        end)
+        slots[idx] = btn
+        return btn
+    end
+
+    RefreshBankBags = function()
+        if not bagsWin:IsShown() then return end
+        local maxBags = C_Bank.FetchMaxNumBankTabs(Enum.BankType.Character)
+        local bought = C_Bank.FetchPurchasedBankTabData(Enum.BankType.Character)
+        local z = BP().bagItemIconZoom or 0.08
+        local n = 0
+        -- Slot 1 is the bank itself; bag slots start at 2.
+        for bagSlot = 2, maxBags do
+            n = n + 1
+            local btn = GetOrCreateBagSlot(n)
+            btn.bagSlot = bagSlot
+            btn.bought = bought[bagSlot] ~= nil
+            local info = btn.bought and C_Container.GetContainerItemInfo(BANK_BAG_SLOTS, bagSlot)
+            btn.hasBag = info and true or false
+            btn.icon:SetTexCoord(z, 1 - z, z, 1 - z)
+            btn.icon:SetTexture(info and info.iconFileID or "Interface\\PaperDoll\\UI-PaperDoll-Slot-Bag")
+            btn.icon:SetDesaturated(not btn.bought)
+            btn.icon:SetAlpha(btn.bought and 1 or 0.35)
+            if info then
+                btn.Count:SetText(C_Container.GetContainerNumFreeSlots(Enum.BagIndex.CharacterBankTab_1 + bagSlot - 1))
+                btn.Count:Show()
+            else
+                btn.Count:Hide()
+            end
+            -- quality is nilable (item data not cached yet).
+            local q = info and info.quality
+            local c = q and q > 0 and ITEM_QUALITY_COLORS[q]
+            if c then
+                btn._bdrR, btn._bdrG, btn._bdrB = c.r, c.g, c.b
+            else
+                btn._bdrR, btn._bdrG, btn._bdrB = 0.25, 0.25, 0.25
+            end
+            SetInsetBorderColor(btn, btn._bdrR, btn._bdrG, btn._bdrB, 1)
+            btn:ClearAllPoints()
+            btn:SetPoint("TOPLEFT", bagsWin, "TOPLEFT", 10 + (n - 1) * (SLOT_SIZE + SPACING), -10)
+            btn:Show()
+        end
+        for i = n + 1, #slots do slots[i]:Hide() end
+        bagsWin:SetSize(math.max(n, 1) * (SLOT_SIZE + SPACING) + 16, SLOT_SIZE + 20)
+    end
+    bagsWin:SetScript("OnShow", RefreshBankBags)
+end
+
+-------------------------------------------------------------------------------
 --  Footer: Player Gold (left) + Warband Gold (right)
 -------------------------------------------------------------------------------
 do
@@ -2058,6 +2186,8 @@ function EUI_Bank:RefreshBank()
     EUI_Bank._layoutGridW = gridW
 
     -- Shared slot render: updates a single button with item or empty state
+    -- One reused data table for third-party overlay painters (EUI_Bags.RunItemOverlays).
+    local overlayData = {}
     local function RenderSlotContent(btn, bagID, slot, cachedInfo)
         if btn.ProfessionQualityOverlay then btn.ProfessionQualityOverlay:SetAlpha(0) end
         if btn.IconOverlay then btn.IconOverlay:SetAlpha(0); btn.IconOverlay:Hide() end
@@ -2172,6 +2302,11 @@ function EUI_Bank:RefreshBank()
                     btn.Cooldown:SetDrawEdge(true); btn.Cooldown:SetCooldown(cdS, cdD)
                 else btn.Cooldown:Clear() end
             end
+        end
+        if next(EUI_Bags.itemOverlayIcons) ~= nil then
+            overlayData.bag, overlayData.slot, overlayData.info = bagID, slot, info
+            overlayData.itemLink = info and C_Container.GetContainerItemLink(bagID, slot) or nil
+            EUI_Bags.RunItemOverlays(btn, overlayData)
         end
     end
 
@@ -2684,6 +2819,7 @@ local function ScheduleBankRefresh()
         bankRefreshPending = false
         if EUI_Bank:IsVisible() then
             EUI_Bank:RefreshBank()
+            if RefreshBankBags then RefreshBankBags() end
         end
     end)
 end
@@ -2697,6 +2833,7 @@ eventFrame:RegisterEvent("BANK_TABS_CHANGED")
 eventFrame:RegisterEvent("BANK_TAB_SETTINGS_UPDATED")
 eventFrame:RegisterEvent("PLAYER_ACCOUNT_BANK_TAB_SLOTS_CHANGED")
 eventFrame:RegisterEvent("PLAYER_MONEY")
+if EUI.IS_FOREVER then eventFrame:RegisterEvent("BAG_CONTAINER_UPDATE") end
 eventFrame:SetScript("OnEvent", function(_, event)
     if event == "BANKFRAME_OPENED" then
         -- WoW Forever's Gamepad interface style at login: Blizzard's bank
@@ -2761,6 +2898,7 @@ eventFrame:SetScript("OnEvent", function(_, event)
             if not EUI_Bank:IsVisible() then return end
             DiscoverBankTabs()
             EUI_Bank:RefreshBank()
+            if RefreshBankBags then RefreshBankBags() end
             EUI_Bank:UpdateFooterGold()
             if EUI_Bags and EUI_Bags.CaptureWarbandGold then EUI_Bags.CaptureWarbandGold() end
         end)
@@ -2812,6 +2950,21 @@ eventFrame:SetScript("OnEvent", function(_, event)
 
     elseif event == "BAG_UPDATE" or event == "PLAYERBANKSLOTS_CHANGED" then
         if EUI_Bank:IsVisible() then
+            ScheduleBankRefresh()
+        end
+
+    elseif event == "BAG_CONTAINER_UPDATE" then
+        -- Forever: a bag went into or came out of a bank bag slot, which adds or
+        -- removes that tab.
+        if EUI_Bank:IsVisible() then
+            local selTab = _selectedView > 0 and _allTabs[_selectedView]
+            DiscoverBankTabs()
+            if selTab then
+                _selectedView = BankDefaultsToOne() and -1 or 0
+                for i, tab in ipairs(_allTabs) do
+                    if tab.bagID == selTab.bagID then _selectedView = i; break end
+                end
+            end
             ScheduleBankRefresh()
         end
 

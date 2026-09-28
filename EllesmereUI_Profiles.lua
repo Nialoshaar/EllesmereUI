@@ -194,6 +194,9 @@ local AB_BAREWORD = {
     ExtraActionButton=true, EncounterBar=true, QueueStatus=true,
     MicroBar=true, BagBar=true,
 }
+-- WoW Forever never registers the House Favor bar: classify it statically
+-- there so its anchor and size-match links keep travelling in exports.
+if EllesmereUI.IS_FOREVER == true then AB_BAREWORD.FavorBar = true end
 local UF_BAREWORD = {
     player=true, target=true, focus=true, pet=true, targettarget=true,
     focustarget=true, boss=true, classPower=true,
@@ -966,7 +969,9 @@ local function ResolveSpecProfile()
 
     if not resolvedSpecID then return nil end
 
-    local targetProfile = specProfiles[resolvedSpecID]
+    -- SpecFor: WoW Forever reports one spec per class; its class counts as
+    -- every retail spec (the first assigned one in class order wins).
+    local targetProfile = specProfiles[EllesmereUI.SpecFor(resolvedSpecID, EllesmereUI.SpecHasEntry, specProfiles)]
     if not targetProfile then return nil end
 
     local profiles = EllesmereUIDB.profiles
@@ -1869,8 +1874,82 @@ end
 --  Format: !EUI_<base64 encoded compressed serialized data>
 --  The data table contains:
 --    { version = 3, type = "full", data = profileData }
+--  plus client = "forever" on a string made on WoW Forever (none = retail).
 -------------------------------------------------------------------------------
 local EXPORT_PREFIX = "!EUI_"
+
+--- Stamps the client an export string is made on at the payload root:
+--- "forever" on WoW Forever, nothing on retail, so every older string reads
+--- as retail. Transport only: no import ever stores it in a profile.
+function EllesmereUI.StampPayloadClient(payload)
+    if EllesmereUI.IS_FOREVER then payload.client = "forever" end
+    return payload
+end
+
+--- True when a decoded payload was made on the other client (retail vs WoW
+--- Forever). Cooldown Manager spell data from the other client is never
+--- imported: the import runs exactly as for a string that carries none.
+function EllesmereUI.PayloadFromOtherClient(payload)
+    local from = type(payload) == "table" and payload.client or nil
+    return (from or "retail") ~= (EllesmereUI.IS_FOREVER and "forever" or "retail")
+end
+
+--- The reload prompt text after an import, plus one line when the string
+--- carried the other client's Cooldown Manager spells (not imported).
+function EllesmereUI.ImportReloadMessage(payload)
+    local msg = EllesmereUI.L("Reload to finish importing.")
+    local data = type(payload) == "table" and payload.data
+    local key = EllesmereUI.IsFullAccountPayload(payload) and "spellAssignments" or "cdmSpells"
+    if type(data) == "table" and data[key] ~= nil and EllesmereUI.PayloadFromOtherClient(payload) then
+        msg = msg .. "\n\n" .. EllesmereUI.L("Cooldown Manager spells from the other game client were not imported.")
+    end
+    return msg
+end
+
+--- WoW Forever export: a class whose snapshot holds its Forever spec key
+--- (read first on Forever, so the layout the exporter sees) carries it under
+--- the class's first retail key, which retail reads and Forever resolves.
+--- Modifies the caller's own snapshot table in place. Retail: no-op.
+function EllesmereUI.ForeverAliasCDMSpecs(snap)
+    if not EllesmereUI.IS_FOREVER or type(snap) ~= "table" then return end
+    local classes = EllesmereUI.ForeverClasses()
+    for c = 1, #classes do
+        local token = classes[c]
+        local lk = tostring(EllesmereUI.FOREVER_CLASS_SPEC[token])
+        if snap[lk] ~= nil then
+            snap[tostring(EllesmereUI.ForeverClassSpecIDs(token)[1])] = snap[lk]
+            snap[lk] = nil
+        end
+    end
+end
+
+--- WoW Forever import: for every class the incoming string carries, drop each
+--- INHERITED key the class would read before the string's first key (its
+--- Forever spec key, then its retail specs in class order), so the class
+--- resolves to the incoming layout instead of a copy of the active profile's.
+--- Inherited keys after that one, and classes the string does not carry, are
+--- kept. Touches only the new bucket the import is building. Retail: no-op.
+function EllesmereUI.ForeverDropShadowedLegacy(inherited, incoming)
+    if not EllesmereUI.IS_FOREVER or type(inherited) ~= "table" or type(incoming) ~= "table" then return end
+    local classes = EllesmereUI.ForeverClasses()
+    for c = 1, #classes do
+        local token = classes[c]
+        local lk = tostring(EllesmereUI.FOREVER_CLASS_SPEC[token])
+        -- A string carrying the Forever key overlays it; nothing shadows it.
+        if incoming[lk] == nil then
+            local ids = EllesmereUI.ForeverClassSpecIDs(token)
+            local first
+            for i = 1, #ids do
+                if incoming[tostring(ids[i])] ~= nil then first = i; break end
+            end
+            -- Drop every inherited key the class reads before the first carried one.
+            if first then
+                inherited[lk] = nil
+                for i = 1, first - 1 do inherited[tostring(ids[i])] = nil end
+            end
+        end
+    end
+end
 
 -- Snapshot the per-profile CDM spell allocation (which spells sit on which bars +
 -- per-spell settings, per spec) for export. The bar DEFINITIONS already travel in
@@ -1907,6 +1986,7 @@ local function SnapshotProfileCDMSpells(profileName, includedFolders, cdmSpecs)
         end
     end
     if not next(snap) then return nil end
+    EllesmereUI.ForeverAliasCDMSpecs(snap)
     return snap
 end
 
@@ -2013,7 +2093,8 @@ do
         -- Character Sheet card
         "statCategoryColors", "statCategoryUseColor", "statSectionsOrder",
         "showMythicRating", "showItemLevel", "showUpgradeTrack", "showGems",
-        "showEnchants", "showPvpItemLevel", "charSheetSocketPanel",
+        "showEnchants", "showPvpItemLevel", "charSheetSocketPanel", "charSheetSeasonPanel", "charSheetSeasonVault",
+        "charSheetHideSlotFlyoutArrows",
         "charSheetIconZoom", "charSheetEnchantNames", "charSheetEnchantSize",
         "flyoutItemLevels", "showCharSheetDurability", "charSheetDurabilityLocation",
         "charSheetDurabilityShowLabel", "showSecondaryRaw", "showSecondaryBoth",
@@ -2241,6 +2322,7 @@ function EllesmereUI.ExportProfile(profileName, includedFolders, includeLayout, 
     -- imports correctly into any build. No-op in the suite (canon == folder).
     exportData.addons = AddonsToCanon(exportData.addons)
     local payload = { version = 3, type = "full", data = exportData }
+    EllesmereUI.StampPayloadClient(payload)
     local serialized = Serializer.Serialize(payload)
     if not LibDeflate then return nil end
     local compressed = LibDeflate:CompressDeflate(serialized)
@@ -2338,6 +2420,7 @@ function EllesmereUI.ExportFullAccountData()
         profileName = activeName,
         data        = out,
     }
+    EllesmereUI.StampPayloadClient(payload)
     local serialized = Serializer.Serialize(payload)
     local compressed = LibDeflate:CompressDeflate(serialized)
     return EXPORT_PREFIX .. LibDeflate:EncodeForPrint(compressed)
@@ -2362,12 +2445,30 @@ function EllesmereUI.ImportFullAccountData(payload)
     -- 1) Account globals, wholesale. profiles/profileOrder/activeProfile are
     --    handled below; the excluded per-character blobs are refused on the
     --    way IN as well, so a hand-edited string cannot plant a gold ledger.
+    --    The other client's Cooldown Manager spell store never imports: the
+    --    recipient's stands, as for a string that carries none. Its Tracking
+    --    Bars link owner is dropped too (the recipient's own one no longer
+    --    describes the live links), so the next bar build swaps the
+    --    recipient's own links in instead of banking the string's into a
+    --    spell store.
+    local otherClient = EllesmereUI.PayloadFromOtherClient(payload)
+    -- WoW Forever: the recipient's one-time buff sweep stamp survives the
+    -- wholesale _migrations copy below, so that sweep never runs twice
+    -- (EllesmereUI_Migration.lua). FvBW is nil on retail.
+    local fvSweep = EllesmereUI.FvBW and type(EllesmereUIDB._migrations) == "table"
+        and EllesmereUIDB._migrations.forever_buff_wipe_sweep_v1
     for k, v in pairs(data) do
         if k ~= "profiles" and k ~= "profileOrder" and k ~= "activeProfile"
-           and not FULL_EXPORT_EXCLUDED[k] then
+           and not FULL_EXPORT_EXCLUDED[k]
+           and not (otherClient and (k == "spellAssignments" or k == "_tbbLinkOwner")) then
             EllesmereUIDB[k] = DeepCopy(v)
         end
     end
+    if fvSweep then
+        if type(EllesmereUIDB._migrations) ~= "table" then EllesmereUIDB._migrations = {} end
+        EllesmereUIDB._migrations.forever_buff_wipe_sweep_v1 = fvSweep
+    end
+    if otherClient then EllesmereUIDB._tbbLinkOwner = nil end
     -- Match extras ride with their links: a string that carries links but no
     -- extras installs none, never the recipient's leftovers on its links.
     if data.unlockWidthMatch ~= nil and data.unlockWidthMatchExtra == nil then
@@ -2389,6 +2490,9 @@ function EllesmereUI.ImportFullAccountData(payload)
             -- Legacy per-profile homes of the excluded blobs (see the export
             -- side): refused on the way in too.
             StripPrivateAddonData(copy.addons)
+            -- WoW Forever: the one-time buff clear, before the profile is
+            -- installed (EllesmereUI_Migration.lua).
+            if EllesmereUI.FvBW then EllesmereUI.FvBW.ProcessProfile(copy, "import") end
             EllesmereUIDB.profiles[name] = copy
         end
     end
@@ -2429,7 +2533,7 @@ function EllesmereUI.ImportFullAccountData(payload)
         end
     end
 
-    EllesmereUI.RequestReload(EllesmereUI.L("Profile Imported"), EllesmereUI.L("Reload to finish importing."))
+    EllesmereUI.RequestReload(EllesmereUI.L("Profile Imported"), EllesmereUI.ImportReloadMessage(payload))
     return true
 end
 
@@ -2475,7 +2579,65 @@ end
 --  }
 --  specs[i].hasData = false grays out the row and shows disabled tooltip.
 --  specs[i].checked = initial checked state (only for hasData=true rows).
+--  WoW Forever only (ignored on retail, see ForeverCDMSelection):
+--      foreverAllKeys   = true: a ticked class = every key the store holds for it
+--      foreverActiveKey = string: the key the player's class runs on
 -------------------------------------------------------------------------------
+
+--- WoW Forever: CDM spec-picker selection (numeric IDs from the class grid)
+--- -> store keys, written into out. opts.foreverAllKeys: a ticked class =
+--- every key the active store holds for it. Otherwise a class that stays
+--- ticked keeps the keys the picker was opened with, and a newly ticked class
+--- = its resolved key (the player's class: opts.foreverActiveKey). Specs of
+--- classes Forever lacks pass through.
+function EllesmereUI.ForeverCDMSelection(assignments, opts, out)
+    local sa = EllesmereUIDB and EllesmereUIDB.spellAssignments
+    local b = sa and sa.profiles and sa.profiles[EllesmereUIDB.activeProfile or "Default"]
+    local sp = (b and b.specProfiles) or {}
+    local player = select(2, UnitClass("player"))
+    local opened = {}
+    local function Opened(key)
+        local t = EllesmereUI.SpecClassOf(tonumber(key))
+        if t and EllesmereUI.ForeverClassSpecIDs(t) then
+            opened[t] = opened[t] or {}
+            opened[t][#opened[t] + 1] = key
+        end
+    end
+    for _, s in ipairs(opts.specs or {}) do
+        if s.checked then Opened(s.key) end
+    end
+    for k, v in pairs(opts.lockedSpecs or {}) do
+        if v then Opened(k) end
+    end
+    local done = {}
+    for id in pairs(assignments) do
+        local token = EllesmereUI.SpecClassOf(id)
+        local ids = EllesmereUI.ForeverClassSpecIDs(token)
+        if not ids then
+            out[tostring(id)] = true
+        elseif not done[token] then
+            done[token] = true
+            local any = false
+            if opts.foreverAllKeys then
+                for i = 1, #ids do
+                    local k = tostring(ids[i])
+                    if sp[k] ~= nil then out[k] = true; any = true end
+                end
+                local lk = tostring(EllesmereUI.FOREVER_CLASS_SPEC[token])
+                if sp[lk] ~= nil then out[lk] = true; any = true end
+            elseif opened[token] then
+                for _, k in ipairs(opened[token]) do out[k] = true end
+                any = true
+            end
+            if not any then
+                local k = (token == player) and opts.foreverActiveKey
+                    or tostring(EllesmereUI.ForeverClassSpec(token, EllesmereUI.SpecHasStringEntry, sp, true))
+                out[k] = true
+            end
+        end
+    end
+end
+
 do
     -- Dummy db/dbKey/presetKey for the assignments table
     local dummyDB = { _cdmPick = { _cdm = {} } }
@@ -2511,6 +2673,13 @@ do
                 if numID and v then disabledSpecs[numID] = v end
             end
         end
+        -- WoW Forever: the grid has one row per class, so a key saved under a
+        -- class's Forever spec ID ticks, locks or disables that class's row.
+        if EllesmereUI.IS_FOREVER then
+            preCheckedSpecs = EllesmereUI.ForeverExpandSpecSet(preCheckedSpecs)
+            lockedOnSpecs   = EllesmereUI.ForeverExpandSpecSet(lockedOnSpecs)
+            disabledSpecs   = EllesmereUI.ForeverExpandSpecSet(disabledSpecs)
+        end
 
         EllesmereUI:ShowSpecAssignPopup({
             db              = dummyDB,
@@ -2529,6 +2698,11 @@ do
                 local selected = {}
                 for specID in pairs(assignments) do
                     selected[tostring(specID)] = true
+                end
+                -- WoW Forever: class rows -> the store keys each class uses.
+                if EllesmereUI.IS_FOREVER then
+                    wipe(selected)
+                    EllesmereUI.ForeverCDMSelection(assignments, opts, selected)
                 end
                 opts.onConfirm(selected)
             end,
@@ -2584,6 +2758,7 @@ function EllesmereUI.ExportCurrentProfile(includeLayout, includeCDM, cdmSpecs)
     -- Normalize local db.folder keys -> canonical (suite) keys (no-op in suite).
     profileData.addons = AddonsToCanon(profileData.addons)
     local payload = { version = 3, type = "full", data = profileData, meta = meta }
+    EllesmereUI.StampPayloadClient(payload)
     local serialized = Serializer.Serialize(payload)
     if not LibDeflate then return nil end
     local compressed = LibDeflate:CompressDeflate(serialized)
@@ -2923,6 +3098,9 @@ local function BuildImportedCDMSpellBucket(profileName, activeName, incomingSpec
     end
     bucket.specProfiles = inherited
     if type(incomingSpecs) ~= "table" then return end
+    -- WoW Forever: a class the string carries resolves to the incoming layout,
+    -- not to an inherited copy under a key the class would read first.
+    EllesmereUI.ForeverDropShadowedLegacy(bucket.specProfiles, incomingSpecs)
     -- Import-authoritative ghosting is computed against the player's LIVE Blizzard CDM
     -- tracked set (viewer pools + category API). That set is only guaranteed settled
     -- after a reload, and the ghost pass is a ONE-SHOT that stamps _barFilterModelV6
@@ -3038,6 +3216,9 @@ function EllesmereUI.ImportProfile(importStr, profileName)
     end
 
     if payload.type == "full" then
+        -- WoW Forever: the one-time buff clear runs on the payload itself, before
+        -- the merge copy and the raw re-apply below (EllesmereUI_Migration.lua).
+        if EllesmereUI.FvBW then EllesmereUI.FvBW.ProcessProfile(payload.data, "import") end
         -- Merge import: start from the current profile and overlay imported
         -- addon data on top. This preserves settings for addons not present
         -- in the import (e.g. importing from a standalone install).
@@ -3263,8 +3444,13 @@ function EllesmereUI.ImportProfile(importStr, profileName)
                 and payload.data.addons["EllesmereUICooldownManager"]
                 and payload.data.addons["EllesmereUICooldownManager"].cdmBars
                 and payload.data.addons["EllesmereUICooldownManager"].cdmBars.bars
+            -- Spell layouts import only from a string made on this client:
+            -- another client's are ignored, exactly as if the string carried
+            -- none (inherit-only: no overlay, no ghosting, no re-keying).
+            local incomingSpells = payload.data.cdmSpells
+            if EllesmereUI.PayloadFromOtherClient(payload) then incomingSpells = nil end
             BuildImportedCDMSpellBucket(profileName, db.activeProfile or "Default",
-                payload.data.cdmSpells, importedBarsCfg)
+                incomingSpells, importedBarsCfg)
         end
         -- Old-format strings can carry the per-bar Custom Active State Decimals
         -- keys (bd.faDecimals*); convert them to the per-spell Threshold Text
@@ -3308,7 +3494,7 @@ function EllesmereUI.ImportProfile(importStr, profileName)
         -- applied to other specs), the spec auto-switch would immediately pull us
         -- off this profile, so save it but don't activate. If the current spec is
         -- unassigned -- or was just auto-assigned to THIS profile -- activate.
-        local assignedNow = curSpecID and db.specProfiles[curSpecID]
+        local assignedNow = curSpecID and db.specProfiles[EllesmereUI.SpecFor(curSpecID, EllesmereUI.SpecHasEntry, db.specProfiles)]
         if assignedNow and assignedNow ~= profileName then
             -- Stored but not activated: migrate legacy Resource Bars Advanced
             -- data now (the runner's flag was inherited from the base profile,
@@ -3712,7 +3898,7 @@ end
 
 function EllesmereUI.GetSpecProfile(specID)
     local db = GetProfilesDB()
-    return db.specProfiles[specID]
+    return db.specProfiles[EllesmereUI.SpecFor(specID, EllesmereUI.SpecHasEntry, db.specProfiles)]
 end
 
 -------------------------------------------------------------------------------

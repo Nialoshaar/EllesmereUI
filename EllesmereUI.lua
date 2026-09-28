@@ -817,6 +817,21 @@ function EllesmereUI.ClientIcon(icon)
     return EllesmereUI._FOREVER_ICON[icon] or icon
 end
 
+-- The trash can on a delete button: Blizzard's atlas where the client has it,
+-- else the bundled glyph (the Forever client has no common-icon-delete).
+function EllesmereUI.SetDeleteIcon(tex)
+    local ok = EllesmereUI._deleteAtlasOK
+    if ok == nil then
+        ok = C_Texture.GetAtlasInfo("common-icon-delete") ~= nil
+        EllesmereUI._deleteAtlasOK = ok
+    end
+    if ok then
+        tex:SetAtlas("common-icon-delete")
+    else
+        tex:SetTexture(EllesmereUI.ICONS_PATH .. "common-icon-delete.png")
+    end
+end
+
 -- Flat folder -> roster-info lookup for the grouped sidebar builder. On EllesmereUI
 -- (not a local): CreateMainFrame is up against the Lua 5.1 60-upvalue limit.
 EllesmereUI._addonInfoByFolder = {}
@@ -1245,6 +1260,13 @@ EllesmereUI.RegisterSyncExclusions("EllesmereUICooldownManager", {
     "cdmBars.bars.*.anchorOffsetY",
     "cdmBars.bars.*.keybindOffsetX",
     "cdmBars.bars.*.keybindOffsetY",
+    "cdmBars.bars.*.keybindAnchor",
+    -- Rotation Assist Icon: unlock position, size and keybind placement
+    "rotationAssistIcon.position",
+    "rotationAssistIcon.iconSize",
+    "rotationAssistIcon.keybindAnchor",
+    "rotationAssistIcon.keybindOffsetX",
+    "rotationAssistIcon.keybindOffsetY",
 })
 
 EllesmereUI.RegisterSyncExclusions("EllesmereUIResourceBars", {
@@ -10539,8 +10561,15 @@ local function CreateMainFrame()
         local base = isSmoothing and scrollTarget or self:GetVerticalScroll()
         SmoothScrollTo(base - delta * SCROLL_STEP)
     end)
-    scrollFrame:SetScript("OnScrollRangeChanged", function()
+    scrollFrame:SetScript("OnScrollRangeChanged", function(self)
         if suppressScrollRangeChanged then return end
+        -- An offset past the new range would strand the view: the thumb hides
+        -- and the wheel ignores a zero range, so pull it back in.
+        local maxScroll = EllesmereUI.SafeScrollRange(self)
+        if (tonumber(self:GetVerticalScroll()) or 0) > maxScroll then
+            self:SetVerticalScroll(maxScroll)
+            if scrollTarget > maxScroll then scrollTarget = maxScroll end
+        end
         UpdateScrollThumb()
     end)
 
@@ -12321,6 +12350,9 @@ function EllesmereUI:RefreshPage(force)
     isSmoothing = false
     if smoothFrame then smoothFrame:Hide() end
     if scrollFrame then
+        -- The range is stale right after the height change; recompute it so a
+        -- shrunken page (card collapsed) clamps instead of keeping the old offset.
+        scrollFrame:UpdateScrollChildRect()
         local maxScroll = EllesmereUI.SafeScrollRange(scrollFrame)
         local restored = math.min(savedScroll, maxScroll)
         scrollTarget = math.min(savedTarget, maxScroll)
@@ -12899,7 +12931,7 @@ end
 -------------------------------------------------------------------------------
 --  Slash commands
 -------------------------------------------------------------------------------
-EllesmereUI.VERSION = "9.3"
+EllesmereUI.VERSION = "9.3.1"
 
 -- Register this addon's version into a shared global table (taint-free at load time)
 if not _G._EUI_AddonVersions then _G._EUI_AddonVersions = {} end

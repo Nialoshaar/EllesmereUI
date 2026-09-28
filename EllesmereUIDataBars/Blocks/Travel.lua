@@ -301,8 +301,9 @@ ns.BlockFactories.travel = function(blockCfg, slot, content, barCtx)
         end
 
         -- Show M+ Portals: nil reads as shown (no migration needed). OFF skips the section and its spell-resolution work entirely.
+        -- WoW Forever has no Mythic+ teleports: the section never builds there.
         _mythicLineCount = 0
-        if D().clickableTeleports ~= false then
+        if not EllesmereUI.IS_FOREVER and D().clickableTeleports ~= false then
             for _, entry in ipairs(SEASON_TELEPORTS) do
                 local spellId = TravelResolveMythicId(entry.spellIds)
                 if spellId then

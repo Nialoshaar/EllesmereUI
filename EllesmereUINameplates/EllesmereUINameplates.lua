@@ -89,6 +89,7 @@ function ns._appendDisplayPresetKeys(t)
         "textSlotLeftSize", "textSlotLeftXOffset", "textSlotLeftYOffset", "textSlotLeftStrata",
         "textSlotCenterSize", "textSlotCenterXOffset", "textSlotCenterYOffset", "textSlotCenterStrata",
         "textSlotTopColor", "textSlotRightColor", "textSlotLeftColor", "textSlotCenterColor",
+        "threatColorHealth", "threatColorBorder", "threatColorName",
         "textSlotTopClassColor", "textSlotRightClassColor", "textSlotLeftClassColor", "textSlotCenterClassColor",
         "tankHasAggroEnabled", "tankHasAggro", "classicTankAggro", "tankHasAggroOverrideMobType",
         "tankHasAggroOverrideBoss",
@@ -176,6 +177,20 @@ local defaults = {
     darkenEnemiesOOC = true,
     darkenOOCRecolor = false,  -- "Change Color Instead": recolor OOC enemies rather than dimming
     darkenOOCColor   = { r = 0.5, g = 0.5, b = 0.5 },
+    -- Threat Colors channel multi-check: which surfaces carry the threat color.
+    -- Health Bar is the historical single channel (on by default, so existing profiles
+    -- keep their exact colors); Border and Text are opt-in SECOND channels that carry
+    -- threat independently of the bar, so the bar can keep showing the mob type
+    -- (Caster/Mini-Boss/Boss) while the border/name shows aggro -- the two-signal
+    -- layout. With Health Bar off, GetReactionColor skips the whole threat arm and
+    -- clears isThreatUnit, so the low-priority has-aggro/no-aggro steps stop firing on
+    -- the bar as well and it is purely mob-type/reaction colored.
+    threatColorHealth = true,
+    threatColorBorder = false,
+    threatColorName   = false,
+    -- Show Threat Colors: where the threat colors apply -- "never", "instances" (party/raid
+    -- instances and delves) or "always". Per client: WoW Forever defaults to "always".
+    threatColorMode = (EllesmereUI.IS_FOREVER == true) and "always" or "instances",
     tankHasAggro = { r = 0.05, g = 0.82, b = 0.62 },
     tankHasAggroEnabled = false,
     tankHasAggroOverrideMobType = false,  -- on: overrides Mini-Boss/Caster (above priority step 7); off = stays low
@@ -473,8 +488,11 @@ local defaults = {
     toprightSlotSize = 24,   toprightSlotXOffset = 0, toprightSlotYOffset = 0, toprightSlotGrowth = "right", toprightSlotRaiseStrata = false,
     topleftSlotSize = 24,    topleftSlotXOffset = 0,  topleftSlotYOffset = 0,  topleftSlotGrowth = "left",   topleftSlotRaiseStrata = false,
     bottomSlotSize = 26,     bottomSlotXOffset = 0,   bottomSlotYOffset = 0,   bottomSlotRaiseStrata = false,
-    -- Core Text Positions: slot-based size + XY offsets
-    textSlotTopSize = 10,    textSlotTopXOffset = 0,  textSlotTopYOffset = 0,
+    -- Core Text Positions: slot-based size + XY offsets (WoW Forever: a larger
+    -- top text, raised 3px; retail keeps 10 / 0)
+    textSlotTopSize = (EllesmereUI.IS_FOREVER == true) and 12 or 10,
+    textSlotTopXOffset = 0,
+    textSlotTopYOffset = (EllesmereUI.IS_FOREVER == true) and 3 or 0,
     textSlotRightSize = 10,  textSlotRightXOffset = 0, textSlotRightYOffset = 0,
     textSlotLeftSize = 10,   textSlotLeftXOffset = 0,  textSlotLeftYOffset = 0,
     textSlotCenterSize = 10, textSlotCenterXOffset = 0, textSlotCenterYOffset = 0,
@@ -680,7 +698,7 @@ function ns.NP_UpdateCustomBorderWrap(plate)
         end
         -- Textured: the same join from the backdrop pieces (off for solid).
         ns.NP_SetWrapJoin(plate, not solid, tex, r, g, b, a)
-        ns.NP_SetWrapSeam(lower, cast, (p and p.wrapBorderSeam) == true, tex, sz, px, r, g, b, a)
+        ns.NP_SetWrapSeam(lower, cast, (p and p.wrapBorderSeam) == true, tex, sz, px, r, g, b, a, plate.health)
     else
         if plate._cbWrapMode == "split" then ns.NP_DropCustomWrapLower(plate) end
         if plate._cbWrapMode ~= "single" then
@@ -690,7 +708,7 @@ function ns.NP_UpdateCustomBorderWrap(plate)
             bf:SetPoint("BOTTOM", cast, "BOTTOM", 0, 0)
             plate._cbWrapMode = "single"
         end
-        ns.NP_SetWrapSeam(bf, cast, (p and p.wrapBorderSeam) == true, tex, sz, px, r, g, b, a)
+        ns.NP_SetWrapSeam(bf, cast, (p and p.wrapBorderSeam) == true, tex, sz, px, r, g, b, a, plate.health)
     end
     plate._cbWrapActive = true
     -- The 1px icon separator would show inside the outline (NP_UnwrapCustomBorder
@@ -817,15 +835,18 @@ function ns.NP_UnwrapCustomBorder(plate)
     end
 end
 
--- "Show Seam Line": a divider along anchor's top edge (the cast bar's), on a lazy
--- child of owner (a border frame we own) above its border art. The border style's
--- separator strip where it has one (tinted like the border), else a plain line: as
--- thick as the pixel border for Solid, an eighth of the edge for other styles.
+-- "Show Seam Line": only a border style with separator art draws one (the Pixels styles).
+function ns.NP_CanShowWrapSeam(tex)
+    return EllesmereUI.GetBorderCompanion(tex, "sepH") ~= nil
+end
+-- A divider along anchor's top edge (the cast bar's), spanning the health bar's
+-- width even when the cast bar reserves space for its icon. A lazy child of owner
+-- (a border frame we own) above its border art, tinted like the live border.
 -- tex / step / px = the texture key, size step and exact px the border is drawn at.
 -- Shared by the live plates and the options preview.
-function ns.NP_SetWrapSeam(owner, anchor, show, tex, step, px, r, g, b, a)
+function ns.NP_SetWrapSeam(owner, anchor, show, tex, step, px, r, g, b, a, health)
     local host = owner and owner._cbSeamHost
-    if not show then
+    if not show or not ns.NP_CanShowWrapSeam(tex) then
         if host and host:IsShown() then
             host:Hide()
             EllesmereUI.RegisterPxReapply(host, nil)
@@ -841,6 +862,7 @@ function ns.NP_SetWrapSeam(owner, anchor, show, tex, step, px, r, g, b, a)
     -- Above the border's backdrop (owner level) and its pixel strips (owner level + 1).
     host:SetFrameLevel(owner:GetFrameLevel() + 2)
     host._seamAnchor, host._seamTex, host._seamStep, host._seamPx = anchor, tex, step, px
+    host._seamHealth = health
     host._seam:SetVertexColor(r, g, b, a)
     host:Show()
     ns.NP_LayoutWrapSeam(host)
@@ -848,51 +870,33 @@ function ns.NP_SetWrapSeam(owner, anchor, show, tex, step, px, r, g, b, a)
     EllesmereUI.RegisterPxReapply(host, px and ns.NP_LayoutWrapSeam or nil)
 end
 function ns.NP_LayoutWrapSeam(host)
-    local t, anchor = host._seam, host._seamAnchor
-    if not (t and anchor) then return end
+    local t, anchor, health = host._seam, host._seamAnchor, host._seamHealth
+    if not (t and anchor and health) then return end
     local EUI = EllesmereUI
     local tex, step, px = host._seamTex, host._seamStep, host._seamPx
     local es = host:GetEffectiveScale()
     if not (es and es > 0.01) then es = UIParent:GetEffectiveScale() end
     local path = EUI.GetBorderCompanion(tex, "sepH")
-    local thick, raise
-    if path then
-        thick = EUI.BorderCompanionThickness(tex, step, px, es)
-        -- The strip's line sits near its top edge: raising it 3/16 of its thickness
-        -- puts the line on the join, where the border's own line runs.
-        if thick then raise = PP.SnapForES(thick * 3 / 16, es) end
-    elseif not tex or tex == "" or tex == "solid" then
-        local n = px or step
-        if n and n > 0 then
-            thick, raise = math.max(1, math.floor(n + 0.5)) * PP.perfect / es, 0
-        end
-    else
-        local edge
-        if px then
-            edge = math.max(1, math.floor(px + 0.5)) * PP.mult
-        elseif step and step > 0 then
-            edge = EUI.BORDER_EDGE_MAP[step] or EUI.BORDER_EDGE_MAP[1]
-        end
-        if edge then
-            thick = math.max(PP.perfect / es, PP.SnapForES(edge / 8, es))
-            raise = PP.SnapForES(thick / 2, es)
-        end
-    end
+    local thick = path and EUI.BorderCompanionThickness(tex, step, px, es)
     if not thick or thick <= 0 then
         t:Hide()
         return
     end
-    local want = path or false
-    if host._seamPath ~= want then
-        if path then t:SetTexture(path) else t:SetColorTexture(1, 1, 1, 1) end
-        host._seamPath = want
+    -- The strip's line sits near its top edge: raising it 3/16 of its thickness
+    -- puts the line on the join, where the border's own line runs.
+    local raise = PP.SnapForES(thick * 3 / 16, es)
+    if host._seamPath ~= path then
+        t:SetTexture(path)
+        host._seamPath = path
     end
-    if host._lThick ~= thick or host._lRaise ~= raise or host._lAnchor ~= anchor then
+    if host._lThick ~= thick or host._lRaise ~= raise or host._lAnchor ~= anchor or host._lHealth ~= health then
         t:ClearAllPoints()
-        t:SetPoint("TOPLEFT", anchor, "TOPLEFT", 0, raise)
-        t:SetPoint("TOPRIGHT", anchor, "TOPRIGHT", 0, raise)
+        t:SetPoint("TOP", anchor, "TOP", 0, raise)
+        t:SetPoint("LEFT", health, "LEFT", 0, 0)
+        t:SetPoint("RIGHT", health, "RIGHT", 0, 0)
         t:SetHeight(thick)
         host._lThick, host._lRaise, host._lAnchor = thick, raise, anchor
+        host._lHealth = health
     end
     t:Show()
 end
@@ -1031,15 +1035,6 @@ function ns.NP_ForeverSide()
     if not ns.NP_ForeverBoxOn() then return 0 end
     local L = ns.NP_FOREVER_LVL
     return L.gap + L.w
-end
--- The bar and its box centre on the unit together, as that client's own
--- plates sit them: the bar shifts left by this and the name above it right,
--- so the name stays on the unit (0 off the variant, and while the plate's
--- box is off). Reads the latched flag: every caller runs after the enable
--- pass latched the style.
-function ns.NP_ForeverNameDX(plate)
-    if not ns._npForever or (plate and plate._fvBoxOff) then return 0 end
-    return ns.NP_ForeverSide() * 0.5
 end
 -- One side of it ("left" | "right"), for the many places that gap a single
 -- element off one edge of the bar.
@@ -1566,8 +1561,6 @@ function ns.NP_ApplyForeverLevelBox(plate, h)
         if box then
             box:Hide()
             plate._fvLevelBox, plate._fvLevelBoxSpare = nil, box
-            plate._fvBoxOff = nil
-            ns.NP_ForeverSyncSeat(plate)
         end
         return
     end
@@ -1578,7 +1571,6 @@ function ns.NP_ApplyForeverLevelBox(plate, h)
         plate._fvLevelBox, plate._fvLevelBoxSpare = box, nil
         -- The selection state may already be set on this plate.
         ns.NP_ForeverLevelSel(plate)
-        ns.NP_ForeverSyncSeat(plate)
     end
     box:SetFrameLevel(health:GetFrameLevel() + 6)
     local bh = (h or health:GetHeight()) + L.pad
@@ -1604,11 +1596,6 @@ function ns.NP_UpdateForeverLevel(plate)
     if not unit or not UnitExists(unit) then box:Hide(); return end
     local off = UnitIsGameObject(unit)
     if issecretvalue and issecretvalue(off) then off = false end
-    off = off and true or nil
-    if plate._fvBoxOff ~= off then
-        plate._fvBoxOff = off
-        ns.NP_ForeverNameReseat(plate)
-    end
     if off then box:Hide(); return end
     local fs, sk = box._fs, box._skull
     local lvl = UnitEffectiveLevel(unit)
@@ -1642,28 +1629,6 @@ function ns.NP_ForeverLevelSel(plate)
     else
         sel:Hide()
     end
-end
--- The bar and the name re-centre when the box comes or goes on a plate (a
--- game object takes the plate over, or leaves it): the bar keeps its own
--- height offset, then the enemy plate's name pass, or the friendly plate's
--- name anchor, runs.
-function ns.NP_ForeverNameReseat(plate)
-    local health = plate.health
-    local _, _, _, _, y = health:GetPoint(1)
-    health:SetPoint("CENTER", plate, "CENTER", -ns.NP_ForeverNameDX(plate), y or 0)
-    if plate.RefreshNamePosition then
-        plate:RefreshNamePosition(true)
-    elseif plate.UpdateSubText then
-        plate._subOff = nil
-        plate:UpdateSubText()
-    end
-end
--- The same when a box is attached or parked: only a plate whose bar sits
--- for the other state moves (a friendly plate keeps the seat it was built
--- with; an enemy plate's appearance pass has already re-seated it).
-function ns.NP_ForeverSyncSeat(plate)
-    local _, _, _, x = plate.health:GetPoint(1)
-    if x ~= -ns.NP_ForeverNameDX(plate) then ns.NP_ForeverNameReseat(plate) end
 end
 -- Every enemy plate's box, for a change in the player's own level or
 -- faction (only attackable units are colour-ranked, and the friendly plates
@@ -1935,30 +1900,30 @@ local function GetDebuffTextColor()
 end
 ns.GetDebuffTextColor = GetDebuffTextColor
 
--- Pandemic glow style definitions.
--- 1 = Pixel Glow (procedural ants), 2 = Action Button Glow (animated ants texture),
--- 3 = Auto-Cast Shine (orbiting sparkles), 4 = GCD (FlipBook atlas),
--- 5 = Modern WoW Glow (FlipBook atlas), 6 = Classic WoW Glow (FlipBook texture)
-local PANDEMIC_GLOW_STYLES = {
-    { name = "Pixel Glow",           procedural = true },
-    { name = "Action Button Glow",   buttonGlow = true, scale = 1.36, previewScale = 1.28 },
-    { name = "Auto-Cast Shine",      autocast = true },
-    { name = "GCD",                  atlas = "RotationHelper_Ants_Flipbook",  scale = 1.47, previewScale = 1.47 },
-    { name = "Modern WoW Glow",      atlas = "UI-HUD-ActionBar-Proc-Loop-Flipbook",  scale = 1.34, previewScale = 1.34 },
-    { name = "Classic WoW Glow",     texture = "Interface\\SpellActivationOverlay\\IconAlertAnts",
-      rows = 5, columns = 5, frames = 25, duration = 0.3, frameW = 48, frameH = 48, scale = 1.47, previewScale = 1.47 },
-}
+-- Nameplate glow styles (Pandemic, Dispel, Important Cast) in their saved
+-- order: a view over the shared styles without Shape Glow (1 Pixel, 2 Action
+-- Button, 3 Auto-Cast, 4 GCD, 5 Modern, 6 Classic). scale/previewScale are
+-- nameplate preview-only fields layered over the shared entries.
+ns.NP_GLOW_VIEW = EllesmereUI.Glows.MakeView({ 1, 2, 3, 5, 6, 7 }, {
+    [2] = { scale = 1.36, previewScale = 1.28 },
+    [4] = { scale = 1.47, previewScale = 1.47 },
+    [5] = { scale = 1.34, previewScale = 1.34 },
+    [6] = { scale = 1.47, previewScale = 1.47 },
+})
+local PANDEMIC_GLOW_STYLES = ns.NP_GLOW_VIEW.list
 ns.PANDEMIC_GLOW_STYLES = PANDEMIC_GLOW_STYLES
 -- Exposed cross-addon (e.g. CDM "Apply Pandemic Glow to all" sync) so styles translate by NAME,
 -- never raw index: this list omits "Custom Shape Glow", so the same index differs per side.
 if EllesmereUI then EllesmereUI.NameplatePandemicGlowStyles = PANDEMIC_GLOW_STYLES end
 
--- PANDEMIC_GLOW_STYLES index -> shared EllesmereUI.Glows.STYLES index. The NP
--- list omits Shape Glow (shared index 4), so every flipbook entry sits one lower
--- here. Lives beside the list it translates FROM on purpose: a second copy is how
--- the two drift the first time a style is inserted into either one. On ns, not
--- a file local: this chunk sits at the Lua 5.1 200-local cap.
-ns.NP_TO_SHARED_GLOW = { 1, 2, 3, 5, 6, 7 }
+-- The engine aura containers have no duration-driven texture alpha, so no
+-- pandemic glow renders on nameplate auras (EUI_Nameplates_AuraContainers.lua,
+-- V1 deferred). Gates the CDM pandemic sync.
+ns.NP_PandemicGlowRendered = false
+EllesmereUI.NameplatePandemicGlowRendered = ns.NP_PandemicGlowRendered
+
+-- PANDEMIC_GLOW_STYLES index -> shared EllesmereUI.Glows.STYLES index.
+ns.NP_TO_SHARED_GLOW = ns.NP_GLOW_VIEW.toShared
 
 local function GetPandemicGlowStyle()
     local raw = p and p.pandemicGlowStyle
@@ -2003,7 +1968,12 @@ do
     ns.GetDispelGlowStyle = function()
         local raw = p and p.dispelGlowStyle
         if raw == nil then return defaults.dispelGlowStyle end
-        if type(raw) == "number" then return raw end
+        -- Out-of-range picks read (and render) as Action Button Glow; Blizzard
+        -- Border sits outside the view.
+        if type(raw) == "number" and (raw == EllesmereUI.Glows.STEALABLE_BORDER
+           or (raw >= 1 and raw <= #ns.NP_GLOW_VIEW.list)) then
+            return raw
+        end
         return 2
     end
     -- Per-type colors. The buff row is split into a Magic group and a
@@ -2025,13 +1995,32 @@ do
             local c = TYPE_COLOR[dispelType]
             if c then return c.r, c.g, c.b end
         end
-        -- Never customized = no tint request (nil): the glow engines render
-        -- their default look -- gold ABG halo over white ants -- matching how
-        -- the suite's other glow features treat an unset color. An explicit
-        -- swatch pick (even white) is stored and honored.
+        -- Never customized = "default": no tint request (nil), the suite's
+        -- default look (gold). An explicit swatch pick is stored and honored.
         local c = p and p.dispelGlowColor
-        if not c then return nil, nil, nil end
-        return c.r, c.g, c.b
+        local mode = (p and p.dispelGlowColorMode) or (c and "custom" or "default")
+        return EllesmereUI.Glows.ResolveColor(mode, c and c.r, c and c.g, c and c.b)
+    end
+    -- Full render spec for the dispel glow (live purge glow and its preview).
+    ns.GetDispelGlowSpec = function(dispelType, out)
+        out = out or {}
+        local idx = ns.GetDispelGlowStyle()
+        -- Blizzard Border sits outside the view and keeps Blizzard's own art
+        -- until a colour is picked (ns.GetDispelBorderColor).
+        if idx == EllesmereUI.Glows.STEALABLE_BORDER then
+            out.style = idx
+            out.r, out.g, out.b = ns.GetDispelBorderColor(dispelType)
+        else
+            out.style = ns.NP_TO_SHARED_GLOW[idx] or 2
+            out.r, out.g, out.b = ns.GetDispelGlowColor(dispelType)
+        end
+        out.lines = p and p.dispelGlowLines
+        out.thickness = p and p.dispelGlowThickness
+        out.speed = p and p.dispelGlowSpeed
+        local bgc = p and p.dispelGlowBackgroundColor
+        out.bg = (p and p.dispelGlowBackground == true) or nil
+        out.bgR, out.bgG, out.bgB = bgc and bgc.r, bgc and bgc.g, bgc and bgc.b
+        return out
     end
     -- Blizzard Border tint: the glow colour, except the untouched default gold
     -- (the profile merge fills the key, so it is compared, not nil-tested)
@@ -2396,6 +2385,23 @@ do
             fs:SetFormattedText("%s | %s", name, ns.GetUnitLevelText(unit))
         else
             fs:SetText(name)
+        end
+    end
+    -- WoW Forever: the name slot's Name Format (text-slot cog), the first or last word
+    -- of the name; unset shows it whole. Defined only on Forever, so retail's name
+    -- write pays one nil check. Keys prebuilt (no per-update string building); the
+    -- split, its secret pass-through and its bounded cache live in ForeverShortName.
+    if EllesmereUI.IS_FOREVER then
+        local NAME_FORMAT_KEYS = {
+            textSlotTop  = "textSlotTopNameFormat",  textSlotRight  = "textSlotRightNameFormat",
+            textSlotLeft = "textSlotLeftNameFormat", textSlotCenter = "textSlotCenterNameFormat",
+        }
+        local short = EllesmereUI.ForeverShortName
+        function ns.NP_FormatName(name, slotKey)
+            local key = slotKey and NAME_FORMAT_KEYS[slotKey]
+            local mode = key and p and p[key]
+            if mode then return short(name, mode) end
+            return name
         end
     end
 end
@@ -2887,126 +2893,30 @@ ns.StopAllGlows        = StopAllGlows
 local function StopDispelGlow(slot)
     local dg = slot.dispelGlow
     if not dg or not dg.active then return end
-    if dg.animGroup then dg.animGroup:Stop() end
-    if dg.flipTex then dg.flipTex:Hide() end
-    -- One unified stop: pixel/ABG/autocast plus the ABG preview's engine
-    -- substitute (flipbook + halo) on the wrapper, and the Blizzard Border.
     _G_Glows.StopAllGlows(dg.wrapper)
-    if _G_Glows.HideStealableBorder then _G_Glows.HideStealableBorder(dg.wrapper) end
     dg.wrapper:Hide()
     dg.active = false
 end
 
 -- Preview only: the live nameplate glow runs through EllesmereUI.Glows on the
--- engine buttons. dispelType is "magic" / "enrage" / nil.
--- slotH: the icon height (cropped icons); the Blizzard Border fits it.
+-- engine buttons. dispelType is "magic" / "enrage" / nil. Same spec and engine
+-- path as the live purge glow, so the preview is the live look.
+-- slotH: the icon height (cropped icons).
 local function StartDispelGlow(slot, slotSize, dispelType, slotH)
     local dg = slot.dispelGlow
-    local styleIdx = ns.GetDispelGlowStyle()
-    local styles = PANDEMIC_GLOW_STYLES
-    -- Blizzard Border sits outside the style list (the static stealable art).
-    local blizz = _G_Glows.STEALABLE_BORDER
-    if styleIdx ~= blizz and (styleIdx < 1 or styleIdx > #styles) then styleIdx = 2 end
-    local entry = styles[styleIdx]
-    local sz = slotSize or 26
-
     if not dg then
         local wrapper = CreateFrame("Frame", nil, slot)
         wrapper:SetAllPoints()
         wrapper:SetFrameLevel(slot:GetFrameLevel() + 5)
-        local flipTex = wrapper:CreateTexture(nil, "OVERLAY", nil, 7)
-        flipTex:SetPoint("CENTER")
-        local animGroup = flipTex:CreateAnimationGroup()
-        animGroup:SetLooping("REPEAT")
-        local flipAnim = animGroup:CreateAnimation("FlipBook")
         wrapper:Show()
-        dg = { wrapper = wrapper, flipTex = flipTex, animGroup = animGroup, flipAnim = flipAnim, active = false }
+        dg = { wrapper = wrapper, active = false, spec = {} }
         slot.dispelGlow = dg
     end
-
-    -- Only restart glow if style changed or not active
-    if dg.active and dg.styleIdx == styleIdx then
-        dg.wrapper:Show()
-        return
-    end
-    -- Stop previous style if switching
-    if dg.active then
-        StopDispelGlow(slot)
-    end
-
-    local cr, cg, cb
-    if styleIdx == blizz then
-        cr, cg, cb = ns.GetDispelBorderColor(dispelType)
-    else
-        cr, cg, cb = ns.GetDispelGlowColor(dispelType)
-    end
-
-    if styleIdx == blizz then
-        dg.flipTex:Hide()
-        dg.animGroup:Stop()
-        StopProceduralAnts(dg.wrapper)
-        StopButtonGlow(dg.wrapper)
-        StopAutoCastShine(dg.wrapper)
-        _G_Glows.ShowStealableBorder(dg.wrapper, sz, slotH or sz, cr, cg, cb)
-    elseif entry.procedural then
-        dg.flipTex:Hide()
-        dg.animGroup:Stop()
-        StopButtonGlow(dg.wrapper)
-        StopAutoCastShine(dg.wrapper)
-        -- Fixed values (no user sub-options for dispel glow pixel style)
-        local N = 8; local th = 1; local speed = 4
-        local period = speed
-        local lineLen = math.floor((sz + sz) * (2 / N - 0.1))
-        lineLen = min(lineLen, sz)
-        if lineLen < 1 then lineLen = 1 end
-        StartProceduralAnts(dg.wrapper, N, th, period, lineLen, cr or 1, cg or 1, cb or 1, sz)
-    elseif entry.buttonGlow then
-        dg.flipTex:Hide()
-        dg.animGroup:Stop()
-        StopProceduralAnts(dg.wrapper)
-        StopAutoCastShine(dg.wrapper)
-        -- Preview exactly what the live path renders: the engine substitute
-        -- (white ants + colored halo, gold when no color is chosen), not the
-        -- driver ABG -- shared STYLES index 2 = Action Button Glow.
-        _G_Glows.StartEngineGlow(dg.wrapper, 2, sz, cr, cg, cb)
-    elseif entry.autocast then
-        dg.flipTex:Hide()
-        dg.animGroup:Stop()
-        StopProceduralAnts(dg.wrapper)
-        StopButtonGlow(dg.wrapper)
-        StartAutoCastShine(dg.wrapper, sz, cr or 1, cg or 0.788, cb or 0.137)
-    else
-        -- FlipBook-based glow (GCD, Modern, Classic); matches the pandemic pattern
-        StopProceduralAnts(dg.wrapper)
-        StopButtonGlow(dg.wrapper)
-        StopAutoCastShine(dg.wrapper)
-        local flipTex = dg.flipTex
-        local animGroup = dg.animGroup
-        local flipAnim = dg.flipAnim
-
-        local texSz = sz * (entry.scale or 1)
-        flipTex:SetSize(texSz, texSz)
-        if entry.atlas then
-            flipTex:SetAtlas(entry.atlas)
-        elseif entry.texture then
-            flipTex:SetTexture(entry.texture)
-        end
-        flipAnim:SetFlipBookRows(entry.rows or 6)
-        flipAnim:SetFlipBookColumns(entry.columns or 5)
-        flipAnim:SetFlipBookFrames(entry.frames or 30)
-        flipAnim:SetDuration(entry.duration or 1.0)
-        flipAnim:SetFlipBookFrameWidth(entry.frameW or 0)
-        flipAnim:SetFlipBookFrameHeight(entry.frameH or 0)
-
-        flipTex:SetDesaturated(true)
-        flipTex:SetVertexColor(cr or 1, cg or 1, cb or 1)
-        flipTex:Show()
-        animGroup:Play()
-    end
-
+    local sz = slotSize or 26
+    ns.GetDispelGlowSpec(dispelType, dg.spec)
     dg.wrapper:Show()
+    _G_Glows.StartSpecGlow(dg.wrapper, dg.spec, sz, slotH or sz, "engine", _G_Glows.PANEL_EXTRA)
     dg.active = true
-    dg.styleIdx = styleIdx
     -- Always opaque. Visibility used to ride a per-aura dispel-type curve's
     -- alpha; dispellability is now decided by which aura GROUP the button
     -- belongs to, and this path only ever draws the options preview.
@@ -4117,13 +4027,42 @@ local frameCache = CreateFramePool("Frame", UIParent, nil, nil, false, function(
     end
     function plate:ApplyBorderColor()
         if not PP then return end
-        if ns.IsCustomBorderEnabled() then
-            ns.ApplyCustomBorderColor(plate)
+        -- Threat Colors "Border" channel: UpdateHealthColor parks the resolved threat color
+        -- on the plate and this stays the single funnel that paints the BASE border, so
+        -- every caller that restores it -- RefreshBorderColor, ApplyTarget's else-branch,
+        -- ClearHoverExtras -- picks the threat tint up for free. The target and hover border
+        -- colors are applied AFTER this and still win: those are explicit selection states
+        -- the user asked for. _threatBdOn is the plain gate; the components themselves can
+        -- be SECRET (off-tank C-fold), so they are never tested for truth, only handed to
+        -- the setter.
+        if plate._threatBdOn then
+            if ns.IsCustomBorderEnabled() then
+                -- Same lazy build ApplyTarget does: a plate can take the threat tint before
+                -- its first ApplyBorder ever ran.
+                if not plate._customBorder then ns.ApplyCustomBorderStyle(plate) end
+                if plate._customBorder then
+                    local a = (p and p.customBorderAlpha) or defaults.customBorderAlpha or 1
+                    EllesmereUI.SetBorderStyleColor(plate._customBorder,
+                        plate._threatBdR, plate._threatBdG, plate._threatBdB, a)
+                end
+                plate._hbThreatTint = nil
+            else
+                PP.SetBorderColor(plate.health, plate._threatBdR, plate._threatBdG, plate._threatBdB, 1)
+                -- The health border wears the parked tint now: UpdateBorderWrap reads this,
+                -- and every other border colour paint (base, target, hover) clears it.
+                plate._hbThreatTint = true
+            end
         else
-            local cr, cg, cb = GetBorderColor()
-            PP.SetBorderColor(plate.health, cr, cg, cb, 1)
+            plate._hbThreatTint = nil
+            if ns.IsCustomBorderEnabled() then
+                ns.ApplyCustomBorderColor(plate)
+            else
+                local cr, cg, cb = GetBorderColor()
+                PP.SetBorderColor(plate.health, cr, cg, cb, 1)
+            end
         end
-        -- ...and border colour edits and the target tint's restore (a tint only).
+        -- ...and border colour edits and the target tint's restore (a tint only), on the
+        -- threat path too: untargeting a threat-tinted plate drops the target colour here.
         if p and p.castIconCustomBorder then ns.ApplyCastIconBorder(plate) end
     end
     -- Target glow, arrows and focus overlay are lazy (EnsureGlow / EnsureArrows /
@@ -4279,6 +4218,12 @@ local frameCache = CreateFramePool("Frame", UIParent, nil, nil, false, function(
                 local col = hb._bdColor
                 local r, g, b, a = 0, 0, 0, 1
                 if col then r, g, b, a = col[1], col[2], col[3], col[4] or 1 end
+                -- Threat Colors "Border" tint on the health border: _bdColor keeps only the
+                -- last CLEAN colour (PP leaves a secret off-tank fold out of it), so the
+                -- region and the re-snapped health border take the parked tint from the
+                -- plate. It may be secret: it only ever reaches PP.SetBorderColor, never
+                -- the CreateBorder below (which stores its colour) or a compare.
+                local thr = plate._hbThreatTint and plate._threatBdOn
                 -- Region frame (child of plate.cast) spans the FULL footprint width from the
                 -- health bar's BOTTOM to the cast bar's BOTTOM, bridging any Cast Bar Y-offset
                 -- gap and enclosing an in-width cast icon; health border keeps top+sides. The
@@ -4311,9 +4256,17 @@ local frameCache = CreateFramePool("Frame", UIParent, nil, nil, false, function(
                 if rb then rb._hideTop = true end
                 hb._hideBottom = true
                 PP.SetBorderSize(region, sz)
-                PP.SetBorderColor(region, r, g, b, a)
+                if thr then
+                    PP.SetBorderColor(region, plate._threatBdR, plate._threatBdG, plate._threatBdB, 1)
+                else
+                    PP.SetBorderColor(region, r, g, b, a)
+                end
                 PP.ShowBorder(region)
                 PP.SetBorderSize(plate.health, sz)
+                -- The re-snap just re-applied _bdColor to the health strips.
+                if thr then
+                    PP.SetBorderColor(plate.health, plate._threatBdR, plate._threatBdG, plate._threatBdB, 1)
+                end
                 -- Leave the cast bar's OWN border ACTIVE under the wrap (region border sits
                 -- higher and draws over it); only the icon-separator line is hidden so an
                 -- in-width icon stays seamless.
@@ -4346,6 +4299,10 @@ local frameCache = CreateFramePool("Frame", UIParent, nil, nil, false, function(
                     if tbsz then sz = tbsz end
                 end
                 PP.SetBorderSize(plate.health, sz)
+                -- The re-snap re-applied the last clean colour: put a threat tint back.
+                if plate._hbThreatTint and plate._threatBdOn then
+                    PP.SetBorderColor(plate.health, plate._threatBdR, plate._threatBdG, plate._threatBdB, 1)
+                end
             end
             if plate.castWrapRegion then
                 local crb = PP.GetBorders(plate.castWrapRegion)
@@ -4741,6 +4698,9 @@ function ns.RefreshBorder()
     ns._npAppearanceGen = (ns._npAppearanceGen or 0) + 1
     for _, plate in pairs(ns.plates) do
         if plate.ApplyBorder then plate:ApplyBorder() end
+        -- ApplyBorder draws the base colour (custom rebuild) or the last clean one (re-snap)
+        -- over a Threat Colors tint, and the _threatBdK memo would skip the repaint.
+        if plate._threatBdOn and plate.unit then plate:RepaintThreatBorder(plate.unit) end
     end
     -- Friendly plates mirror the enemy border settings 1:1.
     if ns.friendlyPlates then
@@ -4824,16 +4784,21 @@ function ns.RefreshStackingMotion()
     end
 end
 
+-- The click area's height: Hitbox Size Y scales the bar's height, and the
+-- stock looks (Blizzard Style, its WoW Forever variant, Classic WoW UI) add 6
+-- on top, their art reaching past the bar. The setting itself is untouched.
+function ns.NP_HitboxHeight(db)
+    local h = GetHealthBarHeight() * ((db.hitboxScaleY or 100) / 100)
+    if ns.NP_Blizz() then h = h + 6 end
+    return h
+end
+
 function ns.RefreshHitboxSize()
     if InCombatLockdown() then return end
     if not C_NamePlate or not C_NamePlate.SetNamePlateSize then return end
     local db = p or defaults
     local sx = (db.hitboxScaleX or 100) / 100
-    local sy = (db.hitboxScaleY or 100) / 100
-    local baseW = GetHealthBarWidth()
-    local baseH = GetHealthBarHeight()
-    local newH  = baseH * sy
-    C_NamePlate.SetNamePlateSize(baseW * sx, newH)
+    C_NamePlate.SetNamePlateSize(GetHealthBarWidth() * sx, ns.NP_HitboxHeight(db))
     -- The frame grows from its CENTER, so a taller size enlarges the hitbox evenly above and
     -- below the unit. -10000 insets let the hit rect fill the full (centered) frame.
     if C_NamePlateManager and C_NamePlateManager.SetNamePlateHitTestInsets
@@ -4904,6 +4869,7 @@ function ns.RefreshAllSettings()
     -- Before any plate repaints: the Class / Reaction slot flags the health pass reads.
     ns.NP_RefreshSlotClassFlags()
     ns.NP_RefreshThreatPctFlag()
+    ns.NP_RefreshThreatColorFlag()
     -- Bump the appearance generation so SetUnit re-runs ApplyAppearance per plate; without it,
     -- cache-hit re-spawns skip the static appearance work and new settings never apply.
     ns._npAppearanceGen = (ns._npAppearanceGen or 0) + 1
@@ -5239,11 +5205,8 @@ local function SetupAuraCVars()
         if InCombatLockdown() then return end
         local db = p or defaults
         local sx = (db.hitboxScaleX or 100) / 100
-        local sy = (db.hitboxScaleY or 100) / 100
-        local baseH = GetHealthBarHeight()
-        local newH  = baseH * sy
         if C_NamePlate and C_NamePlate.SetNamePlateSize then
-            C_NamePlate.SetNamePlateSize(GetHealthBarWidth() * sx, newH)
+            C_NamePlate.SetNamePlateSize(GetHealthBarWidth() * sx, ns.NP_HitboxHeight(db))
         end
         if C_NamePlateManager and C_NamePlateManager.SetNamePlateHitTestInsets and Enum and Enum.NamePlateType then
             C_NamePlateManager.SetNamePlateHitTestInsets(Enum.NamePlateType.Enemy, -10000, -10000, -10000, -10000)
@@ -6308,6 +6271,22 @@ function ns.ComputeOffTankFold(unit, br, bg, bb, otr, otg, otb)
     return true, r, g, b
 end
 
+-- Show Threat Colors (threatColorMode): "always" colors every plate that has threat data,
+-- "instances" only inside threat content (the zone verdict RefreshThreatCache caches),
+-- "never" switches the whole threat-color feature off (health-bar arm, Border / Name
+-- channels, Near Aggro glow, off-tank fold). Materialized into ns._npThreatColorsOn so
+-- the per-plate color paths pay one field read; re-derived by RefreshThreatCache (zone,
+-- role, spec), RefreshAllSettings (profile and override swaps), OnEnable and the options
+-- setter. An unknown saved value reads as the default. On ns (file is at the 200-local cap).
+ns._npThreatColorsOn = false
+function ns.NP_RefreshThreatColorFlag()
+    local mode = p and p.threatColorMode
+    if mode ~= "never" and mode ~= "instances" and mode ~= "always" then
+        mode = defaults.threatColorMode
+    end
+    ns._npThreatColorsOn = (mode == "always" or (mode == "instances" and _inThreatContent)) and true or false
+end
+
 local function RefreshThreatCache()
     ns._otherTanksDirty = true
     -- Zone: party/raid instances and delves (difficultyID 204) are threat-relevant
@@ -6330,8 +6309,11 @@ local function RefreshThreatCache()
     -- solo "NONE" case the old spec fallback existed for.
     local role = EllesmereUI.UnitEffectiveRole("player")
     _isTankRole = (role == "TANK")
+    ns.NP_RefreshThreatColorFlag()
 end
 
+-- Threat-content zone verdict (party/raid instances, delves). The classification icon's
+-- open-world rule reads it; the threat colors read ns._npThreatColorsOn instead.
 local function InRealInstancedContent()
     return _inThreatContent
 end
@@ -6546,7 +6528,9 @@ end
 -- resets it). Per font string memo on our plate (_scMemo), reset wherever the slot
 -- colours are written statically. Returns true while the name's slot is in class mode.
 -- An inline colour escape in the text (Level Text: Difficulty Color) still wins over it.
-function ns.NP_PaintSlotClassColors(plate, unit)
+-- skipName leaves the name alone (Threat Colors "Text" holds it) and drops its memo entry,
+-- so the first call without it repaints the name.
+function ns.NP_PaintSlotClassColors(plate, unit, skipName)
     if plate._scUnit ~= unit then
         plate._scUnit = unit
         local tok = false
@@ -6572,7 +6556,9 @@ function ns.NP_PaintSlotClassColors(plate, unit)
                 local key = L[i]
                 local e = m[key]
                 if e then e[1] = nil end
-                plate[key]:SetTextColor(sr, sg, sb, 1)
+                if not (skipName and key == "name") then
+                    plate[key]:SetTextColor(sr, sg, sb, 1)
+                end
             end
             return ns._npSlotClassName
         end
@@ -6591,7 +6577,9 @@ function ns.NP_PaintSlotClassColors(plate, unit)
         local key = L[i]
         local e = m[key]
         if not e then e = {}; m[key] = e end
-        if e[1] ~= r or e[2] ~= g or e[3] ~= b then
+        if skipName and key == "name" then
+            e[1] = nil
+        elseif e[1] ~= r or e[2] ~= g or e[3] ~= b then
             e[1], e[2], e[3] = r, g, b
             plate[key]:SetTextColor(r, g, b, 1)
         end
@@ -6621,6 +6609,118 @@ function ns.GetBlizzardBarColor(frame)
     if type(r) ~= "number" or type(g) ~= "number" or type(b) ~= "number" then return false end
     return true, r, g, b
 end
+-- Threat Colors channels (multi-check on the Threat Colors section). All three on ns:
+-- the module file is at the 200-local cap. Health Bar defaults ON so nothing changes
+-- for an existing profile; Border/Text default OFF.
+function ns.GetThreatColorHealth()
+    local v = p and p.threatColorHealth
+    if v == nil then return defaults.threatColorHealth end
+    return v
+end
+function ns.GetThreatColorBorder()
+    local v = p and p.threatColorBorder
+    if v == nil then return defaults.threatColorBorder end
+    return v
+end
+function ns.GetThreatColorName()
+    local v = p and p.threatColorName
+    if v == nil then return defaults.threatColorName end
+    return v
+end
+-- The threat color for the SECOND channels (border / name text), resolved independently
+-- of the health bar's priority chain. GetReactionColor cannot answer this: there the
+-- threat colors compete with tapped/quest/target/focus/mob-type and lose (or win) by
+-- priority, while a border/name channel exists precisely so the threat signal is never
+-- traded against the type signal. Same role arms, same colors and same enable toggles as
+-- the health arm, minus every priority interaction:
+--   tank      -- no aggro / losing aggro always; off-tank color when a co-tank holds it;
+--               has aggro only with Tank Has Aggro (or Classic Tank Aggro) enabled
+--   non-tank  -- has aggro / near aggro always; no aggro only with DPS No Aggro enabled
+-- Returns nothing when there is no signal to show (Show Threat Colors off here, no threat
+-- data, solo, or the state's color is opt-in and switched off) -- the caller then leaves
+-- the border/name at its normal color. The fourth return is a SECRET flag: true means
+-- r/g/b are secret values (an off-tank C-fold over a secret isTanking read), so the caller
+-- must hand them to setters only and never cache or compare them. status: the threat
+-- situation this pass already read (false = no threat data), or nil to read it here; the
+-- nil test reads the type tag only, since the situation read can be secret.
+function ns.ResolveThreatColor(unit, status)
+    if not ns._npThreatColorsOn then return end
+    if type(status) == "nil" then status = UnitThreatSituation("player", unit) end
+    if not status then return end
+    local db = p or defaults
+    if not _isTankRole then
+        -- Solo players always have aggro: the signal only means something in a group.
+        if not IsInGroup() then return end
+        if status >= 3 then
+            local c = _C("dpsHasAggro")
+            return c.r, c.g, c.b, false
+        elseif status >= 2 then
+            local c = _C("dpsNearAggro")
+            return c.r, c.g, c.b, false
+        end
+        local en = defaults.dpsNoAggroEnabled
+        if db.dpsNoAggroEnabled ~= nil then en = db.dpsNoAggroEnabled end
+        if en then
+            local c = _C("dpsNoAggro")
+            return c.r, c.g, c.b, false
+        end
+        return
+    end
+    -- Tank arm.
+    if status >= 3 then
+        -- Holding it: nothing is wrong, so the has-aggro color only paints when the user
+        -- explicitly asked for one (either toggle). Otherwise no tint at all, which is the
+        -- point of a border channel: red border = someone else's mob, plain border = mine.
+        local hae = defaults.tankHasAggroEnabled
+        if db.tankHasAggroEnabled ~= nil then hae = db.tankHasAggroEnabled end
+        if not hae then
+            hae = defaults.classicTankAggro
+            if db.classicTankAggro ~= nil then hae = db.classicTankAggro end
+        end
+        if hae then
+            local c = _C("tankHasAggro")
+            return c.r, c.g, c.b, false
+        end
+        return
+    end
+    if status >= 2 then
+        local c = _C("tankLosingAggro")
+        return c.r, c.g, c.b, false
+    end
+    -- No aggro. Another TANK holding the mob is normal off-tank positioning, not a
+    -- warning -- same read as the health arm, including the secret-role fallback: an
+    -- identity-restricted role read cannot be compared, so the question flips sides and
+    -- ns.ComputeOffTankFold answers it C-side ("is any OTHER tank tanking this mob"),
+    -- starting from the tankNoAggro color and folding toward offTankAggro.
+    local otE = defaults.offTankAggroEnabled
+    if db.offTankAggroEnabled ~= nil then otE = db.offTankAggroEnabled end
+    local base = _C("tankNoAggro")
+    local targetRole, roleSecret = "NONE", false
+    local unitTarget = unit .. "target"
+    if UnitExists(unitTarget) then
+        local r = UnitGroupRolesAssigned(unitTarget)
+        if issecretvalue(r) then roleSecret = true
+        elseif r then targetRole = r end
+    end
+    if otE and roleSecret then
+        local otc = _C("offTankAggro")
+        local folded, fr, fg, fb = ns.ComputeOffTankFold(unit, base.r, base.g, base.b, otc.r, otc.g, otc.b)
+        -- Secret when an isTanking read was: those components reach setters only. A
+        -- plain fold goes through the caller's memos like any other colour.
+        if folded then
+            return fr, fg, fb, (issecretvalue(fr) or issecretvalue(fg) or issecretvalue(fb))
+        end
+        return base.r, base.g, base.b, false
+    end
+    if targetRole == "TANK" then
+        -- Co-tank holds it. With Off-Tank Color off there is no signal to show (the health
+        -- arm falls through here too) -- a red border would call normal positioning a bug.
+        if not otE then return end
+        local c = _C("offTankAggro")
+        return c.r, c.g, c.b, false
+    end
+    return base.r, base.g, base.b, false
+end
 local function GetReactionColor(unit)
     -- Per-call marker read SYNCHRONOUSLY by UpdateHealthColor right after this
     -- returns: true only when this resolution landed on the non-tank Near
@@ -6635,6 +6735,10 @@ local function GetReactionColor(unit)
     -- UpdateHealthColor asks ns.ComputeOffTankFold for a C-folded color instead
     -- of the plain tankNoAggro fallback this function returns.
     ns._reactionOffTankFold = false
+    -- Same idiom, for the threat situation: nil until this pass reads it, then the value
+    -- (false = no threat data), which UpdateHealthColor hands to ns.ResolveThreatColor
+    -- instead of a second UnitThreatSituation read.
+    ns._reactionThreatStatus = nil
     local db = p or defaults
     -- 1. Tapped always highest
     if UnitIsTapDenied(unit) then
@@ -6650,12 +6754,27 @@ local function GetReactionColor(unit)
     -- Non-tank: has aggro, near aggro Tank: losing aggro, no aggro
     local isThreatUnit = false   -- set true when threat data exists
     local threatStatus = 0
-    if InRealInstancedContent() then
+    -- Show Threat Colors (Never / Instances / Always): one cached field read.
+    if ns._npThreatColorsOn then
         local status = UnitThreatSituation("player", unit)
+        ns._reactionThreatStatus = status or false
         if status then
             isThreatUnit = true
             threatStatus = status
-            if not _isTankRole then
+            -- Threat Colors "Health Bar" channel off: the bar carries no threat color at
+            -- all. Clearing isThreatUnit here is what makes that complete -- it also
+            -- switches off the LOW-priority has-aggro / no-aggro steps further down
+            -- (6b, 7b, 9, 10), which read these two locals -- so the bar ends up purely
+            -- mob-type/reaction colored and the Border/Text channels own the threat signal
+            -- on their own. The near-aggro glow rides the STATE, not the bar color, so it
+            -- is still marked here; ns._reactionOffTankFold is a health-bar mechanism and
+            -- deliberately stays unset (ns.ResolveThreatColor does its own fold).
+            if not ns.GetThreatColorHealth() then
+                if not _isTankRole and IsInGroup() and status >= 2 and status < 3 then
+                    ns._reactionNearAggro = true
+                end
+                isThreatUnit, threatStatus = false, 0
+            elseif not _isTankRole then
                 -- Non-tank: has aggro / near aggro absolute priority
                 -- Only apply when in a group (solo players always have aggro)
                 if IsInGroup() then
@@ -7337,8 +7456,7 @@ function NameplateFrame:ApplyAppearance()
     self:SetSize(1, 1)
     local castH = GetCastBarHeight()
     self.health:ClearAllPoints()
-    -- WoW Forever: shifted left so the bar and its level box centre on the unit.
-    self.health:SetPoint("CENTER", self, "CENTER", -ns.NP_ForeverNameDX(self), GetNameplateYOffset())
+    self.health:SetPoint("CENTER", self, "CENTER", 0, GetNameplateYOffset())
     self.health:SetSize(GetHealthBarWidth(), GetHealthBarHeight())
     self.absorb:SetSize(GetHealthBarWidth(), GetHealthBarHeight())
     -- (Classic WoW UI seats its health border from self:ApplyBorder below,
@@ -7375,6 +7493,8 @@ function NameplateFrame:ApplyAppearance()
     -- color on the very next UpdateHealthColor call (which always runs immediately after
     -- this, from the same SetUnit), leaving the plate showing this slot color instead.
     self._lastNameReactR, self._lastNameReactG, self._lastNameReactB = nil, nil, nil
+    -- The Threat Colors name memo too: the same static write replaces its tint.
+    self._nameThR, self._nameThG, self._nameThB = nil, nil, nil
     -- Same for the Class / Reaction slot memo: the static slot colours written here and
     -- in ApplyHealthTextAppearance below replace what it last painted.
     if self._scMemo then
@@ -7994,6 +8114,12 @@ function NameplateFrame:ClearUnit()
     self._absMode = nil
     self._lastHCr, self._lastHCg, self._lastHCb = nil, nil, nil
     self._mirrorPending = nil
+    -- Threat Colors border/text channels: drop the skip-if-unchanged caches so a recycled
+    -- plate always repaints for its new unit. _threatBdOn / _threatNameOn are deliberately
+    -- LEFT set -- they record that the border and name still carry a threat tint, and the
+    -- next UpdateHealthColor uses that to hand them back if the new unit has no signal.
+    self._threatBdKr, self._threatBdKg, self._threatBdKb = nil, nil, nil
+    self._nameThR, self._nameThG, self._nameThB = nil, nil, nil
     -- Class / Reaction slot colours: the next occupant's class token is read afresh.
     self._scUnit = nil
     -- Health-text value memo (UpdateHealthValues): a recycled plate must
@@ -8065,6 +8191,9 @@ function NameplateFrame:ClearUnit()
         self._stackBounds:Hide()
     end
 end
+-- WoW Forever: no health number under 10,000 abbreviates (EllesmereUI_NumberFormat.lua).
+-- On ns, not a local: this chunk is near its 200-local cap.
+ns.AbbreviateNumbers = (EllesmereUI.IS_FOREVER and EllesmereUI.ForeverAbbreviateNumbers) or AbbreviateNumbers
 function NameplateFrame:UpdateHealthValues()
     local unit = self.unit
     if not unit then return end
@@ -8365,7 +8494,7 @@ function NameplateFrame:UpdateHealthValues()
             if ca._anyNoSign then pctNoSignText = string.format("%d", pctVal) end
             -- Number text only when a number/combo slot renders it (percent-only
             -- layouts were paying the abbreviation call + string every tick).
-            if anyNum then numText = AbbreviateNumbers(curHealth) end
+            if anyNum then numText = ns.AbbreviateNumbers(curHealth) end
             -- Decimal variants computed only when at least one slot opts in.
             if anyDec then
                 pctTextDec = string.format("%.1f%%", pctVal)
@@ -8413,6 +8542,19 @@ function NameplateFrame:UpdateHealthValues()
         end
     end
 end
+-- Repaint the base border after the Threat Colors "Border" tint changed. Skipped while
+-- this plate wears the target or hover border color: both are applied ON TOP of the base
+-- border and outrank threat, and when they end their own restore (ApplyTarget's
+-- else-branch, ClearHoverExtras) calls ApplyBorderColor, which picks the tint up then.
+-- The wrap re-sync mirrors what ApplyTarget does after its own border paint: with the
+-- border wrapped around the cast bar, the color just set landed on the hidden health
+-- border (Basic) or not yet on the lower piece and seam (Custom).
+function NameplateFrame:RepaintThreatBorder(unit)
+    if UnitIsUnit(unit, "target") and ns.GetTargetGlowBorderColor() then return end
+    if self._hoverFxOn and ns.GetHoverGlowBorderColor() then return end
+    self:ApplyBorderColor()
+    if self._wrapActive or self._cbWrapActive then self:UpdateBorderWrap() end
+end
 function NameplateFrame:UpdateHealthColor()
     local unit = self.unit
     if not unit then return end
@@ -8454,30 +8596,97 @@ function NameplateFrame:UpdateHealthColor()
         self._lastHCr, self._lastHCg, self._lastHCb = hr, hg, hb
         self.health:SetStatusBarColor(hr, hg, hb)
     end
-    -- Core Text Positions "Class / Reaction Color" (one boolean read while no slot uses it).
-    -- While the name's slot is in that mode it owns the name colour, so both arms of the
-    -- reaction branch below stand down; returning the slot to its custom colour runs
-    -- ApplyAppearance, whose static write and cache resets hand the name back to them.
-    if ns._npSlotClassOn and ns.NP_PaintSlotClassColors(self, unit) then
-        -- (name painted by the slot's class mode)
-    -- Enemy Name Text "Reaction Color" (EXTRAS toggle): zero cost while off (one field read),
-    -- other than the one-time restore below for a plate that was previously colored by this
-    -- feature. Piggybacks on this function's existing event-driven calls rather than
-    -- registering anything of its own.
-    elseif p and p.enemyNameTextReactionColor then
-        local nnr, nng, nnb = GetEnemyNameReactionColor(unit)
-        if nnr ~= self._lastNameReactR or nng ~= self._lastNameReactG or nnb ~= self._lastNameReactB then
-            self._lastNameReactR, self._lastNameReactG, self._lastNameReactB = nnr, nng, nnb
-            self.name:SetTextColor(nnr, nng, nnb, 1)
+    -- Threat Colors "Border" / "Text" channels -- the SECOND signal. Both off by default,
+    -- so the shipped path costs two field reads. ns.ResolveThreatColor answers "what does
+    -- threat say about this unit" without any of the health bar's priority competition,
+    -- which is the whole point: the bar can carry the mob type (Caster/Mini-Boss/Boss)
+    -- while border and name carry aggro at the same time. It reuses the threat situation
+    -- GetReactionColor read above. Its fourth return marks SECRET components (an off-tank
+    -- C-fold over a secret read): those bypass every compare, stay out of the caches and
+    -- reach setters only, exactly like the bar's own fold path.
+    local tcBorder = ns.GetThreatColorBorder()
+    local tcName   = ns.GetThreatColorName()
+    local tcr, tcg, tcb, tcSecret
+    if tcBorder or tcName then
+        tcr, tcg, tcb, tcSecret = ns.ResolveThreatColor(unit, ns._reactionThreatStatus)
+    end
+    -- Plain "there is a signal" boolean: tcr itself may be secret, so the short-circuit
+    -- keeps it out of the comparison.
+    local tcOn = (tcSecret or tcr ~= nil) and true or false
+    -- Border. The color is parked on the plate and ApplyBorderColor -- the single funnel
+    -- that paints the base border -- reads it, so every restore path (RefreshBorderColor,
+    -- ApplyTarget's else-branch, ClearHoverExtras) picks it up for free. Repainted here
+    -- only when it actually changed, and never over a plate currently wearing the target
+    -- or hover border color: those are explicit selection states that win, and their own
+    -- restore runs ApplyBorderColor when they end.
+    if tcBorder and tcOn then
+        local repaint = false
+        self._threatBdOn = true
+        self._threatBdR, self._threatBdG, self._threatBdB = tcr, tcg, tcb
+        if tcSecret then
+            self._threatBdKr, self._threatBdKg, self._threatBdKb = nil, nil, nil
+            repaint = true
+        elseif tcr ~= self._threatBdKr or tcg ~= self._threatBdKg or tcb ~= self._threatBdKb then
+            self._threatBdKr, self._threatBdKg, self._threatBdKb = tcr, tcg, tcb
+            repaint = true
         end
-    elseif self._lastNameReactR then
-        -- Toggled off after having been applied to this plate: restore the slot color
-        -- directly here rather than depending on ApplyAppearance re-running elsewhere.
+        if repaint then self:RepaintThreatBorder(unit) end
+    elseif self._threatBdOn then
+        self._threatBdOn = nil
+        self._threatBdR, self._threatBdG, self._threatBdB = nil, nil, nil
+        self._threatBdKr, self._threatBdKg, self._threatBdKb = nil, nil, nil
+        self:RepaintThreatBorder(unit)
+    end
+    -- Enemy name text: three lanes can want it. Threat Colors "Text" wins while it has a
+    -- signal; next the Core Text Positions "Class / Reaction Color" slot mode (one boolean
+    -- read while no slot uses it), then the "Reaction Color" EXTRAS toggle. The slot mode
+    -- keeps painting its other font strings while threat holds the name (skipName drops
+    -- the name's memo, so it repaints the moment threat hands the name back). Each lane
+    -- keeps its own skip-if-unchanged cache, and handing the name from one to another
+    -- clears the previous owner's cache so the new owner always repaints once. Returning
+    -- the slot to its custom colour runs ApplyAppearance, whose static write and cache
+    -- resets hand the name back to the lanes below it.
+    local nameThreat = tcName and tcOn
+    local wasNameThreat = self._threatNameOn
+    self._threatNameOn = nameThreat or nil
+    local slotClassName = false
+    if ns._npSlotClassOn then
+        slotClassName = ns.NP_PaintSlotClassColors(self, unit, nameThreat)
+    end
+    if nameThreat then
+        if tcSecret then
+            self._nameThR, self._nameThG, self._nameThB = nil, nil, nil
+            self.name:SetTextColor(tcr, tcg, tcb, 1)
+        elseif tcr ~= self._nameThR or tcg ~= self._nameThG or tcb ~= self._nameThB then
+            self._nameThR, self._nameThG, self._nameThB = tcr, tcg, tcb
+            self.name:SetTextColor(tcr, tcg, tcb, 1)
+        end
         self._lastNameReactR, self._lastNameReactG, self._lastNameReactB = nil, nil, nil
-        local nameSlotKey = ns.FindNameSlot()
-        if nameSlotKey then
-            local nr, ng, nb = GetTextSlotColor(nameSlotKey)
-            self.name:SetTextColor(nr, ng, nb, 1)
+    elseif slotClassName then
+        -- (name painted by the slot's class mode)
+        if wasNameThreat then self._nameThR, self._nameThG, self._nameThB = nil, nil, nil end
+    else
+        if wasNameThreat then self._nameThR, self._nameThG, self._nameThB = nil, nil, nil end
+        -- Enemy Name Text "Reaction Color" (EXTRAS toggle): zero cost while off (one field read),
+        -- other than the one-time restore below for a plate that was previously colored by this
+        -- feature. Piggybacks on this function's existing event-driven calls rather than
+        -- registering anything of its own.
+        if p and p.enemyNameTextReactionColor then
+            local nnr, nng, nnb = GetEnemyNameReactionColor(unit)
+            if nnr ~= self._lastNameReactR or nng ~= self._lastNameReactG or nnb ~= self._lastNameReactB then
+                self._lastNameReactR, self._lastNameReactG, self._lastNameReactB = nnr, nng, nnb
+                self.name:SetTextColor(nnr, nng, nnb, 1)
+            end
+        elseif self._lastNameReactR or wasNameThreat then
+            -- Toggled off after having been applied to this plate (or the threat lane just
+            -- handed the name back): restore the slot color directly here rather than
+            -- depending on ApplyAppearance re-running elsewhere.
+            self._lastNameReactR, self._lastNameReactG, self._lastNameReactB = nil, nil, nil
+            local nameSlotKey = ns.FindNameSlot()
+            if nameSlotKey then
+                local nr, ng, nb = GetTextSlotColor(nameSlotKey)
+                self.name:SetTextColor(nr, ng, nb, 1)
+            end
         end
     end
     -- Near-aggro glow (Non-Tank Threat cog): ns._reactionNearAggro was written
@@ -8659,10 +8868,12 @@ function NameplateFrame:UpdateName()
     if self._fvLevelBox then ns.NP_UpdateForeverLevel(self) end
     -- The slotted name-family variant decides what renders: name or a level+name
     -- combo. A nil slot keeps the plain-name write (RefreshNamePosition hides it).
-    local el = ns.FindNameSlot()
-    el = el and GetTextSlot(el) or "enemyName"
+    local slot = ns.FindNameSlot()
+    local el = slot and GetTextSlot(slot) or "enemyName"
     local name = EllesmereUI.WithSurname(UnitName(unit))
     if type(name) == "string" then
+        -- WoW Forever: the slot's Name Format (nil function off Forever).
+        if ns.NP_FormatName then name = ns.NP_FormatName(name, slot) end
         ns.SetNameElementText(self.name, el, name, unit)
         if p and p.nameRaidMarkerEnabled == true then self:RefreshNamePosition(true) end
     end
@@ -8899,8 +9110,7 @@ function NameplateFrame:UpdateNameWidth()
         and (((p and p.nameRaidMarkerSize) or defaults.nameRaidMarkerSize or 14) + 3) or 0
     if nameSlot == "textSlotTop" then
         -- Above the bar: reserve a fixed slot for the inline raid marker.
-        -- WoW Forever: the name spans the bar and its level box.
-        local nameW = barW - nameMarkerReserve + 2 * ns.NP_ForeverNameDX(self)
+        local nameW = barW - nameMarkerReserve
         local rmPos = GetRaidMarkerPos()
         if rmPos ~= "none" and self.raidFrame:IsShown() then
             nameW = nameW - 2 * (GetRaidMarkerSize() - 2) - 7
@@ -9013,8 +9223,7 @@ function NameplateFrame:RefreshNamePosition(localOnly)
         SetFSFont(self.name, GetTextSlotSize("textSlotTop"), GetNPOutline())
         self.name:SetParent(ns.SlotTextHost(self, "textSlotTop", nameStrata))
         local cpPush = GetClassPowerTopPush(self)
-        -- WoW Forever: centred over the bar and its level box together.
-        PP.Point(self.name, "BOTTOM", self.health, "TOP", txOff + (nameMarkerReserve * 0.5) + ns.NP_ForeverNameDX(self), 4 + nameYOff + cpPush + tyOff)
+        PP.Point(self.name, "BOTTOM", self.health, "TOP", txOff + (nameMarkerReserve * 0.5), 4 + nameYOff + cpPush + tyOff)
         self.name:SetJustifyH("CENTER")
         self.name:Show()
     else
@@ -9161,6 +9370,7 @@ function NameplateFrame:ApplyTarget()
             else
                 PP.SetBorderColor(self.health, bc.r, bc.g, bc.b, 1)
             end
+            self._hbThreatTint = nil
         end
         -- Use Target Border Color on the custom spell icon border (the else branch's
         -- ApplyBorderColor restores it). One field read while off.
@@ -9269,6 +9479,13 @@ function ns.ApplyHoverExtras(plate)
             elseif PP and IsBorderEnabled() then
                 PP.SetBorderSize(plate.health, hbsz)
             end
+            -- The resize drew the base colour (custom rebuild) or the last clean one
+            -- (re-snap) over a Threat Colors tint: put it back unless a hover or target
+            -- border colour paints this border instead.
+            if plate._threatBdOn and not ns.GetHoverGlowBorderColor()
+                and not (isTarget and ns.GetTargetGlowBorderColor()) then
+                plate:ApplyBorderColor()
+            end
             plate._hoverBorderSized = true
             any = true
             -- The custom wrap copies the size its border is drawn at. Not the Basic
@@ -9288,6 +9505,7 @@ function ns.ApplyHoverExtras(plate)
             else
                 PP.SetBorderColor(plate.health, bc.r, bc.g, bc.b, 1)
             end
+            plate._hbThreatTint = nil
             any = true
             -- A friendly plate's ApplyTarget has no border colour of its own to fall back
             -- on: this flag tells it to repaint the base colour on the way out.
@@ -9330,50 +9548,28 @@ function NameplateFrame:UpdateImportantCastGlow(spellID)
         self._importantCastOverlay = ov
     end
 
-    local Glows = _G_Glows or EllesmereUI.Glows
-    if not Glows then return end
+    local Glows = EllesmereUI.Glows
 
     local style = cfg.importantCastGlowStyle or defaults.importantCastGlowStyle or 1
     if type(style) ~= "number" or style < 1 or style > #PANDEMIC_GLOW_STYLES then style = 1 end
     local c = cfg.importantCastGlowColor or defaults.importantCastGlowColor or { r = 1, g = 0.2, b = 0.2 }
     local bgColor = cfg.importantCastGlowBackgroundColor or defaults.importantCastGlowBackgroundColor or { r = 0, g = 0, b = 0 }
-    local bgOn = cfg.importantCastGlowBackground == true
-    -- Lines/thickness/speed and the background are Pixel Glow's own knobs; every
-    -- other style ignores them, so they stay nil and out of the cache key below.
-    local impN, impTh, impPeriod
-    if style == 1 then
-        impN = cfg.importantCastGlowLines or defaults.importantCastGlowLines or 8
-        impTh = cfg.importantCastGlowThickness or defaults.importantCastGlowThickness or 2
-        impPeriod = cfg.importantCastGlowSpeed or defaults.importantCastGlowSpeed or 4
-    end
-
-    -- Ensure glow animation is running (idempotent if already active)
-    if not self._importantGlowActive or self._importantGlowStyle ~= style
-       or self._importantGlowR ~= c.r or self._importantGlowG ~= c.g or self._importantGlowB ~= c.b
-       or self._importantGlowBgOn ~= bgOn or self._importantGlowBgR ~= bgColor.r
-       or self._importantGlowBgG ~= bgColor.g or self._importantGlowBgB ~= bgColor.b
-       or self._importantGlowN ~= impN or self._importantGlowTh ~= impTh
-       or self._importantGlowPeriod ~= impPeriod then
-        Glows.StopAllGlows(self._importantCastOverlay)
-        local pW, pH = self.cast:GetWidth(), self.cast:GetHeight()
-        if pW < 5 then pW = 100 end
-        if pH < 5 then pH = 14 end
-        -- StartGlow owns the per-style engine pick. Its Pixel Glow path reproduces
-        -- the old direct call exactly: same lineLen formula, and an unset bg alpha
-        -- resolves to 1 there, which is what omitting the argument used to do.
-        local Start = StartGlow or Glows.StartGlow
-        Start(self._importantCastOverlay, ns.NP_TO_SHARED_GLOW[style] or 1, pW, c.r, c.g, c.b,
-            style == 1 and {
-                N = impN, th = impTh, period = impPeriod,
-                bg = bgOn and { r = bgColor.r or 0, g = bgColor.g or 0, b = bgColor.b or 0 } or nil,
-            } or nil, pH)
-        self._importantGlowActive = true
-        self._importantGlowStyle = style
-        self._importantGlowR, self._importantGlowG, self._importantGlowB = c.r, c.g, c.b
-        self._importantGlowBgOn = bgOn
-        self._importantGlowBgR, self._importantGlowBgG, self._importantGlowBgB = bgColor.r, bgColor.g, bgColor.b
-        self._importantGlowN, self._importantGlowTh, self._importantGlowPeriod = impN, impTh, impPeriod
-    end
+    -- One scratch spec for every plate: StartSpecGlow reads it synchronously.
+    local spec = ns._impCastGlowSpec
+    if not spec then spec = {}; ns._impCastGlowSpec = spec end
+    spec.style = ns.NP_TO_SHARED_GLOW[style] or 1
+    spec.r, spec.g, spec.b = Glows.ResolveColor(cfg.importantCastGlowColorMode or "custom", c.r, c.g, c.b)
+    spec.lines = cfg.importantCastGlowLines or defaults.importantCastGlowLines
+    spec.thickness = cfg.importantCastGlowThickness or defaults.importantCastGlowThickness
+    spec.speed = cfg.importantCastGlowSpeed or defaults.importantCastGlowSpeed
+    spec.bg = (cfg.importantCastGlowBackground == true) or nil
+    spec.bgR, spec.bgG, spec.bgB = bgColor.r, bgColor.g, bgColor.b
+    local pW, pH = self.cast:GetWidth(), self.cast:GetHeight()
+    if pW < 5 then pW = 100 end
+    if pH < 5 then pH = 14 end
+    -- Restarts only when the setting or the bar size changed.
+    Glows.StartSpecGlow(self._importantCastOverlay, spec, pW, pH, "bar")
+    self._importantGlowActive = true
 
     -- SetAlphaFromBoolean handles the secret boolean taint-free.
     -- Important = alpha 1 (glow visible), not important = alpha 0 (glow hidden).
@@ -9388,12 +9584,10 @@ end
 
 function NameplateFrame:ClearImportantCastGlow()
     if self._importantGlowActive and self._importantCastOverlay then
-        local Glows = _G_Glows or EllesmereUI.Glows
-        if Glows then Glows.StopAllGlows(self._importantCastOverlay) end
+        EllesmereUI.Glows.StopAllGlows(self._importantCastOverlay)
         self._importantCastOverlay:SetAlpha(0)
         self._importantCastOverlay:Hide()
         self._importantGlowActive = false
-        self._importantGlowStyle = nil
     end
 end
 
@@ -10157,9 +10351,10 @@ function NameplateFrame:UNIT_SPELLCAST_STOP()
         end
     end
 end
-function NameplateFrame:UNIT_SPELLCAST_CHANNEL_STOP()
+function NameplateFrame:UNIT_SPELLCAST_CHANNEL_STOP(_, _, _, interrupterGUID)
     -- Directly hide instead of UpdateCast: in restricted execution, UnitCastingInfo can
     -- return secret values (not nil) for a stale channel, making UpdateCast think it's active.
+    -- An interrupted channel carries the interrupter GUID on this event; a natural end leaves it nil.
     if self.isCasting then
         if self._castFallback then
             self._castFallback = nil
@@ -10181,17 +10376,23 @@ function NameplateFrame:UNIT_SPELLCAST_CHANNEL_STOP()
     if GetShowClassPower() and classPowerType and self._cpPips and self.unit and UnitIsUnit(self.unit, "target") then
         UpdateClassPowerOnPlate(self)
     end
+    if type(interrupterGUID) ~= "nil" and not self._interrupted then
+        self:HandleInterrupted(interrupterGUID)
+    end
 end
 function NameplateFrame:UNIT_SPELLCAST_FAILED()
     self:UpdateCast()
 end
-function NameplateFrame:UNIT_SPELLCAST_INTERRUPTED(_, _, _, interrupterGUID)
+function NameplateFrame:HandleInterrupted(interrupterGUID)
     local protected = self._kickProtected
     if type(interrupterGUID) ~= "nil"
         and ((issecretvalue and issecretvalue(protected)) or not protected) then
         self:ShowCastLockout()
     end
     self:ShowInterrupted(interrupterGUID)
+end
+function NameplateFrame:UNIT_SPELLCAST_INTERRUPTED(_, _, _, interrupterGUID)
+    self:HandleInterrupted(interrupterGUID)
 end
 -- Mid-cast interruptibility flips: re-read protection once, store it, refresh
 -- color + kick tick + overlay. The cooldown watcher never re-reads cast info per
@@ -10229,9 +10430,10 @@ function NameplateFrame:UNIT_SPELLCAST_EMPOWER_UPDATE()
     self._kickGeoDirty = true
     self:UpdateCast()
 end
-function NameplateFrame:UNIT_SPELLCAST_EMPOWER_STOP()
+function NameplateFrame:UNIT_SPELLCAST_EMPOWER_STOP(_, _, _, _, interrupterGUID)
     -- Stop directly. Re-checking cast info here can return a stale secret
-    -- value in PvP and look like the cast is still going.
+    -- value in PvP and look like the cast is still going. An interrupted empower
+    -- carries the interrupter GUID as the 5th arg (after unit, castGUID, spellID, complete).
     local wasCasting = self.isCasting
     self.isCasting = false
     self:HideKickTick()
@@ -10253,6 +10455,9 @@ function NameplateFrame:UNIT_SPELLCAST_EMPOWER_STOP()
     end
     if GetShowClassPower() and classPowerType and self._cpPips and self.unit and UnitIsUnit(self.unit, "target") then
         UpdateClassPowerOnPlate(self)
+    end
+    if type(interrupterGUID) ~= "nil" and not self._interrupted then
+        self:HandleInterrupted(interrupterGUID)
     end
 end
 
@@ -10400,6 +10605,15 @@ local function UpdateFactionFrameForZone()
     elseif not shouldBeActive and factionFrameActive then
         factionFrame:UnregisterEvent("UNIT_FACTION")
         factionFrameActive = false
+    end
+end
+
+-- Options setter of Show Threat Colors: re-derive the flag and repaint every plate's
+-- colors once (the zone / role path below without its quest-cache wipe).
+function ns.NP_ApplyThreatColorMode()
+    ns.NP_RefreshThreatColorFlag()
+    for _, plate in pairs(ns.plates) do
+        plate:UpdateHealthColor()
     end
 end
 
@@ -10767,12 +10981,27 @@ end)
 --  the framework handler takes over PLAYER_SPECIALIZATION_CHANGED.
 -------------------------------------------------------------------------------
 do
+    -- True when any preset's assigned spec list holds spec id (the store
+    -- test for the WoW Forever spec pick below).
+    ns.NP_PresetHoldsSpec = function(id, specMap)
+        if not specMap then return false end
+        for _, specList in pairs(specMap) do
+            if specList[id] then return true end
+        end
+        return false
+    end
+
     local function ApplySpecPresetFromDB()
         if not p then return end
 
         local specIndex = GetSpecialization and GetSpecialization() or 0
         local specID = specIndex and specIndex > 0
                        and GetSpecializationInfo(specIndex) or nil
+        -- WoW Forever: the class counts as each of its retail specs; the first
+        -- one in class order that a preset is assigned to picks the preset.
+        if EllesmereUI.IS_FOREVER then
+            specID = EllesmereUI.ForeverClassSpec(nil, ns.NP_PresetHoldsSpec, p._specAssignments)
+        end
         if not specID then return end
 
         local K_ASSIGN  = "_specAssignments"
@@ -10909,9 +11138,11 @@ end
 function npAddon:OnEnable()
     -- Re-read profile: PreSeedSpecProfile may have re-pointed db.profile between OnInitialize and OnEnable.
     p = ENP.db.profile
-    -- Class / Reaction slot and Threat % flags for the first plates (RefreshAllSettings keeps them after).
+    -- Class / Reaction slot, Threat % and Show Threat Colors flags for the first plates
+    -- (RefreshAllSettings keeps them after).
     ns.NP_RefreshSlotClassFlags()
     ns.NP_RefreshThreatPctFlag()
+    ns.NP_RefreshThreatColorFlag()
     -- A profile already on a stock style gets its one-time bar texture seed
     -- before the first plate builds (the Style page seeds on the switch);
     -- its own textures go to the EllesmereUI slot first, so a switch back

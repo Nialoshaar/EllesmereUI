@@ -605,6 +605,34 @@ local function _unitHasBuff(u, spellIDs)
     return false
 end
 
+-- Strict ownership of one aura: true = the player cast it, false = someone else
+-- did, nil = cannot tell (the caller suppresses rather than false-fires).
+-- isFromPlayerOrPlayerPet is true for ANY player's (or player pet's) cast, so it
+-- only rules an aura out (false = an NPC applied it); sourceUnit proves it.
+function EABR._StrictAuraFromMe(aura)
+    local fromPlayer = aura.isFromPlayerOrPlayerPet
+    if not isSecret(fromPlayer) and fromPlayer == false then return false end
+    local src = aura.sourceUnit
+    if src == nil or isSecret(src) then return nil end
+    return UnitIsUnit(src, "player") == true
+end
+
+-- Whether the player's OWN cast of `id` is on `unit`, for the in-combat cache
+-- updates where sourceUnit is secret: the PLAYER filter returns only auras the
+-- player applied, so another caster's copy never counts. Presence only.
+function EABR._OwnCastOn(unit, id)
+    local names = EABR._ownCastNames
+    if not names then names = {}; EABR._ownCastNames = names end
+    local name = names[id]
+    if name == nil then
+        name = C_Spell.GetSpellName(id) or false
+        names[id] = name
+    end
+    if not name then return false end
+    local ok, aura = pcall(C_UnitAuras.GetAuraDataBySpellName, unit, name, "HELPFUL|PLAYER")
+    return ok and aura ~= nil and not isSecret(aura)
+end
+
 -- True if the buff's source is the player. Non-player units: OOC iteration only, false in combat (caller uses the snapshot).
 local function _unitHasBuffFromPlayer(u, spellIDs, strictSource)
     local inCombat = InCombat()
@@ -620,21 +648,16 @@ local function _unitHasBuffFromPlayer(u, spellIDs, strictSource)
                 local ok, aura = pcall(C_UnitAuras.GetPlayerAuraBySpellID, id)
                 if strictSource and (not ok or isSecret(aura)) then return nil end
                 if ok and aura ~= nil and not isSecret(aura) then
-                    local fromMe = aura.isFromPlayerOrPlayerPet
-                    if strictSource then
-                        if isSecret(fromMe) then return nil end
-                        if fromMe ~= nil then return fromMe == true end
-                        local src = aura.sourceUnit
-                        if isSecret(src) or src == nil then return nil end
-                        return UnitIsUnit(src, "player") == true
-                    elseif fromMe and not isSecret(fromMe) and fromMe == true then
-                        return true
-                    end
+                    if strictSource then return EABR._StrictAuraFromMe(aura) end
                     local src = aura.sourceUnit
-                    if src and not isSecret(src) and UnitIsUnit(src, "player") then
-                        return true
+                    if src and not isSecret(src) then
+                        if UnitIsUnit(src, "player") then return true end
+                    else
+                        -- Source unreadable: a player's cast is assumed ours (the
+                        -- flag alone cannot tell whose).
+                        local fromMe = aura.isFromPlayerOrPlayerPet
+                        if not isSecret(fromMe) and fromMe == true then return true end
                     end
-                    if strictSource and (not src or isSecret(src)) then return nil end
                 end
             end
         end
@@ -647,19 +670,9 @@ local function _unitHasBuffFromPlayer(u, spellIDs, strictSource)
                 if not aura then break end
                 local sid = aura.spellId
                 if sid and not isSecret(sid) and idLookup[sid] then
-                    local fromMe = aura.isFromPlayerOrPlayerPet
-                    if strictSource then
-                        if isSecret(fromMe) then return nil end
-                        if fromMe ~= nil then return fromMe == true end
-                        local src = aura.sourceUnit
-                        if isSecret(src) or src == nil then return nil end
-                        return UnitIsUnit(src, "player") == true
-                    end
                     local src = aura.sourceUnit
                     if src and not isSecret(src) and UnitIsUnit(src, "player") then
                         return true
-                    elseif strictSource and (not src or isSecret(src)) then
-                        return nil
                     end
                 end
             end
@@ -675,14 +688,7 @@ local function _unitHasBuffFromPlayer(u, spellIDs, strictSource)
             local ok, aura = pcall(C_UnitAuras.GetUnitAuraBySpellID, u, id)
             if strictSource and (not ok or isSecret(aura)) then return nil end
             if ok and aura and not isSecret(aura) then
-                local fromMe = aura.isFromPlayerOrPlayerPet
-                if strictSource then
-                    if isSecret(fromMe) then return nil end
-                    if fromMe ~= nil then return fromMe == true end
-                    local src = aura.sourceUnit
-                    if isSecret(src) or src == nil then return nil end
-                    return UnitIsUnit(src, "player") == true
-                end
+                if strictSource then return EABR._StrictAuraFromMe(aura) end
                 local src = aura.sourceUnit
                 if src and not isSecret(src) then
                     if UnitIsUnit(src, "player") then return true end
@@ -704,14 +710,7 @@ local function _unitHasBuffFromPlayer(u, spellIDs, strictSource)
         if not aura then break end
         local sid = aura.spellId
         if sid and not isSecret(sid) and idLookup[sid] then
-            local fromMe = aura.isFromPlayerOrPlayerPet
-            if strictSource then
-                if isSecret(fromMe) then return nil end
-                if fromMe ~= nil then return fromMe == true end
-                local src = aura.sourceUnit
-                if isSecret(src) or src == nil then return nil end
-                return UnitIsUnit(src, "player") == true
-            end
+            if strictSource then return EABR._StrictAuraFromMe(aura) end
             local src = aura.sourceUnit
             if src and not isSecret(src) then
                 if UnitIsUnit(src, "player") then return true end
@@ -1897,44 +1896,11 @@ end
 -------------------------------------------------------------------------------
 --  Glow Types (shared with options)
 -------------------------------------------------------------------------------
-local GLOW_TYPES = {
-    { name = "Action Button Glow",   buttonGlow = true },
-    { name = "Pixel Glow",           procedural = true },
-    { name = "Auto-Cast Shine",      autocast = true },
-    { name = "GCD",                  atlas = "RotationHelper_Ants_Flipbook",  texPadding = 1.6 },
-    { name = "Modern WoW Glow",      atlas = "UI-HUD-ActionBar-Proc-Loop-Flipbook",  texPadding = 1.4 },
-    { name = "Classic WoW Glow",     texture = "Interface\\SpellActivationOverlay\\IconAlertAnts",
-      rows = 5, columns = 5, frames = 25, duration = 0.3, frameW = 48, frameH = 48, texPadding = 1.25 },
-}
+-- Saved glowType numbering (Action Button Glow first) as a view over the
+-- shared style table; no Shape Glow (reminder icons have no shape mask).
+local GLOW_VIEW = EllesmereUI.Glows.MakeView({ 2, 1, 3, 5, 6, 7 })
 
-local GLOW_VALUES = { [0] = "None" }
-local GLOW_ORDER  = { 0 }
-for i, entry in ipairs(GLOW_TYPES) do
-    GLOW_VALUES[i] = entry.name
-    GLOW_ORDER[#GLOW_ORDER + 1] = i
-end
-
--------------------------------------------------------------------------------
---  Glow Engines provided by shared EllesmereUI_Glows.lua
--------------------------------------------------------------------------------
-local StartPixelGlow, StopPixelGlow, StartButtonGlow, StopButtonGlow
-local StartAutoCastShine, StopAutoCastShine, StartFlipBookGlow, StopFlipBookGlow, StopAllGlows
-do
-    local G = EllesmereUI.Glows
-    StartPixelGlow = function(wrapper, sz, cr, cg, cb)
-        local N, th, period = 8, 2, 4
-        local lineLen = floor((sz+sz)*(2/N-0.1)); lineLen = min(lineLen, sz); if lineLen < 1 then lineLen = 1 end
-        G.StartProceduralAnts(wrapper, N, th, period, lineLen, cr, cg, cb, sz)
-    end
-    StopPixelGlow = function(wrapper) G.StopProceduralAnts(wrapper) end
-    StartButtonGlow = function(wrapper, sz, cr, cg, cb, scale) G.StartButtonGlow(wrapper, sz, cr, cg, cb, scale) end
-    StopButtonGlow = function(wrapper) G.StopButtonGlow(wrapper) end
-    StartAutoCastShine = function(wrapper, sz, cr, cg, cb, scale) G.StartAutoCastShine(wrapper, sz, cr, cg, cb, scale) end
-    StopAutoCastShine = function(wrapper) G.StopAutoCastShine(wrapper) end
-    StartFlipBookGlow = function(wrapper, sz, entry, cr, cg, cb) G.StartFlipBookGlow(wrapper, sz, entry, cr, cg, cb) end
-    StopFlipBookGlow = function(wrapper) G.StopFlipBookGlow(wrapper) end
-    StopAllGlows = function(wrapper) G.StopAllGlows(wrapper) end
-end
+local StopAllGlows = EllesmereUI.Glows.StopAllGlows
 
 
 -------------------------------------------------------------------------------
@@ -2357,7 +2323,9 @@ function EABR.ApplyIconBorder(f, protectedOwner)
     local ox, oy = p and p.borderTextureOffset, p and p.borderTextureOffsetY
     local sx, sy = p and p.borderTextureShiftX, p and p.borderTextureShiftY
     local behind = p and p.borderBehind == true
-    local level = behind and max(0, f:GetFrameLevel() - 1) or (f:GetFrameLevel() + 3)
+    -- +2: the strips sit one level up (PP.CreateBorder), below the glow
+    -- wrapper (+4), so a 1px glow is never hidden under a 1px border.
+    local level = behind and max(0, f:GetFrameLevel() - 1) or (f:GetFrameLevel() + 2)
     -- Exact size companion, memoized raw: it only counts while paired with size + texture.
     local pxRaw = p and p.borderSizePx
 
@@ -2796,24 +2764,43 @@ local function FadeOutSecureIcons()
     end
 end
 
-local function ApplyGlow(btn, glowType, cr, cg, cb, overrideSz)
-    if glowType == 0 then return end
-    local entry = GLOW_TYPES[glowType]; if not entry then return end
-    if cr == nil and (entry.procedural or entry.buttonGlow or entry.autocast) then
-        cr, cg, cb = 1.0, 0.788, 0.137
+-- Full render spec from the display settings; the options preview renders the
+-- same spec. nil when the glow is off.
+local ApplyGlow
+do
+    local SPEC = {}
+    local function GlowSpec(p, out)
+        local shared = p and GLOW_VIEW.toShared[p.glowType or 0]
+        if not shared then return nil end
+        out = out or SPEC
+        out.style = shared
+        out.r, out.g, out.b = ResolveGlowTint(p)
+        out.lines, out.thickness, out.speed = p.glowLines, p.glowThickness, p.glowSpeed
+        local bgc = p.glowBackgroundColor
+        out.bg = (p.glowBackground == true) or nil
+        out.bgR, out.bgG, out.bgB = bgc and bgc.r, bgc and bgc.g, bgc and bgc.b
+        return out
     end
-    if not btn._eabrGlowWrapper then
-        local w = CreateFrame("Frame", nil, btn); w:SetAllPoints(btn); w:SetFrameLevel(btn:GetFrameLevel()+4)
-        btn._eabrGlowWrapper = w
+    _G._EABR_GlowSpec = GlowSpec
+
+    -- Also clears the glow when it is off, so callers need no RemoveGlow first
+    -- (that would reset StartSpecGlow's signature and restart every refresh).
+    ApplyGlow = function(btn, p, overrideSz)
+        local spec = GlowSpec(p)
+        if not spec then
+            local w = btn._eabrGlowWrapper
+            if w then StopAllGlows(w); w:Hide() end
+            return
+        end
+        if not btn._eabrGlowWrapper then
+            local w = CreateFrame("Frame", nil, btn); w:SetAllPoints(btn); w:SetFrameLevel(btn:GetFrameLevel()+4)
+            btn._eabrGlowWrapper = w
+        end
+        local wrapper = btn._eabrGlowWrapper; local sz = overrideSz or btn:GetWidth() or ICON_SIZE
+        EllesmereUI.Glows.StartSpecGlow(wrapper, spec, sz, sz, "icon")
+        wrapper:SetAlpha(1)
+        wrapper:Show()
     end
-    local wrapper = btn._eabrGlowWrapper; local sz = overrideSz or btn:GetWidth() or ICON_SIZE
-    StopAllGlows(wrapper)
-    if entry.procedural then StartPixelGlow(wrapper, sz, cr, cg, cb)
-    elseif entry.buttonGlow then StartButtonGlow(wrapper, sz, cr, cg, cb, 1.36)
-    elseif entry.autocast then StartAutoCastShine(wrapper, sz, cr, cg, cb, 1.0)
-    else StartFlipBookGlow(wrapper, sz, entry, cr, cg, cb) end
-    wrapper:SetAlpha(1)
-    wrapper:Show()
 end
 
 local function RemoveGlow(btn)
@@ -3408,12 +3395,9 @@ local function ShowIcon(iconIdx, m)
     end
     ApplySetup(btn, m)
     local p = db.profile.display
-    local glowType = p.glowType or 0
-    local gr, gg, gb = ResolveGlowTint(p)
     local baseScale = p.scale or 1.0
     local sz = floor(ICON_SIZE * baseScale + 0.5)
-    RemoveGlow(btn)
-    ApplyGlow(btn, glowType, gr, gg, gb, sz)
+    ApplyGlow(btn, p, sz)
     EABR.ApplyEatingVisual(btn, m)
     EABR.ApplyIconQuality(btn, (not m.isEating) and m.qualityAtlas or nil)
     if m.groupTotal then
@@ -4362,12 +4346,10 @@ local function Refresh()
                             f = combatActiveIcons[#combatActiveIcons]
                         end
                         if f and not m.isEating then
-                            RemoveGlow(f)
                             local p = db.profile.display
-                            local gr, gg, gb = ResolveGlowTint(p)
                             local baseScale = p.scale or 1.0
                             local sz = floor(ICON_SIZE * baseScale + 0.5)
-                            ApplyGlow(f, p.glowType or 0, gr, gg, gb, sz)
+                            ApplyGlow(f, p, sz)
                         end
                     end
                 end
@@ -4377,10 +4359,9 @@ local function Refresh()
                 local pBtn = EABR._providerCastBtn
                 if pBtn then
                     local p = db.profile.display
-                    local gr, gg, gb = ResolveGlowTint(p)
                     local sz = pBtn:GetWidth() or ICON_SIZE
                     if pBtn._eabrGlowWrapper then pBtn._eabrGlowWrapper:Hide() end
-                    ApplyGlow(pBtn, p.glowType or 0, gr, gg, gb, sz)
+                    ApplyGlow(pBtn, p, sz)
                 end
             end
             if (combatIdx > 0 or providerEntry) and combatAnchor then
@@ -4424,12 +4405,10 @@ local function Refresh()
                     ShowCursorIcon(cursorIdx, m)
                     local f = cursorActiveIcons[#cursorActiveIcons]
                     if f and not m.isEating then
-                        RemoveGlow(f)
                         local p = db.profile.display
-                        local gr, gg, gb = ResolveGlowTint(p)
                         local baseScale = p.scale or 1.0
                         local sz = floor(ICON_SIZE * baseScale + 0.5)
-                        ApplyGlow(f, p.glowType or 0, gr, gg, gb, sz)
+                        ApplyGlow(f, p, sz)
                     end
                 else
                     iconIdx = iconIdx + 1
@@ -4442,10 +4421,9 @@ local function Refresh()
             local pBtn = EABR._providerCastBtn
             if pBtn then
                 local p = db.profile.display
-                local gr, gg, gb = ResolveGlowTint(p)
                 local sz = pBtn:GetWidth() or ICON_SIZE
                 if pBtn._eabrGlowWrapper then pBtn._eabrGlowWrapper:Hide() end
-                ApplyGlow(pBtn, p.glowType or 0, gr, gg, gb, sz)
+                ApplyGlow(pBtn, p, sz)
             end
         else
             EABR.ParkProviderCastButton()
@@ -4853,10 +4831,9 @@ local function BeaconApplyGlow(f, show)
         local p = db and db.profile.display
         local glowType = p and p.glowType or 0
         if glowType > 0 then
-            local gr, gg, gb = ResolveGlowTint(p)
             local baseScale = p and p.scale or 1.0
             local sz = floor(ICON_SIZE * baseScale + 0.5)
-            ApplyGlow(f, glowType, gr, gg, gb, sz)
+            ApplyGlow(f, p, sz)
         end
         _B.glowState[f._spellID] = true
     else
@@ -5134,15 +5111,7 @@ function EABR:OnEnable()
     _G._EABR_ApplyIconBorder = EABR.ApplyIconBorder
     _G._EABR_ApplyAllIconBorders = EABR.ApplyAllIconBorders
     _G._EABR_HideAllIcons = HideAllIcons
-    _G._EABR_GLOW_VALUES = GLOW_VALUES
-    _G._EABR_GLOW_ORDER = GLOW_ORDER
-    _G._EABR_GLOW_TYPES = GLOW_TYPES
-    _G._EABR_StartPixelGlow = StartPixelGlow
-    _G._EABR_StartButtonGlow = StartButtonGlow
-    _G._EABR_StartAutoCastShine = StartAutoCastShine
-    _G._EABR_StartFlipBookGlow = StartFlipBookGlow
-    _G._EABR_StopAllGlows = StopAllGlows
-    _G._EABR_ResolveGlowTint = ResolveGlowTint
+    _G._EABR_GLOW_VIEW = GLOW_VIEW
     _G._EABR_EnsureGlowModeMigrated = EnsureGlowModeMigrated
     _G._EABR_RegisterUnlock = RegisterUnlockElements
     _G._EABR_ApplyUnlockPos = ApplyUnlockPos
@@ -5523,8 +5492,7 @@ mainFrame:SetScript("OnEvent", function(_, e, arg1, arg2, arg3)
             local isEvoker = _cachedPlayerClass == "EVOKER"
             if isEvoker and InCombat() and IsInGroup() then
                 for _, id in ipairs(_ownOnRaidIDs) do
-                    local ok, result = pcall(C_UnitAuras.GetPlayerAuraBySpellID, id)
-                    if ok and result ~= nil and not isSecret(result) then
+                    if EABR._OwnCastOn("player", id) then
                         _preCombatOwnOnRaidCache[id] = true
                     end
                 end
@@ -5536,11 +5504,8 @@ mainFrame:SetScript("OnEvent", function(_, e, arg1, arg2, arg3)
             if c == 112 or c == 114 then  -- 'p' or 'r'
                 if _isEvokerOwnOnRaid and InCombat() and IsInGroup() then
                     for _, id in ipairs(_ownOnRaidIDs) do
-                        if not _preCombatOwnOnRaidCache[id] then
-                            local ok, result = pcall(C_UnitAuras.GetUnitAuraBySpellID, arg1, id)
-                            if ok and result ~= nil and not isSecret(result) then
-                                _preCombatOwnOnRaidCache[id] = true
-                            end
+                        if not _preCombatOwnOnRaidCache[id] and EABR._OwnCastOn(arg1, id) then
+                            _preCombatOwnOnRaidCache[id] = true
                         end
                     end
                 end

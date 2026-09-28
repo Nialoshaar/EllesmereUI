@@ -9,9 +9,8 @@ if EUI_CLIENT_BLOCKED then return end -- pre-12.1 client failsafe (EllesmereUI_C
 --    bottom-right with the damage meter above it and the tooltip above that,
 --    the minimap top-right, the player frame left and the target frame right
 --    a hundred pixels above action bar 1 with the cast bar centred between
---    them, the stance bar just above the player frame, the battle res
---    indicator to its left and Blizzard's encounter bar fifty pixels above
---    the target frame.
+--    them, the stance bar just above the player frame and Blizzard's
+--    encounter bar fifty pixels above the target frame.
 --
 --  Two halves:
 --    1. SeedForeverBaseLayout, called by the first-install loader at the
@@ -79,13 +78,6 @@ local PET_BOTTOM    = MAINBAR_Y + BAR_HEIGHT + GAP
 local UF_MID        = UF_BOTTOM + TARGET_H / 2
 -- Blizzard's encounter bar: over the target frame, this far above it.
 local ENCOUNTER_GAP = 50
--- Battle res indicator (Quality of Life, a 40 px icon by default): left of
--- the player frame, vertically centred on it. Its store keeps centre offsets
--- from the UIParent centre, so the vertical half is computed from the screen
--- size in the world, like the tooltip box.
-local BREZ_SIZE     = 40
-local BREZ_GAP      = GAP + 20                  -- a little more room than the stacked pieces get
-local BREZ_CX       = -UF_SPREAD - TARGET_W / 2 - BREZ_GAP - BREZ_SIZE / 2
 local MINIMAP_SIZE = 200
 EllesmereUI.FOREVER_MINIMAP_SIZE = MINIMAP_SIZE   -- the minimap's own first-activation default there
 local MINIMAP_RIGHT = 23.33               -- minimap's right edge in from the screen's right
@@ -164,6 +156,12 @@ function EllesmereUI.SeedForeverBaseLayout()
     mm.position = Pos("TOPRIGHT", -MINIMAP_RIGHT, -MINIMAP_TOP)
     mm.mapSize = MINIMAP_SIZE
     mm._capturedOnce = true
+    -- Two buttons stand on the button row out of the group, in this order:
+    -- ours, then the error-list addon's (its LibDBIcon name; an absent button
+    -- costs nothing). A player's regroup clears the entry for good.
+    local ug = Sub(mm, "ungroupedButtons")
+    ug.EllesmereUIMinimapButton = 1
+    ug.LibDBIcon10_BugSack = 2
 
     -- Unit frames: player left, target right, above action bar 1; target of
     -- target right-aligned just above the target; pet centred just below the
@@ -495,20 +493,6 @@ local function PlaceTooltipAnchor()
     if EllesmereUI._applyTooltipFixedAnchor then EllesmereUI._applyTooltipFixedAnchor() end
 end
 
--- The battle res indicator keeps centre offsets from the UIParent centre the
--- same way, so its spot is computed here too: left of the player frame,
--- vertically centred on it, re-parked through the module's own apply.
-local function PlaceBattleRes()
-    local getDB = _G._EUI_BattleRes_DB
-    local qdb = getDB and getDB()
-    local br = qdb and qdb.profile and qdb.profile.battleRes
-    if not br then return end
-    local uh = UIParent:GetHeight()
-    if not uh or uh <= 0 then return end
-    br.pos = { centerX = BREZ_CX, centerY = UF_MID - uh / 2 }
-    if _G._EUI_BattleRes_Apply then _G._EUI_BattleRes_Apply() end
-end
-
 -- Every login of a character that has not had its first look at this version
 -- of the layout (stamped by character with the version below, in the
 -- account's saved data, so a bump's in-place upgrade runs once more; a
@@ -533,11 +517,9 @@ writer:SetScript("OnEvent", function(self, event)
     if event == "PLAYER_ENTERING_WORLD" then
         self:UnregisterEvent("PLAYER_ENTERING_WORLD")
         self:RegisterEvent("EDIT_MODE_LAYOUTS_UPDATED")
-        -- The tooltip box and the battle res indicator are profile data:
-        -- first session of an install only.
+        -- The tooltip box is profile data: first session of an install only.
         if EllesmereUI._foreverLayoutFresh then
             PlaceTooltipAnchor()
-            PlaceBattleRes()
         end
     end
     local tries = 0

@@ -287,14 +287,11 @@ function NPB.GroupGlow(idx)
     return magic == true, "magic"
 end
 
--- PANDEMIC_GLOW_STYLES index -> shared EllesmereUI.Glows.STYLES index. Defined
--- beside PANDEMIC_GLOW_STYLES in EllesmereUINameplates.lua (loaded before us).
-local NP_TO_SHARED_GLOW = ns.NP_TO_SHARED_GLOW
-
 local function ApplyNPBuffExtra(button, d, style)
     ApplyNPText(button, d, style)
     local Glows = EllesmereUI.Glows
-    if style.purgeGlow and Glows and Glows.StartGlow then
+    if style.purgeGlow and style.purgeSpec then
+        local sz = style.width or 24
         local host = d.npGlowHost
         if not host then
             -- Child of the engine button (cross-tree anchoring TO engine
@@ -316,52 +313,19 @@ local function ApplyNPBuffExtra(button, d, style)
             end
             host:EnableMouse(false)
             d.npGlowHost = host
+            -- nil need: every family (Pixel, the flipbooks and Blizzard Border).
+            Glows.PrewarmEngineHost(host, sz, style.height or sz, nil)
         end
         -- Every buff in this row is dispellable (the group filter says so), so the glow
         -- rides the button's own visibility -- no readback of per-aura state.
         host:SetAlpha(1)
-        -- Blizzard Border: Blizzard's static stealable art instead of a glow,
-        -- tinted like the glow (nil = Blizzard's own look).
-        if style.purgeStyle == Glows.STEALABLE_BORDER then
-            local cr, cg, cb = style.purgeR, style.purgeG, style.purgeB
-            local w, h = style.width or 24, style.height
-            if host._npStyle ~= style.purgeStyle or host._npW ~= w or host._npH ~= h
-               or host._npR ~= cr or host._npG ~= cg or host._npB ~= cb then
-                if host._euiGlowActive then Glows.StopGlow(host) end
-                host:SetAlpha(1)
-                Glows.ShowStealableBorder(host, w, h, cr, cg, cb)
-                host._npBorder = true
-                host._npStyle, host._npW, host._npH = style.purgeStyle, w, h
-                host._npR, host._npG, host._npB = cr, cg, cb
-            end
-            return
-        end
-        if host._npBorder then
-            Glows.HideStealableBorder(host)
-            host._npBorder = nil
-        end
         -- C-side animations only: identical in and out of restricted content.
-        -- StartEngineGlow renders Pixel as the genuine dash march and routes the other
-        -- driver styles to their FlipBook equivalents. purgeStyle carries a
-        -- PANDEMIC_GLOW_STYLES index (1 Pixel, 2 Action Button, 3 Auto-Cast, 4 GCD, 5
-        -- Modern, 6 Classic -- no Shape); the shared Glows list inserts Shape at 4, so
-        -- the flipbook picks translate before the call (raw pass-through rendered GCD
-        -- for Modern picks, Modern for GCD/Classic picks).
-        local gType = NP_TO_SHARED_GLOW[style.purgeStyle or 2] or 6
-        -- nil (color never customized) passes through: the engines render
-        -- their default look (gold ABG halo over white ants).
-        local cr, cg, cb = style.purgeR, style.purgeG, style.purgeB
-        local sz = style.width or 24
-        if (not host._euiGlowActive) or host._npStyle ~= gType or host._npW ~= sz
-           or host._npR ~= cr or host._npG ~= cg or host._npB ~= cb then
-            Glows.StartEngineGlow(host, gType, sz, cr, cg, cb)
-            host._npStyle, host._npW = gType, sz
-            host._npR, host._npG, host._npB = cr, cg, cb
-        end
+        -- purgeSpec is the dispel glow's full spec (ns.GetDispelGlowSpec), built
+        -- once per style pass; the height follows cropped icons. Blizzard
+        -- Border (static stealable art) renders through the same call.
+        Glows.StartSpecGlow(host, style.purgeSpec, sz, style.height or sz, "engine")
     elseif d.npGlowHost then
-        if Glows and Glows.StopGlow and d.npGlowHost._euiGlowActive then
-            Glows.StopGlow(d.npGlowHost)
-        end
+        if d.npGlowHost._euiGlowActive then Glows.StopGlow(d.npGlowHost) end
         d.npGlowHost:SetAlpha(0)
     end
 end
@@ -452,16 +416,7 @@ local function BuildNPStyle(kind, variant)
     if kind == "buffs" and variant ~= "plain" then
         local glow, dispelType = NPB.GroupGlow(variant == 2 and 2 or 1)
         style.purgeGlow = glow
-        style.purgeStyle = (ns.GetDispelGlowStyle and ns.GetDispelGlowStyle()) or 2
-        -- Blizzard Border keeps Blizzard's own art until a colour is picked.
-        local colorOf = ns.GetDispelGlowColor
-        if style.purgeStyle == (EllesmereUI.Glows and EllesmereUI.Glows.STEALABLE_BORDER)
-            and ns.GetDispelBorderColor then
-            colorOf = ns.GetDispelBorderColor
-        end
-        if colorOf then
-            style.purgeR, style.purgeG, style.purgeB = colorOf(dispelType)
-        end
+        style.purgeSpec = ns.GetDispelGlowSpec and ns.GetDispelGlowSpec(dispelType) or nil
         style.applyExtra = ApplyNPBuffExtra
     end
     return style
@@ -1667,6 +1622,7 @@ end
 
 local npFP = {}
 
+local PURGE_FP_SPEC = {}
 local function StyleFPFor(kind, idx)
     local size = NPSize(kind)
     local height = NPHeight(kind, size)
@@ -1681,11 +1637,19 @@ local function StyleFPFor(kind, idx)
         -- so they have to reach this fingerprint or a talent swap / toggle
         -- never restyles the engine buttons.
         local glow, dispelType = NPB.GroupGlow(idx or 1)
-        local pr, pg, pb = 0, 0, 0
-        if ns.GetDispelGlowColor then
-            pr, pg, pb = ns.GetDispelGlowColor(dispelType)
+        local sp = ns.GetDispelGlowSpec and ns.GetDispelGlowSpec(dispelType, PURGE_FP_SPEC)
+        if sp then
+            purge = FP(idx or 1, glow, sp.style, sp.r, sp.g, sp.b, sp.lines, sp.thickness,
+                sp.speed, sp.bg, sp.bgR, sp.bgG, sp.bgB)
+            -- Class mode: the print holds the palette colour; keep it for the
+            -- colours-changed hook below NPC_ReloadAll. The mode is one profile
+            -- value, so any other mode clears it (no reload on later edits).
+            if PVal("dispelGlowColorMode") ~= "class" then
+                NPB.ccR = nil
+            elseif glow then
+                NPB.ccR, NPB.ccG, NPB.ccB = EllesmereUI.Glows.ResolveColor("class")
+            end
         end
-        purge = FP(idx or 1, glow, ns.GetDispelGlowStyle and ns.GetDispelGlowStyle() or 2, pr, pg, pb)
     end
     local durFP = FP(dur.size, dur.x, dur.y, dur.pos, dur.color.r, dur.color.g, dur.color.b)
     local stkFP = FP(stk.size, stk.x, stk.y, stk.pos, stk.color.r, stk.color.g, stk.color.b)
@@ -1913,6 +1877,27 @@ function ns.NPC_ReloadAll()
     for plate in pairs(active) do
         if plate.npcLockout then NPLockoutBorder(plate.npcLockout) end
     end
+end
+
+-- Colors page edits (swatches, darken, resets, profile switches) all end in
+-- ApplyColorsToOUF. Once a Class-mode dispel glow was printed, a changed class
+-- colour re-runs the reload; the purge print carries the colour, so only the
+-- glow styles restyle. Calls in one frame (a profile switch can make two)
+-- collapse into one check on the next frame: the flush frame stays hidden
+-- until a call and hides itself before working.
+do
+    local flush = CreateFrame("Frame")
+    flush:Hide()
+    flush:SetScript("OnUpdate", function(self)
+        self:Hide()
+        local r0 = NPB.ccR
+        if r0 == nil then return end
+        local r, g, b = EllesmereUI.Glows.ResolveColor("class")
+        if r ~= r0 or g ~= NPB.ccG or b ~= NPB.ccB then ns.NPC_ReloadAll() end
+    end)
+    hooksecurefunc(EllesmereUI, "ApplyColorsToOUF", function()
+        if NPB.ccR ~= nil then flush:Show() end
+    end)
 end
 
 ------------------------------------------------------------------------------

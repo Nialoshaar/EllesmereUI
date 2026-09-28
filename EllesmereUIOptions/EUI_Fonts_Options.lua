@@ -147,9 +147,11 @@ local function TileActionBars(parent, y, W, tile)
     if ns then
         _, h = W:DualRow(parent, y, ModuleOutlineCfg(tile.folder, tile.display),
             dataBarCfg("XP Bar Text Size", "XPBar"));  y = y - h
+        -- WoW Forever has no House Favor bar: its slot is blank there.
         _, h = W:DualRow(parent, y,
             dataBarCfg("Reputation Bar Text Size", "RepBar"),
-            dataBarCfg("House Favor Bar Text Size", "FavorBar"));  y = y - h
+            EllesmereUI.IS_FOREVER and BLANK()
+                or dataBarCfg("House Favor Bar Text Size", "FavorBar"));  y = y - h
         y = LinkRow(parent, y, "Keybind, Macro, Charges & Cooldown Text (per bar)",
             tile.folder, "Bar Display", "TEXT", "Keybind Text Size")
     else
@@ -271,12 +273,14 @@ local function TileRaidFrames(parent, y, W, tile)
         size("Name Size", "nameSize", 6, 26, 10));  y = y - h
     _, h = W:DualRow(parent, y,
         size("Health Text Size", "healthTextSize", 6, 26, 9),
-        size("Heal Absorb Text Size", "healAbsorbTextSize", 6, 26, 9));  y = y - h
+        size("Power Text Size", "powerTextSize", 6, 26, 8));  y = y - h
     _, h = W:DualRow(parent, y,
-        size("Status Text Size", "statusTextSize", 6, 30, 14),
-        size("Group Number Size", "groupNumberSize", 6, 30, 10));  y = y - h
+        size("Heal Absorb Text Size", "healAbsorbTextSize", 6, 26, 9),
+        size("Status Text Size", "statusTextSize", 6, 30, 14));  y = y - h
     _, h = W:DualRow(parent, y,
-        size("Top Name Bar Text Size", "topNameBarTextSize", 6, 30, 11),
+        size("Group Number Size", "groupNumberSize", 6, 30, 10),
+        size("Top Name Bar Text Size", "topNameBarTextSize", 6, 30, 11));  y = y - h
+    _, h = W:DualRow(parent, y,
         { type = "slider", text = "Healer Mana Text Size", min = 8, max = 24, step = 1,
           getValue = function()
               local p = db()
@@ -288,7 +292,7 @@ local function TileRaidFrames(parent, y, W, tile)
               if not p.healerMana then p.healerMana = {} end
               p.healerMana.textSize = v
               if ns.HM_Rebuild then ns.HM_Rebuild() else RFApply() end
-          end });  y = y - h
+          end }, BLANK());  y = y - h
     y = LinkRow(parent, y, "Party-Specific Text Sizes",
         tile.folder, "Party", "TEXT DISPLAY")
     y = LinkRow(parent, y, "Buff Manager Text (per indicator)",
@@ -483,13 +487,18 @@ local function TileQoL(parent, y, W, tile)
                 if _G._EUI_Bloodlust_Apply then _G._EUI_Bloodlust_Apply() end
             end }
     end
-    _, h = W:DualRow(parent, y, ModuleOutlineCfg(tile.folder, tile.display),
-        gsize("Map Coordinates Text Size", "mapCoordsTextSize", 8, 24, 12, "_applyMapCoords"));  y = y - h
-    _, h = W:DualRow(parent, y,
-        gsize("Group Death Alert Text Size", "groupDeathTextSize", 14, 64, 34, "_applyGroupDeathAlert"),
-        gsize("Combat Alert Text Size", "combatAlertTextSize", 14, 64, 22, "_applyCombatAlertFrame"));  y = y - h
-    _, h = W:DualRow(parent, y,
-        { type = "slider", text = "FPS Counter Text Size", min = 8, max = 30, step = 1,
+    -- Slots fill left to right, top to bottom. WoW Forever has no keystone
+    -- popup, no Battle Res indicator and no Bloodlust Tracker, so their slots
+    -- are left out there and the rest close up, with a blank only in an odd
+    -- last slot.
+    local FOREVER = EllesmereUI.IS_FOREVER
+    local slots = {}
+    local function add(cfg) slots[#slots + 1] = cfg end
+    add(ModuleOutlineCfg(tile.folder, tile.display))
+    add(gsize("Map Coordinates Text Size", "mapCoordsTextSize", 8, 24, 12, "_applyMapCoords"))
+    add(gsize("Group Death Alert Text Size", "groupDeathTextSize", 14, 64, 34, "_applyGroupDeathAlert"))
+    add(gsize("Combat Alert Text Size", "combatAlertTextSize", 14, 64, 22, "_applyCombatAlertFrame"))
+    add({ type = "slider", text = "FPS Counter Text Size", min = 8, max = 30, step = 1,
           getValue = function()
               if EllesmereUI.QoLExtrasGet then
                   return EllesmereUI.QoLExtrasGet("fpsTextSize") or 12
@@ -499,58 +508,57 @@ local function TileQoL(parent, y, W, tile)
           setValue = function(v)
               if EllesmereUI.QoLExtrasSet then EllesmereUI.QoLExtrasSet("fpsTextSize", v) end
               if EllesmereUI._applyFPSDisplay then EllesmereUI._applyFPSDisplay() end
-          end },
-        gsize("Durability Warning Text Size", "durWarnTextSize", 10, 50, 30, "_durWarnApplySettings"));  y = y - h
-    _, h = W:DualRow(parent, y,
-        gsize("Target Distance Text Size", "targetDistanceTextSize", 10, 48, 18, "_applyTargetDistanceFrame"),
-        { type = "slider", text = "Keystone Popup Text Size", min = 8, max = 16, step = 1,
-          getValue = function()
-              local t = EllesmereUIDB and EllesmereUIDB.keystonePopup
-              return (t and t.textSize) or 11
-          end,
-          setValue = function(v)
-              if not EllesmereUIDB then EllesmereUIDB = {} end
-              if not EllesmereUIDB.keystonePopup then EllesmereUIDB.keystonePopup = {} end
-              EllesmereUIDB.keystonePopup.textSize = v
-              if _G._EUI_RefreshKeystonePopup then _G._EUI_RefreshKeystonePopup() end
-          end });  y = y - h
-    _, h = W:DualRow(parent, y,
-        brSize("Battle Res Duration Size", "durationSize", 8, 30, 12),
-        brSize("Battle Res Count Size", "countSize", 8, 20, 11));  y = y - h
-    local brFontValues, brFontOrder = EllesmereUI.BuildFontDropdownData()
-    _, h = W:DualRow(parent, y,
-        brSize("Battle Res Text Size", "textSize", 8, 40, 14),
-        { type = "dropdown", text = "Battle Res Font",
-          values = brFontValues, order = brFontOrder,
-          getValue = function()
-              local p = brDB()
-              return (p and p.font) or "__global"
-          end,
-          setValue = function(v)
-              local p = brDB(); if not p then return end
-              p.font = v
-              if _G._EUI_BattleRes_Apply then _G._EUI_BattleRes_Apply() end
-          end });  y = y - h
-    _, h = W:DualRow(parent, y,
-        { type = "dropdown", text = "Battle Res Outline",
-          values = { ["__global"] = { text = "EUI Global Default" },
-                     ["none"]     = { text = "Drop Shadow" },
-                     ["outline"]  = { text = "Outline" },
-                     ["thick"]    = { text = "Thick Outline" } },
-          order = { "__global", "none", "outline", "thick" },
-          getValue = function()
-              local p = brDB()
-              return (p and p.outlineMode) or "__global"
-          end,
-          setValue = function(v)
-              local p = brDB(); if not p then return end
-              p.outlineMode = v
-              if _G._EUI_BattleRes_Apply then _G._EUI_BattleRes_Apply() end
-          end },
-        blSize("Bloodlust Duration Size", "durationSize", 8, 30, 12));  y = y - h
-    _, h = W:DualRow(parent, y,
-        blSize("Bloodlust Count Size", "countSize", 8, 20, 11),
-        { type = "slider", text = "Movement Alert Text Size", min = 8, max = 72, step = 1,
+          end })
+    add(gsize("Durability Warning Text Size", "durWarnTextSize", 10, 50, 30, "_durWarnApplySettings"))
+    add(gsize("Target Distance Text Size", "targetDistanceTextSize", 10, 48, 18, "_applyTargetDistanceFrame"))
+    if not FOREVER then
+        add({ type = "slider", text = "Keystone Popup Text Size", min = 8, max = 16, step = 1,
+              getValue = function()
+                  local t = EllesmereUIDB and EllesmereUIDB.keystonePopup
+                  return (t and t.textSize) or 11
+              end,
+              setValue = function(v)
+                  if not EllesmereUIDB then EllesmereUIDB = {} end
+                  if not EllesmereUIDB.keystonePopup then EllesmereUIDB.keystonePopup = {} end
+                  EllesmereUIDB.keystonePopup.textSize = v
+                  if _G._EUI_RefreshKeystonePopup then _G._EUI_RefreshKeystonePopup() end
+              end })
+    end
+    if not FOREVER then
+        add(brSize("Battle Res Duration Size", "durationSize", 8, 30, 12))
+        add(brSize("Battle Res Count Size", "countSize", 8, 20, 11))
+        add(brSize("Battle Res Text Size", "textSize", 8, 40, 14))
+        local brFontValues, brFontOrder = EllesmereUI.BuildFontDropdownData()
+        add({ type = "dropdown", text = "Battle Res Font",
+              values = brFontValues, order = brFontOrder,
+              getValue = function()
+                  local p = brDB()
+                  return (p and p.font) or "__global"
+              end,
+              setValue = function(v)
+                  local p = brDB(); if not p then return end
+                  p.font = v
+                  if _G._EUI_BattleRes_Apply then _G._EUI_BattleRes_Apply() end
+              end })
+        add({ type = "dropdown", text = "Battle Res Outline",
+              values = { ["__global"] = { text = "EUI Global Default" },
+                         ["none"]     = { text = "Drop Shadow" },
+                         ["outline"]  = { text = "Outline" },
+                         ["thick"]    = { text = "Thick Outline" } },
+              order = { "__global", "none", "outline", "thick" },
+              getValue = function()
+                  local p = brDB()
+                  return (p and p.outlineMode) or "__global"
+              end,
+              setValue = function(v)
+                  local p = brDB(); if not p then return end
+                  p.outlineMode = v
+                  if _G._EUI_BattleRes_Apply then _G._EUI_BattleRes_Apply() end
+              end })
+        add(blSize("Bloodlust Duration Size", "durationSize", 8, 30, 12))
+        add(blSize("Bloodlust Count Size", "countSize", 8, 20, 11))
+    end
+    add({ type = "slider", text = "Movement Alert Text Size", min = 8, max = 72, step = 1,
           tooltip = "Sizes the movement alert's free text, bar number and icon countdown. Switching the alert's Display Mode re-seeds this value.",
           getValue = function()
               local d = _G._EUI_MovementAlert_DB and _G._EUI_MovementAlert_DB()
@@ -565,7 +573,10 @@ local function TileQoL(parent, y, W, tile)
               if EllesmereUI._applyMovementAlert then EllesmereUI._applyMovementAlert() end
               if EllesmereUI._applyTimeSpiral then EllesmereUI._applyTimeSpiral() end
               if EllesmereUI._applyGateway then EllesmereUI._applyGateway() end
-          end });  y = y - h
+          end })
+    for i = 1, #slots, 2 do
+        _, h = W:DualRow(parent, y, slots[i], slots[i + 1] or BLANK());  y = y - h
+    end
     return y
 end
 
@@ -1021,8 +1032,11 @@ local function TileBlizzardSkin(parent, y, W, tile)
     -- size nothing to drive.
     local BS = EllesmereUI.BlizzStyle
     if EllesmereUI.IS_FOREVER and BS and not BS.Forever("charsheet") then BS.Gate("charsheet", enchSizeCfg) end
+    -- WoW Forever has no skyriding (the Dragon Riding HUD never loads there),
+    -- so the enchant size sits alone in the last row.
     _, h = W:DualRow(parent, y,
         enchSizeCfg,
+        EllesmereUI.IS_FOREVER and BLANK() or
         { type = "slider", text = "Dragonriding Speed Text Size", min = 6, max = 32, step = 1,
           getValue = function()
               local p = ns.edrDB and ns.edrDB.profile and ns.edrDB.profile.speedText
@@ -1095,9 +1109,11 @@ local TILE_BUILDERS = {
     EllesmereUICooldownManager   = { TileCooldownManager,  "Icon duration, stacks, keybinds and tracking bar text" },
     EllesmereUIResourceBars      = { TileResourceBars,     "Health, power, class resource, cast and totem bar text" },
     EllesmereUIAuraBuffReminders = { TileAuraBuffReminders,"Reminder names, item counts and the mana warning" },
-    EllesmereUIQoL               = { TileQoL,              "Alerts, trackers, battle res and popup text" },
+    EllesmereUIQoL               = { TileQoL,              EllesmereUI.IS_FOREVER and "Alert and tracker text"
+                                                               or "Alerts, trackers, battle res and popup text" },
     EllesmereUIForeverEssentials = { TileFontOnly,         "Font face and outline only" },
-    EllesmereUIBlizzardSkin      = { TileBlizzardSkin,     "Tooltip text scale, enchant text and dragonriding speed" },
+    EllesmereUIBlizzardSkin      = { TileBlizzardSkin,     EllesmereUI.IS_FOREVER and "Tooltip text scale and enchant text"
+                                                               or "Tooltip text scale, enchant text and dragonriding speed" },
     EllesmereUIFriends           = { TileFontOnly,         "Font face and outline only" },
     EllesmereUIMythicTimer       = { TileMythicTimer,      "M+ timer, objectives, thresholds and spell bar text" },
     EllesmereUIQuestTracker      = { TileQuestTracker,     "Tracker font and per-line text sizes" },

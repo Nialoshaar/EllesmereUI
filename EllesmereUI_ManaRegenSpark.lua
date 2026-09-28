@@ -3,30 +3,25 @@ if EUI_CLIENT_BLOCKED then return end -- pre-12.1 client failsafe (EllesmereUI_C
 -- EllesmereUI_ManaRegenSpark.lua
 -- WoW FOREVER ONLY: mana regen spark on mana power bars.
 --
--- Mana regenerates in ticks every 2 seconds, and Spirit regen stops when a
--- spell finishes casting, resuming five seconds after the last cast. The
--- spark shows both:
---   * a completed cast of a spell that costs mana starts a 5s sweep
---   * when it ends (or mana starts changing while idle) 2s sweeps run back to
---     back, never reset mid-sweep; a sweep with no mana update during it ends
---     the cycle (mana full, the event only fires on a change)
--- The 2s sweeps estimate the server tick: mana is SECRET, so no tick signal
--- exists, and nothing here reads or compares a mana value. The signals are
--- the cast event, the spell's cost type and UNIT_POWER_UPDATE as a
--- keep-alive. UNIT_POWER_FREQUENT is unusable: it fires many times per tick.
+-- The five second rule: Spirit regen stops when a spell that costs mana
+-- finishes casting and resumes five seconds later. A completed cast of a
+-- spell that costs mana starts one 5s sweep, and another such cast restarts
+-- it; when it ends the spark hides and nothing runs until the next one. Mana
+-- is SECRET, so nothing here reads or compares a mana value: the signals are
+-- the cast event and the spell's cost type.
 --
 -- Hosts ("erb" Resource Bars power bar, "uf" Unit Frames player power bar)
 -- Attach their StatusBar while their option is on and the bar can draw, and
 -- Detach it otherwise. Attach also lays the spark out, so hosts call it on
 -- every rebuild, after the bar's orientation and reverse fill are set.
 -- SetMana reports whether the bar shows mana, attached or not. The spark
--- rides an overlay StatusBar, shown only while a sweep draws on it, whose
+-- rides an overlay StatusBar, shown only while the sweep draws on it, whose
 -- fill the engine animates (SetTimerDuration); one reused animation group
--- times the sweeps, so no Lua runs per frame and no sweep creates a timer.
--- Cost: the events are registered only while an attached host bar is
+-- times the sweep, so no Lua runs per frame and no sweep creates a timer.
+-- Cost: the cast event is registered only while an attached host bar is
 -- visible (OnShow/OnHide of our own bars). A bar showing Energy or Rage (a
--- druid in a form) keeps them, so a cast there still starts the cycle and
--- the spark joins it on the return to mana. Off, only the unregistered event
+-- druid in a form) keeps it, so a cast there still starts the sweep and the
+-- spark joins it on the return to mana. Off, only the unregistered event
 -- frame, its animation group and one duration object exist; warriors and
 -- rogues, who have no mana, get nothing at all.
 -------------------------------------------------------------------------------
@@ -38,7 +33,6 @@ if PLAYER_CLASS == "WARRIOR" or PLAYER_CLASS == "ROGUE" then return end
 
 local MANA = Enum.PowerType.Mana
 local WINDOW = 5   -- five second rule
-local TICK = 2     -- regen tick interval
 local SPARK_W = 8  -- spark thickness along the fill direction
 local SPARK_TEX = "Interface\\AddOns\\EllesmereUI\\media\\cast_spark.tga"
 local IMMEDIATE = Enum.StatusBarInterpolation.Immediate
@@ -48,13 +42,12 @@ local hosts = {}   -- key -> host record while attached
 local built = {}   -- bar -> host record (kept across detach)
 local mana = {}    -- key -> true while that host's bar shows mana
 local listening = false
-local sweepEnd           -- end time of the running sweep; nil while idle
-local inWindow = false   -- true while the 5s sweep runs
-local regenSeen = false  -- mana update seen during the current tick sweep
+local sweeping = false   -- true while the sweep runs
 local dur = C_DurationUtil.CreateDuration()
 local ev = CreateFrame("Frame")
 local timer = ev:CreateAnimationGroup()   -- one-shot, one sweep long
 local timerSpan = timer:CreateAnimation("Animation")
+timerSpan:SetDuration(WINDOW)
 
 -- True when the spell's cost includes mana. A secret amount counts as a cost;
 -- only a plain 0 is free.
@@ -102,11 +95,11 @@ local function Layout(h)
 end
 
 -- Puts an attached host's spark into the running sweep, at its current
--- position, or hides it: it draws only while a sweep runs, the bar shows
+-- position, or hides it: it draws only while the sweep runs, the bar shows
 -- mana and the bar is visible.
 local function Arm(h)
     local o = h.overlay
-    if sweepEnd and mana[h.key] and h.bar:IsVisible() then
+    if sweeping and mana[h.key] and h.bar:IsVisible() then
         o:Show()
         o:SetTimerDuration(dur, IMMEDIATE, ELAPSED)
     else
@@ -116,52 +109,30 @@ end
 
 local function Idle()
     timer:Stop()
-    sweepEnd = nil
-    inWindow = false
-    regenSeen = false
+    sweeping = false
     for _, h in pairs(hosts) do h.overlay:Hide() end
 end
 
--- Starts a sweep of len seconds on every host. A tick sweep chains from the
--- end of the one before (start), so the cadence does not drift by a frame
--- per hop; a start already a full sweep behind restarts from now.
-local function Sweep(len, start)
-    local now = GetTime()
-    if not start or start + len <= now then start = now end
-    sweepEnd = start + len
-    dur:SetTimeFromStart(start, len)
+-- Starts the 5s sweep on every host from now; a sweep already running
+-- starts over.
+local function Sweep()
+    sweeping = true
+    dur:SetTimeFromStart(GetTime(), WINDOW)
     for _, h in pairs(hosts) do Arm(h) end
     timer:Stop()
-    timerSpan:SetDuration(sweepEnd - now)
     timer:Play()
 end
 
--- A sweep ended: the window just closing or a mana update during it runs
--- another tick sweep, anything else ends the cycle.
-timer:SetScript("OnFinished", function()
-    if inWindow or regenSeen then
-        inWindow = false
-        regenSeen = false
-        Sweep(TICK, sweepEnd)
-    else
-        Idle()
-    end
+-- The sweep ran out: regen has resumed.
+timer:SetScript("OnFinished", Idle)
+
+-- UNIT_SPELLCAST_SUCCEEDED, the one event heard.
+ev:SetScript("OnEvent", function(_, _, _, _, spellID)
+    if CostsMana(spellID) then Sweep() end
 end)
 
-ev:SetScript("OnEvent", function(_, event, _, arg2, arg3)
-    if event == "UNIT_SPELLCAST_SUCCEEDED" then
-        if CostsMana(arg3) then
-            inWindow = true
-            regenSeen = false
-            Sweep(WINDOW)
-        end
-    elseif arg2 == "MANA" and not inWindow then
-        if sweepEnd then regenSeen = true else Sweep(TICK) end
-    end
-end)
-
--- Events are heard while at least one attached host bar is visible; when the
--- last one hides or detaches they are dropped and the cycle ends.
+-- The event is heard while at least one attached host bar is visible; when
+-- the last one hides or detaches it is dropped and the sweep ends.
 local function Listen()
     local on = false
     for _, h in pairs(hosts) do
@@ -170,7 +141,6 @@ local function Listen()
     if on == listening then return end
     listening = on
     if on then
-        ev:RegisterUnitEvent("UNIT_POWER_UPDATE", "player")
         ev:RegisterUnitEvent("UNIT_SPELLCAST_SUCCEEDED", "player")
     else
         ev:UnregisterAllEvents()

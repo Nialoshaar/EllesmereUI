@@ -424,9 +424,11 @@ pmInit:RegisterEvent("PLAYER_LOGOUT")
 
 -- Register the player-only UNIT_AURA listener only while the Bloodlust trigger
 -- is enabled (UNIT_AURA is high-frequency). Global so the options checkbox can
--- toggle it live, mirroring EllesmereUI_StartRandomTrigger.
+-- toggle it live, mirroring EllesmereUI_StartRandomTrigger. WoW Forever has no
+-- Sated or Exhaustion debuffs, so the listener never registers there, even when
+-- the saved trigger key is on.
 function EllesmereUI_UpdatePartyModeLustListener()
-    if EllesmereUIDB and EllesmereUIDB.partyModeTriggerBloodlust then
+    if not EllesmereUI.IS_FOREVER and EllesmereUIDB and EllesmereUIDB.partyModeTriggerBloodlust then
         _pmSatedPresent = _pmPlayerHasSated()  -- baseline so only NEW edges fire
         pmInit:RegisterUnitEvent("UNIT_AURA", "player")
     else

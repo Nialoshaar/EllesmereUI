@@ -717,7 +717,10 @@ local function BuildMovementAlertPage(pageName, parent, yOffset)
         for _, preset in ipairs(MOVEMENT_PRESETS) do
             local primary = preset.ids[1]
             local info = C_Spell and C_Spell.GetSpellInfo(primary)
-            if info and info.name then
+            -- WoW Forever: 781 is vanilla's threat drop, not a movement spell, and
+            -- the tracker skips it there; it stays a preset id so a saved override
+            -- is never shown as a custom cell.
+            if info and info.name and not (EllesmereUI.IS_FOREVER and primary == 781) then
                 local dupKey = preset.class .. ":" .. info.name
                 local existing = byClassName[dupKey]
                 if existing then

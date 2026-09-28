@@ -8,6 +8,10 @@ local math_floor, math_ceil, math_max, math_min, math_abs =
     math.floor, math.ceil, math.max, math.min, math.abs
 local string_format = string.format
 local issecretvalue = issecretvalue
+-- WoW Forever: no number under 10,000 abbreviates (EllesmereUI_NumberFormat.lua).
+-- Also on ns for the options preview, whose builder is near its upvalue cap.
+local AbbreviateNumbers = (EllesmereUI.IS_FOREVER and EllesmereUI.ForeverAbbreviateNumbers) or AbbreviateNumbers
+ns.AbbreviateNumbers = AbbreviateNumbers
 
 local PP = EllesmereUI.PP
 
@@ -232,7 +236,7 @@ local defaults = {
             powerPercentPowerColor = true,
             powerBgPowerColored = false,
             powerPercentTextPowerColor = false,
-            manaRegenSpark = false,  -- WoW Forever: mana regen spark (2s ticks, 5s rule) while the bar shows mana
+            manaRegenSpark = false,  -- WoW Forever: mana regen spark (5s rule) while the bar shows mana
             healthClassColored = true,
             customBgColor = { r = 0.067, g = 0.067, b = 0.067 },
             bgClassColored = false,
@@ -336,6 +340,14 @@ local defaults = {
             detachedPortraitUnitColorDark = false,
             detachedPortraitOuterRing = "none",
             detachedPortraitInnerShadow = false,
+            detachedPortraitWinglessDragon = false,
+            detachedPortraitWinglessDragonClassColor = false,
+            detachedPortraitWinglessDragonScale = 100,
+            detachedPortraitWinglessDragonX = 0,
+            detachedPortraitWinglessDragonY = 0,
+            detachedPortraitWinglessDragonFlip = false,
+            detachedPortraitWinglessDragonStrata = "inherit",
+            detachedPortraitWinglessDragonLevel = 1,
             healthBarOpacity = 90,
             powerBarOpacity = 100,
             showPlayerAbsorb = "none",
@@ -351,6 +363,9 @@ local defaults = {
             absorbGlowLine = false,
             absorbGlowLineTexture = "blizzard",
             showPlayerCastbar = false,
+            -- Global Settings > Gamepad: stand this cast bar down while a
+            -- controller is connected (ns.UF_ApplyGamepadCastbar).
+            castbarGamepadHide = true,
             showPlayerCastIcon = true,
             playerCastbarIconInWidth = true,
             castReverseFill = false,
@@ -669,7 +684,12 @@ local defaults = {
             eliteIndicatorX = 0,
             eliteIndicatorY = 0,
             eliteIndicatorShowInInstances = false,
-            eliteIndicatorStyle = "badge",  -- "badge" | "pixelsDragon"
+            eliteIndicatorStyle = "badge",  -- "badge" | "pixelsDragon" | "wingless"
+            eliteIndicatorWinglessClassColor = false,
+            eliteIndicatorWinglessScale = 100,
+            eliteIndicatorWinglessFlip = false,
+            eliteIndicatorWinglessStrata = "inherit",
+            eliteIndicatorWinglessLevel = 1,
             factionIndicatorMode = "off",
             factionIndicatorStyle = "pvp",
             factionIndicatorPlayersOnly = false,
@@ -2354,6 +2374,16 @@ local function DecimalAbbrevConfig(d)
         { breakpoint = 1e3, abbreviation = "k", significandDivisor = 1e3 / d, fractionDivisor = d, abbreviationIsGlobal = false },
     } }
 end
+-- WoW Forever: nothing under 10,000 abbreviates, so the k band starts there and
+-- the thousand band goes (the shared engine's trim, EllesmereUI_NumberFormat.lua).
+if EllesmereUI.IS_FOREVER then
+    local bands = DecimalAbbrevConfig
+    DecimalAbbrevConfig = function(d)
+        local cfg = bands(d)
+        cfg.breakpointData = EllesmereUI.ForeverAbbrevTiers(cfg.breakpointData)
+        return cfg
+    end
+end
 -- "Hide Trailing Zeros": AbbreviateNumbers drops a zero fraction ("100") but keeps a
 -- real one ("99.5"), which "%.1f" cannot do and a SECRET percent forbids doing with
 -- Lua string ops. It TRUNCATES though, so a fractional significandDivisor reads a tenth
@@ -2473,6 +2503,7 @@ _G._EUI_ResolvedPowerType = _G._EUI_ResolvedPowerType or {}
 
 local PLAYER_POWER_DEFAULT = {
     PRIEST = { [3] = 0 },   -- Shadow: default to Mana
+    MONK   = { [2] = 0 },   -- Mistweaver: default to Mana
 }
 local PLAYER_POWER_ALT = {
     DRUID  = { [1] = 0, [2] = 0, [3] = 0 },  -- Balance/Feral/Guardian -> Mana
@@ -3051,6 +3082,33 @@ do
             pieces[#pieces + 1] = P[key]
         end
         return def[1], pieces, ZONE_IDENTITY[content] or nil
+    end
+
+    -- Name Format (WoW Forever only): a slot set to First Name or Last Name
+    -- (<prefix>NameFormat) gets short-name twins of its name pieces when the
+    -- zone is applied, so the painter and every unset slot run as before.
+    -- Level, separator and colour pieces stay; Name > Target shortens both
+    -- names. ForeverShortName passes a secret name through whole and caches
+    -- the short forms, so a zone repainted on every health tick builds no
+    -- strings.
+    if EllesmereUI.IS_FOREVER == true then
+        local short, nameFn, tgtFn = EllesmereUI.ForeverShortName, P.name, P.tgtname
+        local function Twins(mode)
+            return {
+                [nameFn] = function(u) return short(nameFn(u), mode) end,
+                [tgtFn]  = function(u) return short(tgtFn(u), mode) end,
+            }
+        end
+        local twinsByMode = { first = Twins("first"), last = Twins("last") }
+        local base = ns.ContentToZone
+        function ns.ContentToZone(content, prefix, settings)
+            local fmt, pieces, static = base(content, prefix, settings)
+            local twins = fmt and settings and twinsByMode[settings[prefix .. "NameFormat"]]
+            if twins then
+                for i = 1, #pieces do pieces[i] = twins[pieces[i]] or pieces[i] end
+            end
+            return fmt, pieces, static
+        end
     end
 
     -- The text painter: renders every registered zone on the frame. Piece
@@ -4118,7 +4176,74 @@ ns.MASK_INSETS      = MASK_INSETS
 ns.UF_UNMASKED_RING = { pixelsCircle = 4 }
 -- Round shapes: the only ones that take the Outer Ring and the Inner Shadow.
 ns.UF_ROUND_SHAPES = { circle = true, pixelsCircle = true }
+-- Shapes the Wingless Dragon can wrap.
+ns.UF_DRAGON_SHAPES = { circle = true, pixelsCircle = true, square = true, csquare = true }
 ns.UF_PORTRAIT_INNER_SHADOW = "Interface\\AddOns\\EllesmereUI\\media\\portraits\\pixels_inner_shadow.tga"
+ns.UF_THIN_BORDER_RING = "Interface\\AddOns\\EllesmereUI\\media\\portraits\\pixels_ring_thin_border.tga"
+
+-- Stock target-frame dragon art, placed as on the stock 58px portrait (top-right corner 15px right, 11px up).
+ns.UF_WINGLESS_GOLD   = "UI-HUD-UnitFrame-Target-PortraitOn-Boss-Gold"
+ns.UF_WINGLESS_SILVER = "ui-hud-unitframe-target-portraiton-boss-rare-silver"
+-- Atlas info per name, read once (false: not in this client).
+ns.UF_WinglessInfoCache = {}
+function ns.UF_WinglessInfo(atlas)
+    local info = ns.UF_WinglessInfoCache[atlas]
+    if info == nil then
+        info = C_Texture.GetAtlasInfo(atlas) or false
+        ns.UF_WinglessInfoCache[atlas] = info
+    end
+    return info or nil
+end
+
+-- Paints the dragon art unless the texture already shows this atlas and
+-- mirror (the memo; UF_PlaceWinglessDragon clears it). False when missing.
+function ns.UF_WinglessArt(tex, atlas, mirrored)
+    if tex._wAtlas == atlas and tex._wFlip == mirrored then return true end
+    local info = ns.UF_WinglessInfo(atlas)
+    if not info then return false end
+    -- The atlas's file with its coordinates, not SetAtlas: after SetAtlas,
+    -- SetTexCoord crops within the atlas region instead of the file.
+    tex:SetTexture(info.file or info.filename)
+    local l, r = info.leftTexCoord, info.rightTexCoord
+    if mirrored then l, r = r, l end
+    tex:SetTexCoord(l, r, info.topTexCoord, info.bottomTexCoord)
+    tex._wAtlas, tex._wFlip = atlas, mirrored
+    return true
+end
+
+-- Lays the dragon out on host (size from its height, scale percent around its
+-- centre, x/y shift, class tint) and repaints its art; the caller shows it.
+-- False, hidden, when the atlas is missing.
+function ns.UF_PlaceWinglessDragon(tex, host, atlas, mirrored, classColor, scale, x, y)
+    tex._wAtlas = nil
+    if not ns.UF_WinglessArt(tex, atlas, mirrored) then tex:Hide(); return false end
+    local info = ns.UF_WinglessInfo(atlas)
+    local h = host:GetHeight()
+    if not PP.IsNum(h) or h < 1 then h = 46 end
+    local k = h / 58
+    local w, th = info.width * k, info.height * k
+    local cx, cy = 44 * k - w / 2, 40 * k - th / 2
+    if mirrored then cx = -cx end
+    local s = (PP.IsNum(scale) and scale or 100) / 100
+    tex:SetSize(w * s, th * s)
+    tex:ClearAllPoints()
+    tex:SetPoint("CENTER", host, "CENTER", cx * s + (x or 0), cy * s + (y or 0))
+    local cc
+    if classColor then
+        local _, tok = UnitClass("player")
+        cc = tok and EllesmereUI.GetClassColor(tok)
+    end
+    tex:SetDesaturated(cc and true or false)
+    if cc then tex:SetVertexColor(cc.r, cc.g, cc.b) else tex:SetVertexColor(1, 1, 1) end
+    return true
+end
+
+-- Raises a dragon holder over its portrait backdrop: strata nil, false or
+-- "inherit" follows the backdrop; level is added to the backdrop's, at least 1.
+function ns.UF_LiftDragonHolder(holder, host, strata, level)
+    holder:SetFrameStrata((not strata or strata == "inherit") and host:GetFrameStrata() or strata)
+    holder:SetFrameLevel(host:GetFrameLevel() + math_max(1, level or 1))
+end
 
 -- Outer Ring art for a detachedPortraitOuterRing value, or nil (nothing to
 -- draw). "border" follows the frame's Border Style (frameTex): its ring
@@ -4129,19 +4254,22 @@ function ns.UF_OuterRingPath(ringKey, frameTex)
     if ringKey == "pixels" or ringKey == "pixels-textured" then return GBC(ringKey, "ring") end
     if ringKey == "pixels-shadow" then return GBC("pixels", "ringShadow") end
     if ringKey == "pixels-textured-shadow" then return GBC("pixels-textured", "ringShadow") end
+    if ringKey == "thin-border" then return ns.UF_THIN_BORDER_RING end
     return nil
 end
 
--- Outer Ring + Inner Shadow on a round detached portrait. host = the portrait
--- backdrop (or the options preview frame, same field names), s = the unit's
--- settings, shape = its resolved shape; s == nil hides both. Nothing exists
--- until a first non-default value. The ring is laid out from the host size
--- (Outer Ring Size percent, minus a 4px inset, edges snapped by PP.Point) and
--- tinted with the frame border colour, which the hover path recolours in
--- place. Its geometry is memoized on the texture (ring key, frame Border
--- Style, ring size, host width and height, pixel grid) and its tint on the
--- colour (border r, g, b, alpha), so the per-target class-colour re-run
--- only compares.
+-- Outer Ring and Inner Shadow on a round detached portrait, and the Wingless
+-- Dragon on a round or square one. host = the portrait backdrop (or the options
+-- preview frame, same field names), s = the unit's settings, shape = its
+-- resolved shape; s == nil hides all three. Nothing exists until a first
+-- non-default value. The ring is laid out from the host size (Outer Ring Size
+-- percent, minus a 4px inset, edges snapped by PP.Point) and tinted with the
+-- frame border colour, which the hover path recolours in place. The ring's
+-- geometry is memoized on the texture (ring key, frame Border Style, ring
+-- size, host width and height, pixel grid) and its tint on the colour (border
+-- r, g, b, alpha), so the per-target class-colour re-run only compares. The
+-- dragon is laid out in full on each call: only the player frame offers it,
+-- and the player has no per-target re-run.
 function ns.UF_PortraitExtras(host, s, shape)
     local round = s and ns.UF_ROUND_SHAPES[shape]
     local ringKey = (round and s.detachedPortraitOuterRing) or "none"
@@ -4206,6 +4334,35 @@ function ns.UF_PortraitExtras(host, s, shape)
         shadow:Show()
     elseif shadow then
         shadow:Hide()
+    end
+
+    -- The dragon sits on its own frame so its strata and level can be raised
+    -- above the portrait's shape border.
+    local holder = host._winglessHolder
+    if s and ns.UF_DRAGON_SHAPES[shape] and s.detachedPortraitWinglessDragon then
+        if not holder then
+            holder = CreateFrame("Frame", nil, host)
+            holder:SetAllPoints(host)
+            host._winglessHolder = holder
+            host._winglessDragon = holder:CreateTexture(nil, "OVERLAY")
+        end
+        -- The options preview sits in a DIALOG window, so a lower strata would hide it.
+        ns.UF_LiftDragonHolder(holder, host, not host._isPreview and s.detachedPortraitWinglessDragonStrata,
+            s.detachedPortraitWinglessDragonLevel)
+        holder:Show()
+        if ns.UF_PlaceWinglessDragon(host._winglessDragon, host, ns.UF_WINGLESS_GOLD,
+            not s.detachedPortraitWinglessDragonFlip,
+            s.detachedPortraitWinglessDragonClassColor, s.detachedPortraitWinglessDragonScale,
+            s.detachedPortraitWinglessDragonX, s.detachedPortraitWinglessDragonY) then
+            host._winglessDragon:Show()
+        end
+        -- The dragon reaches past the backdrop, which an Inside position clips;
+        -- every content texture of a dragon shape is masked, so the clip lifts
+        -- while the dragon shows, as in the options preview.
+        if not host._isPreview then host:SetClipsChildren(false) end
+    elseif holder then
+        holder:Hide()
+        if host._isInside and not host._isPreview then host:SetClipsChildren(true) end
     end
 end
 
@@ -4303,7 +4460,7 @@ local function ApplyDetachedPortraitShape(backdrop, uSettings, unitToken)
             PP.Point(backdrop._3d, "TOPLEFT", backdrop, "TOPLEFT", 0, 0)
             PP.Point(backdrop._3d, "BOTTOMRIGHT", backdrop, "BOTTOMRIGHT", 0, 0)
         end
-        if backdrop._outerRing or backdrop._innerShadow then ns.UF_PortraitExtras(backdrop, nil) end
+        if backdrop._outerRing or backdrop._innerShadow or backdrop._winglessDragon then ns.UF_PortraitExtras(backdrop, nil) end
         return
     end
 
@@ -4341,7 +4498,7 @@ local function ApplyDetachedPortraitShape(backdrop, uSettings, unitToken)
             PP.Point(backdrop._3d, "TOPLEFT", backdrop, "TOPLEFT", 0, 0)
             PP.Point(backdrop._3d, "BOTTOMRIGHT", backdrop, "BOTTOMRIGHT", 0, 0)
         end
-        if backdrop._outerRing or backdrop._innerShadow then ns.UF_PortraitExtras(backdrop, nil) end
+        if backdrop._outerRing or backdrop._innerShadow or backdrop._winglessDragon then ns.UF_PortraitExtras(backdrop, nil) end
         return
     end
     if backdrop._bg then backdrop._bg:Show() end
@@ -4443,7 +4600,7 @@ local function ApplyDetachedPortraitShape(backdrop, uSettings, unitToken)
         PP.Point(backdrop._3d, "BOTTOMRIGHT", backdrop, "BOTTOMRIGHT", 0, 0)
     end
 
-    -- Outer Ring / Inner Shadow (round shapes only; nothing built while off).
+    -- Outer Ring / Inner Shadow (round shapes) and Wingless Dragon; nothing built while off.
     ns.UF_PortraitExtras(backdrop, uSettings, shape)
 end
 -- Bottom text bar frame: below the health+power area, above the castbar.
@@ -4751,6 +4908,7 @@ local function UpdateBordersForScale(frame, unit)
     local cpAboveH = 0
     if unit == "player" and SpecHasClassPower() then
         local cpSt = settings.classPowerStyle or "none"
+        if ns.UF_ForeverCPStyle then cpSt = ns.UF_ForeverCPStyle(cpSt) end
         local cpPo = (cpSt == "modern") and (settings.classPowerPosition or "top") or "none"
         if cpSt == "modern" and cpPo == "above" then
             local cpSizeAdj = settings.classPowerSize or 8
@@ -6716,55 +6874,16 @@ end
 --  Spell Cost Prediction (WoW Forever only; player, opt-in
 --  s.powerCostPrediction): while a spell with a cast time is cast, the mana it
 --  will spend is drawn on the power bar in a lighter color, like Blizzard's
---  player frame. Mana only: nothing is drawn while the bar shows another power
---  type. The segment is a StatusBar at the fill's leading edge, filling back
---  over it (secret-safe: max power and the cost only reach
---  SetMinMaxValues/SetValue), in a holder that clips to the bar. It is laid out
---  on each cast start, so texture swaps, fill direction and Blizzard Style
---  masks need no hooks. The cast is matched by castGUID: instants cast during
---  it, and their failures, leave it alone; a cast-time cast always ends with
---  STOP, FAILED or INTERRUPTED, so SUCCEEDED (every instant) is not heard.
---  Cost: nothing is built or registered unless the option is on and the bar
---  can show (position not None, height above 0); the cast events are
---  registered only while the bar is visible (OnShow/OnHide of our own bar).
+--  player frame. The shared engine (EllesmereUI_SpellCostPrediction.lua, nil
+--  off Forever) draws it; the bar attaches while the option is on and the bar
+--  can show (position not None, height above 0) and detaches otherwise, so
+--  nothing is built or registered while it is off.
 --  On ns: this chunk sits at the Lua 5.1 local ceiling.
 -------------------------------------------------------------------------------
--- Fallback when the client has no POWERBAR_PREDICTION_COLOR_MANA.
-ns.UF_POWER_COST_COLOR = { r = 0.40, g = 0.70, b = 1 }
-
--- Custom color, else Blizzard's mana prediction color.
+-- Custom color, else Blizzard's mana prediction color: the engine's rule, read
+-- here by the options row and its preview (both built only with the engine).
 function ns.UF_PowerCostColor(s)
-    local c = s and s.powerCostColor
-    if c then return c.r, c.g, c.b end
-    local b = POWERBAR_PREDICTION_COLOR_MANA
-    if b and b.GetRGB then return b:GetRGB() end
-    c = ns.UF_POWER_COST_COLOR
-    return c.r, c.g, c.b
-end
-
-ns.UF_POWER_COST_EVENTS = { "UNIT_SPELLCAST_START", "UNIT_SPELLCAST_STOP",
-    "UNIT_SPELLCAST_FAILED", "UNIT_SPELLCAST_INTERRUPTED" }
-
--- Cast events are heard only while the tracked bar is visible; hiding it
--- drops them along with any segment of a cast in flight.
-function ns.UF_PowerCostListen()
-    local ev = ns._ufPowerCostEvents
-    if not ev then return end
-    local power = ns._ufPowerCostBar
-    if power and power:IsVisible() then
-        if not ev._on then
-            ev._on = true
-            local list = ns.UF_POWER_COST_EVENTS
-            for i = 1, #list do ev:RegisterUnitEvent(list[i], "player") end
-        end
-    else
-        if ev._on then
-            ev._on = nil
-            ev:UnregisterAllEvents()
-        end
-        ns._ufPowerCostGUID = nil
-        if power and power._costBar then power._costBar:Hide() end
-    end
+    return EllesmereUI.SpellCostPrediction.Color(s)
 end
 
 -- True while the player power bar draws: a position other than None, and a
@@ -6776,136 +6895,39 @@ function ns.UF_PowerBarDraws(settings)
         or (ns.UF_Blizz() and (pos == "below" or pos == "above")))
 end
 
+-- The player bar as an engine host: the power type PaintPower resolved (the
+-- Power Type override first), the color at Power Bar Opacity, and the
+-- Blizzard Style mask while the stock art masks the bar. The segment sits one
+-- level above the bar (no inBar); the power border draws at power + 5.
+if EllesmereUI.SpellCostPrediction then
+    ns.UF_POWER_COST_HOST = {
+        PowerType = function(power)
+            return power.displayType or UnitPowerType("player")
+        end,
+        -- Power Bar Opacity, normalized as ApplyPowerBarAlpha does: the fill's
+        -- own alpha stays at 1 while a gradient carries the opacity.
+        Color = function()
+            local s = GetSettingsForUnit("player")
+            local r, g, b = ns.UF_PowerCostColor(s)
+            local op = (s and s.powerBarOpacity) or 100
+            if op <= 1.0 then op = op * 100 end
+            return r, g, b, op / 100
+        end,
+        Mask = function(power)
+            return power._blizzMasked and power._blizzMask or nil
+        end,
+    }
+end
+
 function ns.UF_SetupPowerCost(power, settings)
-    local on = EllesmereUI.IS_FOREVER == true and power and settings
-        and settings.powerCostPrediction == true and ns.UF_PowerBarDraws(settings)
-        and true or false
-    local old = ns._ufPowerCostBar
-    if old ~= power or not on then
-        if old and old._costBar then old._costBar:Hide() end
-        ns._ufPowerCostGUID = nil
-    end
-    ns._ufPowerCostBar = on and power or nil
-    if on then
-        if not ns._ufPowerCostEvents then
-            local ev = CreateFrame("Frame")
-            ev:SetScript("OnEvent", function(_, event, _, castGUID, spellID)
-                ns.UF_OnPowerCostEvent(event, castGUID, spellID)
-            end)
-            ns._ufPowerCostEvents = ev
-        end
-        if not power._costHooked then
-            power._costHooked = true
-            -- Our own bar; both return at once unless it is the tracked one.
-            power:HookScript("OnShow", function(self)
-                if ns._ufPowerCostBar == self then ns.UF_PowerCostListen() end
-            end)
-            power:HookScript("OnHide", function(self)
-                if ns._ufPowerCostBar == self then ns.UF_PowerCostListen() end
-            end)
-            -- A resize during a cast (a style pass, scale change) keeps the
-            -- segment's length in step with the bar.
-            power:HookScript("OnSizeChanged", function(self, w)
-                local cb = self._costBar
-                if cb and ns._ufPowerCostBar == self and cb:IsShown() then cb:SetWidth(w) end
-            end)
-        end
-        -- A reload during a cast keeps the cast and lays it out again: the
-        -- reload swaps the fill texture and may change color or direction.
-        if ns._ufPowerCostGUID then ns.UF_ShowPowerCost(power, ns._ufPowerCostSpell) end
-    end
-    ns.UF_PowerCostListen()
-end
-
-function ns.UF_OnPowerCostEvent(event, castGUID, spellID)
-    local power = ns._ufPowerCostBar
-    if not power then return end
-    if event == "UNIT_SPELLCAST_START" then
-        ns._ufPowerCostGUID = castGUID
-        ns._ufPowerCostSpell = spellID
-        ns.UF_ShowPowerCost(power, spellID)
-        return
-    end
-    local cur = ns._ufPowerCostGUID
-    if cur == nil then return end
-    -- Player cast GUIDs are never secret; if one is, end on any stop.
-    if not (issecretvalue and (issecretvalue(castGUID) or issecretvalue(cur)))
-       and castGUID ~= cur then
-        return
-    end
-    ns._ufPowerCostGUID = nil
-    if power._costBar then power._costBar:Hide() end
-end
-
-function ns.UF_ShowPowerCost(power, spellID)
-    local bar = power._costBar
-    local pfill = power:GetStatusBarTexture()
-    local ptype = power.displayType or UnitPowerType("player")
-    local mana = Enum and Enum.PowerType and Enum.PowerType.Mana
-    if not mana or (issecretvalue and issecretvalue(ptype)) or ptype ~= mana then
-        if bar then bar:Hide() end
-        return
-    end
-    local cost
-    local costs = spellID and pfill and C_Spell and C_Spell.GetSpellPowerCost(spellID)
-    if costs then
-        for _, c in ipairs(costs) do
-            if not (issecretvalue and issecretvalue(c.type)) and c.type == ptype then
-                cost = c.cost
-                break
-            end
-        end
-    end
-    if not cost then
-        if bar then bar:Hide() end
-        return
-    end
-    if not bar then
-        local clip = CreateFrame("Frame", nil, power)
-        clip:SetAllPoints(power)
-        clip:SetClipsChildren(true)
-        bar = CreateFrame("StatusBar", nil, clip)
-        power._costBar = bar
-    end
-    local level = power:GetFrameLevel() + 1
-    bar:GetParent():SetFrameLevel(level)
-    bar:SetFrameLevel(level)
-    -- Same texture as the power fill (a swap replaces the fill object, so the
-    -- mask is seated again after one).
-    local path = pfill:GetTexture() or "Interface\\Buttons\\WHITE8X8"
-    if bar._texPath ~= path then
-        bar._texPath = path
-        bar:SetStatusBarTexture(path)
-        local fill = bar:GetStatusBarTexture()
-        if fill then UnsnapTex(fill) end
-    end
-    local fill = bar:GetStatusBarTexture()
-    local pm = power._blizzMask
-    if fill and pm then
-        pcall(fill.RemoveMaskTexture, fill, pm)
-        if power._blizzMasked then pcall(fill.AddMaskTexture, fill, pm) end
-    end
-    local rev = power:GetReverseFill() and true or false
-    bar:ClearAllPoints()
-    if rev then
-        bar:SetPoint("TOPLEFT", pfill, "TOPLEFT", 0, 0)
-        bar:SetPoint("BOTTOMLEFT", pfill, "BOTTOMLEFT", 0, 0)
+    local SCP = EllesmereUI.SpellCostPrediction
+    if not SCP then return end
+    if power and settings and settings.powerCostPrediction == true
+       and ns.UF_PowerBarDraws(settings) then
+        SCP.Attach("uf", power, ns.UF_POWER_COST_HOST)
     else
-        bar:SetPoint("TOPRIGHT", pfill, "TOPRIGHT", 0, 0)
-        bar:SetPoint("BOTTOMRIGHT", pfill, "BOTTOMRIGHT", 0, 0)
+        SCP.Detach("uf")
     end
-    bar:SetWidth(power:GetWidth())
-    bar:SetReverseFill(not rev)
-    -- Power Bar Opacity, normalized as ApplyPowerBarAlpha does: the fill's own
-    -- alpha stays at 1 while a gradient carries the opacity.
-    local s = GetSettingsForUnit("player")
-    local r, g, b = ns.UF_PowerCostColor(s)
-    local op = (s and s.powerBarOpacity) or 100
-    if op <= 1.0 then op = op * 100 end
-    bar:SetStatusBarColor(r, g, b, op / 100)
-    bar:SetMinMaxValues(0, UnitPowerMax("player", ptype))
-    bar:SetValue(cost)
-    bar:Show()
 end
 
 local function CreatePowerBar(frame, unit, settings)
@@ -7219,8 +7241,8 @@ local function CreatePowerBar(frame, unit, settings)
     end
 
     -- Per-spec power type override: an alternate power type on the player power bar
-    -- (e.g. Balance Druid: Astral Power vs Mana). Shadow Priest defaults to Mana;
-    -- other specs default to UnitPowerType.
+    -- (e.g. Balance Druid: Astral Power vs Mana). Shadow Priest and Mistweaver Monk
+    -- default to Mana; other specs default to UnitPowerType.
     if unit == "player" then
         local _, classFile = UnitClass("player")
         if PLAYER_POWER_DEFAULT[classFile] or PLAYER_POWER_ALT[classFile] then
@@ -8165,16 +8187,16 @@ end
 
 -- Important Cast Glow (target/focus), mirrors Nameplates.
 -- The secret IsSpellImportant flag only drives overlay alpha.
-ns.UF_IMPORTANT_GLOW_STYLES = { 1, 2, 3, 5, 6, 7 }
 do
     local IMP_GLOW_COLOR = { r = 1, g = 0.2, b = 0.2 }
     local IMP_GLOW_BG_COLOR = { r = 0, g = 0, b = 0 }
+    -- One scratch spec for both cast bars: StartSpecGlow reads it synchronously.
+    local impSpec = {}
 
     ns.ClearUnitFrameImportantGlow = function(castbar)
         local ov = castbar and castbar._importantOverlay
         if not ov or not castbar._impGlowActive then return end
-        local Glows = EllesmereUI.Glows
-        if Glows then Glows.StopAllGlows(ov) end
+        EllesmereUI.Glows.StopAllGlows(ov)
         ov:SetAlpha(0)
         ov:Hide()
         castbar._impGlowActive = nil
@@ -8184,8 +8206,7 @@ do
     ns.UpdateUnitFrameImportantGlow = function(castbar)
         local s = castbar and castbar._eufSettings
         local Glows = EllesmereUI.Glows
-        if not (s and s.castbarImportantGlow and Glows and Glows.StartGlow
-                and C_Spell and C_Spell.IsSpellImportant) then
+        if not (s and s.castbarImportantGlow and C_Spell and C_Spell.IsSpellImportant) then
             ns.ClearUnitFrameImportantGlow(castbar)
             return
         end
@@ -8203,16 +8224,19 @@ do
             ov:SetAllPoints(castbar)
             ov:EnableMouse(false)
             castbar._importantOverlay = ov
-            castbar._impGlowLook = {}
-            castbar._impGlowOpts = {}
         end
         ov:SetFrameLevel(castbar:GetFrameLevel() + 5)
 
-        local style = 1
-        for _, idx in ipairs(ns.UF_IMPORTANT_GLOW_STYLES) do
-            if s.castbarImportantGlowStyle == idx then style = idx; break end
-        end
         local c = s.castbarImportantGlowColor or IMP_GLOW_COLOR
+        local bgc = s.castbarImportantGlowBackgroundColor or IMP_GLOW_BG_COLOR
+        local spec = impSpec
+        spec.style = s.castbarImportantGlowStyle or 1
+        spec.r, spec.g, spec.b = Glows.ResolveColor(s.castbarImportantGlowColorMode or "custom", c.r, c.g, c.b)
+        spec.lines = s.castbarImportantGlowLines or 8
+        spec.thickness = s.castbarImportantGlowThickness or 2
+        spec.speed = s.castbarImportantGlowSpeed or 4
+        spec.bg = (s.castbarImportantGlowBackground == true) or nil
+        spec.bgR, spec.bgG, spec.bgB = bgc.r, bgc.g, bgc.b
         local pW, pH = castbar:GetWidth(), castbar:GetHeight()
         -- Secret while the bar rides the stock-style aura block: use the last plain read
         -- (the bar never resizes in combat), else the configured holder size.
@@ -8228,34 +8252,10 @@ do
         end
         if pW < 5 then pW = 100 end
         if pH < 5 then pH = 14 end
-        -- Lines/thickness/speed/background are Pixel Glow only; nil for other styles.
-        local N, th, period, bg
-        if style == 1 then
-            N = s.castbarImportantGlowLines or 8
-            th = s.castbarImportantGlowThickness or 2
-            period = s.castbarImportantGlowSpeed or 4
-            if s.castbarImportantGlowBackground == true then
-                bg = s.castbarImportantGlowBackgroundColor or IMP_GLOW_BG_COLOR
-            end
-        end
-
-        -- Restart only when the look changes: a settings change or target/focus swap
-        -- onto a unit already mid-cast keeps a running glow when nothing differs.
-        local L = castbar._impGlowLook
-        if not castbar._impGlowActive or L.style ~= style or L.r ~= c.r or L.g ~= c.g or L.b ~= c.b
-           or L.w ~= pW or L.h ~= pH or L.N ~= N or L.th ~= th or L.period ~= period
-           or L.bgR ~= (bg and bg.r) or L.bgG ~= (bg and bg.g) or L.bgB ~= (bg and bg.b) then
-            local o
-            if style == 1 then
-                o = castbar._impGlowOpts
-                o.N, o.th, o.period, o.bg = N, th, period, bg
-            end
-            Glows.StartGlow(ov, style, pW, c.r, c.g, c.b, o, pH)
-            L.style, L.r, L.g, L.b, L.w, L.h = style, c.r, c.g, c.b, pW, pH
-            L.N, L.th, L.period = N, th, period
-            L.bgR, L.bgG, L.bgB = bg and bg.r, bg and bg.g, bg and bg.b
-            castbar._impGlowActive = true
-        end
+        -- Restarts only when the look or the bar size changed, so back-to-back
+        -- casts keep the animation running.
+        Glows.StartSpecGlow(ov, spec, pW, pH, "bar")
+        castbar._impGlowActive = true
 
         ov:Show()
         ov:SetAlphaFromBoolean(isImportant)
@@ -8908,6 +8908,7 @@ local function StyleFullFrame(frame, unit)
         local cpAboveH = 0
         if SpecHasClassPower() then
             local cpSt = settings.classPowerStyle or "none"
+            if ns.UF_ForeverCPStyle then cpSt = ns.UF_ForeverCPStyle(cpSt) end
             local cpPo = (cpSt == "modern") and (settings.classPowerPosition or "top") or "none"
             if cpSt == "modern" and cpPo == "above" then
                 local cpSizeAdj = settings.classPowerSize or 8
@@ -10944,6 +10945,16 @@ function ns.UF_Forever()
     if ns._ufStyle == nil then ns.UF_Style() end
     return ns._ufForever == true
 end
+-- The class resource style that builds. WoW Forever outside its own style
+-- has no Blizzard class resource bar to adopt, so a saved "blizzard" builds
+-- as modern there. Read-side only: the saved style is never rewritten.
+-- nil on every other client (readers test the field).
+if EllesmereUI.IS_FOREVER == true then
+    function ns.UF_ForeverCPStyle(style)
+        if style == "blizzard" and not ns.UF_Forever() then return "modern" end
+        return style
+    end
+end
 -- A custom frame border Color Custom Borders can copy (the player's Dispel
 -- Overlay cog): a Border Style other than Solid with a size, under the
 -- EllesmereUI style. Read from the saved keys, like the options gate, so a
@@ -11296,6 +11307,13 @@ function ns.UF_ScaledOffsets(fr, x, y)
     local s = fr and fr:GetScale() or 1
     if s ~= 1 and s > 0 and x and y then return x / s, y / s end
     return x, y
+end
+
+-- Boss frames' Vertical Spacing: the top-to-top step between boss 2..5 and
+-- the one before. Stack Direction alone sets the sign, so a negative value
+-- saved while the slider allowed one stacks the same way as its positive.
+function ns.UF_BossSpacing()
+    return math.abs(db.profile.bossSpacing or 80)
 end
 
 ns._ufMirrorPoint = {
@@ -12529,12 +12547,7 @@ ReloadFramesBody = function()
             -- Restore position and scale from profile
             if unitKey == "boss" then
                 local bossPos = db.profile.positions.boss
-                local bossSettings = db.profile.boss or {}
-                local barHeight = (bossSettings.healthHeight or 34) + (bossSettings.powerHeight or 6) + (bossSettings.castbarHeight or 14)
-                local gap = 10
-                -- Prefer the user-configured Vertical Spacing slider; fall back to
-                -- the computed barHeight+gap so an uninitialized profile is sane.
-                local bossSpacing = db.profile.bossSpacing or (barHeight + gap)
+                local bossSpacing = ns.UF_BossSpacing()
                 local bossIdx = tonumber(unit:match("(%d+)$"))
                 local bossAnchored = EllesmereUI and EllesmereUI.IsUnlockAnchored and EllesmereUI.IsUnlockAnchored("boss")
                 local canRepoBoss1 = bossPos
@@ -12680,6 +12693,7 @@ ReloadFramesBody = function()
                 local cpAboveH = 0
                 if unit == "player" and SpecHasClassPower() then
                     local cpSt = settings.classPowerStyle or "none"
+                    if ns.UF_ForeverCPStyle then cpSt = ns.UF_ForeverCPStyle(cpSt) end
                     local cpPo = (cpSt == "modern") and (settings.classPowerPosition or "top") or "none"
                     if cpSt == "modern" and cpPo == "above" then
                         local cpSizeAdj = settings.classPowerSize or 8
@@ -12836,7 +12850,10 @@ ReloadFramesBody = function()
                     if frame.Castbar then
                         local castbarBg = frame.Castbar:GetParent()
                         if settings.showPlayerCastbar then
-                            ns.SetCastbarElement(frame, true)
+                            -- Hide While Using Gamepad keeps the element off and the
+                            -- holder hidden (ns.UF_ApplyGamepadCastbar); the style
+                            -- below still lands, so the bar comes back current.
+                            ns.SetCastbarElement(frame, not ns._ufCastPadHidden)
                             if castbarBg then
                                 local cbW = db.profile.player.playerCastbarWidth or 181
                                 local cbH = db.profile.player.playerCastbarHeight or 14
@@ -12857,8 +12874,9 @@ ReloadFramesBody = function()
                                     end
                                 end
                                 -- Position owned by centralized unlock system (no manual anchor)
-                                -- Respect hide-while-not-casting
-                                if settings.castbarHideWhenInactive and not frame.Castbar:IsShown() then
+                                -- Respect hide-while-not-casting (and Hide While Using Gamepad)
+                                if ns._ufCastPadHidden
+                                    or (settings.castbarHideWhenInactive and not frame.Castbar:IsShown()) then
                                     castbarBg:Hide()
                                 else
                                     castbarBg:Show()
@@ -14632,6 +14650,62 @@ local function ApplyBlizzCastbarState()
     end
 end
 
+-- Hide While Using Gamepad (Global Settings > Gamepad): Blizzard's gamepad UI
+-- draws its own player cast bar, so ours stands down while a controller is
+-- connected. It rides the same element switch "Show Player Cast Bar" off uses,
+-- keyed on a runtime flag the reload and visibility passes also read
+-- (ns._ufCastPadHidden); the saved toggle is never written and Blizzard's bar
+-- stays suppressed. The pad edges are watched only while the option is on and
+-- our player cast bar is on screen. padOn is the watcher's verdict; the login,
+-- reload and options callers pass nothing and it is read live.
+function ns.UF_ApplyGamepadCastbar(padOn)
+    local s = db and db.profile and db.profile.player
+    local frame = frames.player
+    local cb = frame and frame.Castbar
+    local want = (cb and s and s.showPlayerCastbar and s.castbarGamepadHide ~= false
+        and ns.VisEffective(s) ~= "never"
+        and ns.GetUnitFrameSource("player") == "eui") and true or false
+    if want ~= (ns._ufCastPadWatched == true) then
+        ns._ufCastPadWatched = want
+        if want then
+            EllesmereUI.WatchPad("UF_PlayerCastbar", ns.UF_ApplyGamepadCastbar)
+        else
+            EllesmereUI.UnwatchPad("UF_PlayerCastbar")
+        end
+    end
+    local hide = false
+    if want then
+        if padOn == nil then padOn = EllesmereUI.PadConnected() end
+        hide = padOn and true or false
+    end
+    if hide == (ns._ufCastPadHidden == true) then return end
+    ns._ufCastPadHidden = hide
+    if not cb then return end
+    local castbarBg = cb:GetParent()
+    if hide then
+        ns.SetCastbarElement(frame, false)
+        cb:Hide()
+        if castbarBg then castbarBg:Hide() end
+        return
+    end
+    -- Back on, mid-cast included: the enable re-derives the live cast; an idle
+    -- holder follows the reload pass's hide-while-not-casting rule. A setting
+    -- that turned the bar off is left to the reload pass that hides it.
+    if not (s and s.showPlayerCastbar) then return end
+    -- Enabled whether or not the frame is shown, as the reload pass does: a
+    -- frame hidden by its visibility driver gets no element re-enable when the
+    -- driver shows it again, so skipping it here would leave the bar dead. The
+    -- holder is a child of the frame, so a hidden frame draws nothing.
+    ns.SetCastbarElement(frame, true)
+    if castbarBg then
+        if s.castbarHideWhenInactive and not cb:IsShown() then
+            castbarBg:Hide()
+        else
+            castbarBg:Show()
+        end
+    end
+end
+
 -- Effective whole-frame alpha for a unit frame. When "Fade Out of Combat" is enabled
 -- and the player is out of combat, shows at oocAlpha; otherwise full opacity (off by
 -- default, existing setups unchanged). Every "shown" SetAlpha site (visibility loop +
@@ -14880,19 +14954,16 @@ function InitializeFrames()
     EllesmereUI.ApplyColorsToOUF()
 
     local classPowerStyle = db.profile.player.classPowerStyle or "none"
-    if EllesmereUI.IS_FOREVER == true and classPowerStyle == "blizzard" and not ns.UF_Forever() then
-        -- Forever has no Blizzard class resource bar to adopt (see the ComboFrame
-        -- note below) and the options page greys that entry out there: a stored
-        -- "blizzard" builds as the modern style, written back so the style
-        -- watchers compare like with like. The Forever defaults themselves
-        -- (modern, shown, above, 16) are IS_FOREVER conditionals in
-        -- DEFAULTS.player; nothing is seeded or migrated here. Under the WoW
-        -- Forever style that entry is the combo point arc on our target frame
-        -- (ns.UF_ApplyForeverComboArc) and stands.
-        classPowerStyle = "modern"
-        db.profile.player.classPowerStyle = "modern"
-        db.profile.player.showClassPowerBar = true
-    end
+    -- Forever has no Blizzard class resource bar to adopt (see the ComboFrame
+    -- note below) and the options page greys that entry out there: a stored
+    -- "blizzard" builds as the modern style (ns.UF_ForeverCPStyle), and the
+    -- options page shows and gates it as Modern. Read-side only: the stored
+    -- style is never rewritten, so a spec override or an import that carries
+    -- it keeps it. The Forever defaults themselves (modern, shown, above, 16)
+    -- are IS_FOREVER conditionals in DEFAULTS.player; nothing is seeded or
+    -- migrated here. Under the WoW Forever style that entry is the combo
+    -- point arc on our target frame (ns.UF_ApplyForeverComboArc) and stands.
+    if ns.UF_ForeverCPStyle then classPowerStyle = ns.UF_ForeverCPStyle(classPowerStyle) end
     -- Per-unit frame source, resolved once for this build. When a unit is set to
     -- "blizzard" (leave Blizzard's default frame) or "hidden", the EllesmereUI frame is
     -- not spawned at all -- the ONLY way to keep Blizzard's own frame alive, since
@@ -15189,6 +15260,7 @@ function InitializeFrames()
         -- places it, and skips in combat), so only the pips move here.
         local stock = ns.UF_Blizz()
         local style = db.profile.player.classPowerStyle or "none"
+        if ns.UF_ForeverCPStyle then style = ns.UF_ForeverCPStyle(style) end
         local position = db.profile.player.classPowerPosition or "top"
         local offsetX = db.profile.player.classPowerBarX or 0
         local offsetY = db.profile.player.classPowerBarY or 0
@@ -15456,6 +15528,12 @@ function InitializeFrames()
         -- Keep showClassPowerBar in sync with style
         db.profile.player.showClassPowerBar = (style ~= "none")
         db.profile.player.classPowerStyle = style
+        -- WoW Forever: the saved style stays as given; its effective style
+        -- (ns.UF_ForeverCPStyle) is what builds and what the marker records.
+        if ns.UF_ForeverCPStyle then
+            style = ns.UF_ForeverCPStyle(style)
+            frames._classPowerBuiltStyle = style
+        end
         -- WoW Forever: the "Blizzard" entry is the combo point arc on the
         -- target frame (returns at once everywhere else).
         ns.UF_ApplyForeverComboArc()
@@ -15907,6 +15985,11 @@ function InitializeFrames()
             end
         end
 
+        local _winglessAtlas = {
+            elite = ns.UF_WINGLESS_GOLD, worldboss = ns.UF_WINGLESS_GOLD,
+            rare = ns.UF_WINGLESS_SILVER, rareelite = ns.UF_WINGLESS_SILVER,
+        }
+
         local _eliteFrames = {}
         local eliteEvents
 
@@ -15914,15 +15997,30 @@ function InitializeFrames()
             local s = uf and uf._eliteSettings
             if not (uf and uf._eliteIndicator and s) then return end
             local tex = uf._eliteIndicator
-            -- Pixels Dragon texture: exists only once that style was first used.
-            local dragon = uf._eliteDragon
-            if s.eliteIndicatorEnabled ~= true then
-                tex:Hide(); if dragon then dragon:Hide() end; return
-            end
-            if not s.eliteIndicatorShowInInstances and IsInInstance() then
-                tex:Hide(); if dragon then dragon:Hide() end; return
+            -- Dragon textures: each exists only once its style was first used.
+            local dragon, wingless = uf._eliteDragon, uf._eliteWingless
+            if s.eliteIndicatorEnabled ~= true
+                or (not s.eliteIndicatorShowInInstances and IsInInstance()) then
+                tex:Hide()
+                if dragon then dragon:Hide() end
+                if wingless then wingless:Hide() end
+                return
             end
             local c = UnitClassification(uf._euiUnit)
+            if wingless and not uf._eliteWinglessOn then wingless:Hide() end
+            if uf._eliteWinglessOn then
+                tex:Hide()
+                if dragon then dragon:Hide() end
+                -- Laid out by the apply path; a target change repaints the art only
+                -- when the atlas (gold or silver) or the flip differs.
+                local atlas = not issecretvalue(c) and _winglessAtlas[c]
+                if atlas and ns.UF_WinglessArt(wingless, atlas, s.eliteIndicatorWinglessFlip == true) then
+                    wingless:Show()
+                else
+                    wingless:Hide()
+                end
+                return
+            end
             if uf._eliteDragonOn then
                 -- Classification art, or the Player art on a player target;
                 -- both probes are secrecy-checked before any use.
@@ -16010,26 +16108,49 @@ function InitializeFrames()
                 -- and sized from the portrait. Needs a shown portrait; without
                 -- one, and under a stock style, the badge above stands in.
                 -- Built on first use.
+                -- Style "wingless" shares that holder: laid out here, its art swapped by the refresh.
                 local bd = uf.Portrait and uf.Portrait.backdrop
-                local useDragon = settings.eliteIndicatorStyle == "pixelsDragon"
-                    and settings.eliteIndicatorEnabled == true and not ns.UF_Blizz()
+                local style = settings.eliteIndicatorStyle
+                local onPortrait = settings.eliteIndicatorEnabled == true and not ns.UF_Blizz()
                     and bd and bd:IsShown()
+                local useDragon = onPortrait and style == "pixelsDragon"
+                local useWingless = onPortrait and style == "wingless"
+                if useDragon or useWingless then
+                    local holder = uf._eliteDragonHolder
+                    if not holder then
+                        holder = CreateFrame("Frame", nil, bd)
+                        holder:SetAllPoints(bd)
+                        uf._eliteDragonHolder = holder
+                    end
+                    ns.UF_LiftDragonHolder(holder, bd, useWingless and settings.eliteIndicatorWinglessStrata,
+                        useWingless and settings.eliteIndicatorWinglessLevel)
+                end
                 if useDragon then
                     local dragon = uf._eliteDragon
                     if not dragon then
-                        local holder = CreateFrame("Frame", nil, bd)
-                        holder:SetAllPoints(bd)
-                        dragon = holder:CreateTexture(nil, "OVERLAY")
+                        dragon = uf._eliteDragonHolder:CreateTexture(nil, "OVERLAY")
                         dragon:SetPoint("CENTER", bd, "CENTER", 0, 0)
                         dragon:Hide()
                         uf._eliteDragon = dragon
-                        uf._eliteDragonHolder = holder
                     end
-                    uf._eliteDragonHolder:SetFrameLevel(bd:GetFrameLevel() + 1)
                     local d = bd:GetHeight() * ns.UF_ELITE_DRAGON_SCALE
                     dragon:SetSize(d, d)
                 end
+                if useWingless then
+                    local wingless = uf._eliteWingless
+                    if not wingless then
+                        wingless = uf._eliteDragonHolder:CreateTexture(nil, "OVERLAY")
+                        wingless:Hide()
+                        uf._eliteWingless = wingless
+                    end
+                    -- Gold and silver share one box, so the gold art sets the layout.
+                    ns.UF_PlaceWinglessDragon(wingless, bd, ns.UF_WINGLESS_GOLD,
+                        settings.eliteIndicatorWinglessFlip == true,
+                        settings.eliteIndicatorWinglessClassColor, settings.eliteIndicatorWinglessScale,
+                        ox, oy)
+                end
                 uf._eliteDragonOn = useDragon and true or false
+                uf._eliteWinglessOn = useWingless and true or false
                 _eliteArmEvents()
                 _eliteRefresh(uf)
             end
@@ -16257,10 +16378,7 @@ function InitializeFrames()
     if bossFrameSource == "eui" then
     local bossPos = db.profile.positions.boss
 
-    local bossSettings = db.profile.boss or {}
-    local barHeight = (bossSettings.healthHeight or 34) + (bossSettings.powerHeight or 6) + (bossSettings.castbarHeight or 14)
-    local gap = 10
-    local spacing = db.profile.bossSpacing or (barHeight + gap)
+    local spacing = ns.UF_BossSpacing()
     local bossStackDir = db.profile.boss and db.profile.boss.bossStackDirection or "down"
     for i = 1, 5 do
         local bossUnit = "boss" .. i
@@ -16361,6 +16479,18 @@ function InitializeFrames()
             if frame._raidMarkerHolder and frame._textOverlay then
                 frame._raidMarkerHolder:SetFrameLevel(frame._textOverlay:GetFrameLevel() + 5)
             end
+            -- Same for the dragon holders, which carry their own strata and level.
+            local bd = frame.Portrait and frame.Portrait.backdrop
+            local wh = bd and bd._winglessHolder
+            if us and wh and wh:IsShown() then
+                ns.UF_LiftDragonHolder(wh, bd, us.detachedPortraitWinglessDragonStrata,
+                    us.detachedPortraitWinglessDragonLevel)
+            end
+            if bd and frame._eliteDragonHolder and (frame._eliteDragonOn or frame._eliteWinglessOn) then
+                local es = frame._eliteWinglessOn and frame._eliteSettings
+                ns.UF_LiftDragonHolder(frame._eliteDragonHolder, bd,
+                    es and es.eliteIndicatorWinglessStrata, es and es.eliteIndicatorWinglessLevel)
+            end
         end
     end
 
@@ -16446,6 +16576,8 @@ function InitializeFrames()
             frames.player.Castbar._iconFrame:Hide()
         end
     end
+    -- Hide While Using Gamepad: settle the flag and the pad watch.
+    ns.UF_ApplyGamepadCastbar()
 
     -- Target castbar: disable oUF element if not wanted
     if frames.target and frames.target.Castbar then
@@ -16661,7 +16793,8 @@ function InitializeFrames()
                             if frame.Castbar then
                                 local wantsCastbar
                                 if unitKey == "player" then
-                                    wantsCastbar = s.showPlayerCastbar
+                                    -- Hide While Using Gamepad keeps it off (ns.UF_ApplyGamepadCastbar).
+                                    wantsCastbar = s.showPlayerCastbar and not ns._ufCastPadHidden
                                 else
                                     wantsCastbar = s.showCastbar ~= false
                                 end
@@ -17066,7 +17199,11 @@ function SetupOptionsPanel()
     local function RealiseClassPowerStyle()
         if not frames._toggleClassPower then return end
         local wantCP = db.profile.player.classPowerStyle or "none"
-        if wantCP == frames._classPowerBuiltStyle then return end
+        -- WoW Forever: compare the style that builds, not the saved one (the
+        -- toggle keeps the saved style and builds its effective style).
+        local builtCP = wantCP
+        if ns.UF_ForeverCPStyle then builtCP = ns.UF_ForeverCPStyle(wantCP) end
+        if builtCP == frames._classPowerBuiltStyle then return end
         -- The toggle reparents Blizzard's class power frame and re-anchors the
         -- health bar. The throttle body keeps running after ReloadFrames()'s
         -- lockdown return (same shape as the UpdateFrameVisibility note above),
@@ -17086,6 +17223,9 @@ function SetupOptionsPanel()
         reloadPending = false
         ReloadFrames()
         ApplyBlizzCastbarState()
+        -- Hide While Using Gamepad: a profile switch or spec override changes
+        -- the saved toggles without calling the options setter.
+        ns.UF_ApplyGamepadCastbar()
         -- A reload restyles the boss frames and re-colors their health to the
         -- player's class color (preview rides on unit="player") + re-tags the name.
         -- Re-assert the preview (red color + fake name) so a settings change doesn't
@@ -17833,7 +17973,7 @@ local function RegisterUFUnlockElements()
                     db.profile.positions[k] = { point = point, relPoint = relPoint, x = x, y = y }
                     if EllesmereUI._unlockActive then return end
                     if k == "boss" then
-                        local spacing = db.profile.bossSpacing or 60
+                        local spacing = ns.UF_BossSpacing()
                         local bossStackDir = db.profile.boss and db.profile.boss.bossStackDirection or "down"
                         -- boss1 to UIParent; chain 2..5 from the previous boss.
                         if frames.boss1 then
@@ -17899,7 +18039,7 @@ local function RegisterUFUnlockElements()
                         return x, y
                     end
                     if k == "boss" then
-                        local spacing = db.profile.bossSpacing or 60
+                        local spacing = ns.UF_BossSpacing()
                         local bossStackDir = db.profile.boss and db.profile.boss.bossStackDirection or "down"
                         if frames.boss1 and not (anchored and frames.boss1:GetLeft()) then
                             local bx, by = SnapForFrame(frames.boss1, ns.UF_ScaledOffsets(frames.boss1, pos.x, pos.y))
@@ -18329,6 +18469,14 @@ do
         local spec = GetSpecialization and GetSpecialization()
         local role = spec and GetSpecializationRole and GetSpecializationRole(spec)
         if role == "HEALER" then helpSpell = HELP_HEAL[pClass] end
+        -- WoW Forever has no spec roles: a healing class counts as its healing
+        -- spec and range-checks with its best heal in the spellbook.
+        if EllesmereUI.IS_FOREVER then
+            local list = EllesmereUI.FOREVER_HEAL_SPELLS[pClass]
+            for i = 1, (list and #list or 0) do
+                if Known(list[i]) then helpSpell = list[i]; break end
+            end
+        end
     end
 
     local function TickOne(f, unit)

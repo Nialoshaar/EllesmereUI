@@ -803,6 +803,36 @@ local movementPreviewTicker = nil -- options-panel preview loop (nil = off)
 local CheckMovementCooldown
 local CancelAllRechargeTimers
 
+-- WoW Forever: the class counts as each of its retail specs, so the tracker
+-- walks every spec list of the class, merged in class order without repeats.
+-- Ids that are a different spell there are left out (781 is the threat-drop
+-- Disengage there, not a movement spell).
+-- Built once: its inputs (the player's class, the static MOVEMENT_ABILITIES)
+-- never change in a session. nil when the class has no list.
+local ForeverMovementList
+do
+    local merged
+    ForeverMovementList = function()
+        if not merged then
+            merged = {}
+            local skip = { [781] = true }
+            local classAbilities = MOVEMENT_ABILITIES[playerClassToken]
+            local ids = classAbilities and EllesmereUI.ForeverClassSpecIDs(playerClassToken)
+            for i = 1, (ids and #ids or 0) do
+                local specList = classAbilities[ids[i]]
+                for j = 1, (specList and #specList or 0) do
+                    local sid, dup = specList[j], false
+                    for k = 1, #merged do
+                        if merged[k] == sid then dup = true; break end
+                    end
+                    if not dup and not skip[sid] then merged[#merged + 1] = sid end
+                end
+            end
+        end
+        return merged[1] and merged or nil
+    end
+end
+
 local function GetPlayerMovementSpells()
     local class = select(2, UnitClass("player"))
     local specId = ResolvePlayerSpecId()
@@ -812,6 +842,7 @@ local function GetPlayerMovementSpells()
     local classAbilities = MOVEMENT_ABILITIES[class]
     if not classAbilities then return {} end
     local specAbilities = classAbilities[specId]
+    if EllesmereUI.IS_FOREVER then specAbilities = ForeverMovementList() end
     if not specAbilities then return {} end
 
     local result, seen = {}, {}
@@ -999,6 +1030,7 @@ local function CacheMovementSpells(fullReset)
     local overrides = MA().spellOverrides or {}
     local classAbilities = MOVEMENT_ABILITIES[class]
     local specAbilities = classAbilities and specId and classAbilities[specId]
+    if EllesmereUI.IS_FOREVER and specId then specAbilities = ForeverMovementList() end
     if specAbilities then
         for _, spellId in ipairs(specAbilities) do
             local spellOverride = overrides[spellId]
@@ -1893,6 +1925,7 @@ local function IsValidTimeSpiralProc(spellId)
     local specId = ResolvePlayerSpecId()
     local classData = MOVEMENT_ABILITIES[class]
     local specSpells = classData and specId and classData[specId]
+    if EllesmereUI.IS_FOREVER and specId then specSpells = ForeverMovementList() end
     local matched = false
     if specSpells then
         for _, id in ipairs(specSpells) do

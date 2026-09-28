@@ -1570,6 +1570,19 @@ function EQT.InitSkin()
 
     EachTracker(HookTracker)
 
+    -- Modules added after this pass were never hooked or skinned: Blizzard's container only
+    -- registers after PLAYER_ENTERING_WORLD (so otf.modules is still empty here and only the
+    -- SUB_TRACKERS names were caught), and addon modules (ObjectiveTrackerModuleTemplate +
+    -- ObjectiveTrackerManager:SetModuleContainer) arrive whenever their addon adds them - they
+    -- kept Blizzard's stock header. Hook each one as it is added. Deferred one frame so no skin
+    -- work runs inside Blizzard's AddModule / container update; HookTracker skips modules it
+    -- has already hooked.
+    if otf and otf.AddModule then
+        hooksecurefunc(otf, "AddModule", function(_, module)
+            C_Timer.After(0, function() HookTracker(module) end)
+        end)
+    end
+
     -- Re-skin on tracker refresh events. Each of these fires when Blizzard
     -- re-populates blocks; we piggy-back to catch newly-pooled-but-not-yet-
     -- hooked children and to reapply fonts/colors Blizzard just reset.

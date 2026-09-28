@@ -1518,7 +1518,8 @@ initFrame:SetScript("OnEvent", function(self)
         -- Show on FPS/MS Hover | Show on Clock Hover
         local HOVER_TT_VALUES = { none = "None", lockouts = "Instance Lockouts", vault = "Great Vault" }
         local HOVER_TT_ORDER = { "none", "lockouts", "vault" }
-        -- No Great Vault on WoW Forever (the module resets a saved "vault" to "none" at login there).
+        -- No Great Vault on WoW Forever: the entry is dropped and a saved "vault"
+        -- shows as None (the module reads it as none too and never rewrites it).
         if EllesmereUI.IS_FOREVER then
             HOVER_TT_VALUES.vault = nil
             HOVER_TT_ORDER = { "none", "lockouts" }
@@ -1528,7 +1529,11 @@ initFrame:SetScript("OnEvent", function(self)
               values = HOVER_TT_VALUES, order = HOVER_TT_ORDER,
               disabled=FpsOff,
               disabledTooltip="Show FPS/MS",
-              getValue=function() local m = MinimapDB(); return m and m.fpsHoverTooltip or "none" end,
+              getValue=function()
+                local m = MinimapDB(); local v = m and m.fpsHoverTooltip or "none"
+                if EllesmereUI.IS_FOREVER and v == "vault" then v = "none" end
+                return v
+              end,
               setValue=function(v)
                 local m = MinimapDB(); if not m then return end
                 m.fpsHoverTooltip = v
@@ -1538,7 +1543,11 @@ initFrame:SetScript("OnEvent", function(self)
               values = HOVER_TT_VALUES, order = HOVER_TT_ORDER,
               disabled=function() return ClockMode() == "none" end,
               disabledTooltip="Clock Style",
-              getValue=function() local m = MinimapDB(); return m and m.clockHoverTooltip or "none" end,
+              getValue=function()
+                local m = MinimapDB(); local v = m and m.clockHoverTooltip or "none"
+                if EllesmereUI.IS_FOREVER and v == "vault" then v = "none" end
+                return v
+              end,
               setValue=function(v)
                 local m = MinimapDB(); if not m then return end
                 m.clockHoverTooltip = v

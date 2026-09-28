@@ -3231,12 +3231,8 @@ local function DecorateFrame(frame, barData)
         local kbScale = frame:GetScale() or 1
         if kbScale < 0.01 then kbScale = 1 end
         EllesmereUI.ApplyIconTextFont(kt, GetCDMFont(), (barData.keybindSize or 10) / kbScale, "cdm")
-        kt:SetPoint("TOPLEFT", fd.textOverlay, "TOPLEFT",
-            barData.keybindOffsetX or 2, barData.keybindOffsetY or -2)
-        kt:SetJustifyH("LEFT")
-        kt:SetTextColor(barData.keybindR or 1, barData.keybindG or 1,
-            barData.keybindB or 1, barData.keybindA or 0.9)
         kt:Hide()
+        ns.StyleCDMKeybind(kt, barData, fd.textOverlay, 1 / kbScale, GetCDMFont())
         fd.keybindText = kt
     end
 
@@ -4300,9 +4296,8 @@ local function DecorateFrame(frame, barData)
                         -- explicit gate that replaces the old accidental one).
                         if fd.glowOverlay and not fd._cdStateGlowOn
                             and not fd.procGlowActive then
-                            local style = cse == "pixelGlowReady" and 1 or 3
-                            local gr, gg, gb = ns.ResolveGlowColor(ss2)
-                            ns.StartNativeGlow(fd.glowOverlay, style, gr or 1, gg or 1, gb or 1)
+                            local style = ns.CdReadyGlowStyle(cse, ss2)
+                            ns.StartNativeGlow(fd.glowOverlay, style, ns.CdReadyGlowColor(style, ss2))
                             fd._cdStateGlowOn = true
                         end
                     elseif fd._cdStateGlowOn then
@@ -4362,9 +4357,8 @@ local function DecorateFrame(frame, barData)
                                 -- overlay -- never start over a live proc.
                                 if fd.glowOverlay and not fd._cdStateGlowOn
                                     and not fd.procGlowActive then
-                                    local style = self.cse == "pixelGlowReadyUsable" and 1 or 3
-                                    local gr, gg, gb = ns.ResolveGlowColor(self.ss2)
-                                    ns.StartNativeGlow(fd.glowOverlay, style, gr or 1, gg or 1, gb or 1)
+                                    local style = ns.CdReadyGlowStyle(self.cse, self.ss2)
+                                    ns.StartNativeGlow(fd.glowOverlay, style, ns.CdReadyGlowColor(style, self.ss2))
                                     fd._cdStateGlowOn = true
                                 end
                             elseif fd._cdStateGlowOn then
@@ -5021,9 +5015,8 @@ do
                         -- never start over a live proc; StopProcGlow queues
                         -- this flush again once the proc ends.
                         if not fd._cdStateGlowOn and not fd.procGlowActive then
-                            local style = (cse2 == "pixelGlowReady" or cse2 == "pixelGlowReadyUsable") and 1 or 3
-                            local gr, gg, gb = ns.ResolveGlowColor(ss2)
-                            ns.StartNativeGlow(fd.glowOverlay, style, gr or 1, gg or 1, gb or 1)
+                            local style = ns.CdReadyGlowStyle(cse2, ss2)
+                            ns.StartNativeGlow(fd.glowOverlay, style, ns.CdReadyGlowColor(style, ss2))
                             fd._cdStateGlowOn = true
                         end
                     elseif fd._cdStateGlowOn then
@@ -6084,6 +6077,17 @@ local function IsPresetFamilyFrame(f)
     return (pd and pd.altItemIDs and f._presetItemID == pd.itemID) and true or false
 end
 
+-- Pact of Gluttony (386689) decides which stone the player conjures: with it only
+-- Demonic Healthstones (224464), without it only Healthstones (5512). The other
+-- stone's entry never shows, not even dimmed. Read by the reanchor pass; talent and
+-- spell changes always queue one. On ns: 200-local cap.
+function ns._HealthstoneHiddenByPact(itemID)
+    if itemID ~= 5512 and itemID ~= 224464 then return false end
+    local pact = C_SpellBook.IsSpellKnown(386689) == true
+    if itemID == 5512 then return pact end
+    return not pact
+end
+
 -- Count (charges included) of a non-pot item preset frame: the primary id, else the
 -- sum of the family alts. Returns total and first owned id. On ns: 200-local cap.
 function ns._ReadItemPresetCount(f)
@@ -6524,7 +6528,10 @@ local function CheckItemPresenceForHide()
     for _, f in pairs(_presetFrames) do
         if f._isItemPresetFrame and f._presetItemID then
             local bd = f._ownerBarKey and barDataByKey[f._ownerBarKey]
-            if bd and bd.hideItemsIfMissing then
+            -- A stone the Pact of Gluttony rule hides is never injected, so its
+            -- stale presence cache must not queue a reanchor on every bag edge.
+            if bd and bd.hideItemsIfMissing
+               and not ns._HealthstoneHiddenByPact(f._presetItemID) then
                 local total
                 if PotSwap.Ensure(f) then
                     -- Pot presets: present = the resolved chain owns anything
@@ -6546,24 +6553,39 @@ local function _PlainNum(v)
     return type(v) == "number" and (not canaccessvalue or canaccessvalue(v))
 end
 
-_racialCdListener:SetScript("OnEvent", function(_, event, a1, a2, a3, a4)
-    -- Trailing flush for the loot-storm cap: a bag fire swallowed inside the
-    -- window re-arms on the first event past it (combat noise makes that
-    -- near-immediate; quiet worlds land on the next bag event or the sweep).
-    if ns._pcBagPend and GetTime() >= (ns._pcBagNext or 0) then
-        ns._pcBagPend = nil
-        ns._pcBagNext = GetTime() + 0.5
-        PotSwap.Bump()
-        CheckItemPresenceForHide()
-        for f in pairs(_pcActive) do
-            if f._isItemPresetFrame then
-                f._itemWalkArm = true
-                f._countArm = true
-            end
+-- Trailing flush for the loot-storm cap: a bag fire swallowed inside the
+-- window re-arms on the first listener event past it, or at the window's end
+-- when nothing else fires (a conjured stone's second bag fire lands inside
+-- the window, and a quiet world would otherwise keep its count stale until
+-- some unrelated event). On ns: 200-local cap.
+ns._pcBagFlush = function()
+    ns._pcBagPend = nil
+    ns._pcBagNext = GetTime() + 0.5
+    -- Bag contents changed: pot-preset display variants must re-resolve before
+    -- the presence check, which reads the resolution.
+    PotSwap.Bump()
+    CheckItemPresenceForHide()
+    -- Contents are the only thing that changes item counts, and a new stack can
+    -- move the displayed cooldown source too: re-walk both. (Live set: hidden
+    -- frames re-arm on their Show edge.)
+    for f in pairs(_pcActive) do
+        if f._isItemPresetFrame then
+            f._itemWalkArm = true
+            f._countArm = true
         end
-        _presetCdDirty = true
-        _pcAllSettled = false
-        if ns.ArmBuffTicker then ns.ArmBuffTicker() end
+    end
+    _presetCdDirty = true
+    _pcAllSettled = false
+    if ns.ArmBuffTicker then ns.ArmBuffTicker() end
+end
+ns._pcBagFlushTimerFn = function()
+    ns._pcBagFlushQueued = nil
+    if ns._pcBagPend then ns._pcBagFlush() end
+end
+
+_racialCdListener:SetScript("OnEvent", function(_, event, a1, a2, a3, a4)
+    if ns._pcBagPend and GetTime() >= (ns._pcBagNext or 0) then
+        ns._pcBagFlush()
     end
     -- Infrequent events: handle immediately and return
     if event == "BAG_UPDATE_DELAYED" then
@@ -6571,30 +6593,19 @@ _racialCdListener:SetScript("OnEvent", function(_, event, a1, a2, a3, a4)
         -- this in bursts, and each fire re-armed variant re-resolves + chain
         -- walks + bag-count scans -- the drain's dominant real cost). At
         -- most two re-arm cycles per second; a burst's trailing changes land
-        -- on the next capped fire, the head flush, or the 5s sweep.
+        -- on the head flush or the queued flush at the window's end.
         local nowB = GetTime()
         if nowB >= (ns._pcBagNext or 0) then
-            ns._pcBagNext = nowB + 0.5
-            -- Bag contents changed: pot-preset display variants must re-resolve (before
-            -- the presence check below, which reads the resolution).
-            PotSwap.Bump()
-            CheckItemPresenceForHide()
-            -- Contents are the only thing that changes item counts, and a
-            -- new stack can move the displayed cooldown source too: re-walk
-            -- both. (Live set: hidden frames re-arm on their Show edge.)
-            for f in pairs(_pcActive) do
-                if f._isItemPresetFrame then
-                    f._itemWalkArm = true
-                    f._countArm = true
-                end
-            end
-            _presetCdDirty = true
-            _pcAllSettled = false
-            if ns.ArmBuffTicker then ns.ArmBuffTicker() end
+            ns._pcBagFlush()
         else
             -- Swallowed by the cap: flush on the first event after the
-            -- window (see the head of this handler).
+            -- window (see the head of this handler), or at its end at the
+            -- latest -- one queued flush per window.
             ns._pcBagPend = true
+            if not ns._pcBagFlushQueued then
+                ns._pcBagFlushQueued = true
+                C_Timer.After(ns._pcBagNext - nowB, ns._pcBagFlushTimerFn)
+            end
         end
         return
     end
@@ -7565,7 +7576,8 @@ local function CollectAndReanchor()
                         -- Cd-claim markers (collided-buff slots) are also
                         -- <= -100; they are not items.
                         if type(sid) == "number" and sid <= -100
-                           and not ns.CdClaimMarkerToCdID(sid) then
+                           and not ns.CdClaimMarkerToCdID(sid)
+                           and not ns._HealthstoneHiddenByPact(-sid) then
                             local itemID = -sid
                             local f = GetOrCreateItemPresetFrame(injKey, itemID)
                             if f then
@@ -8171,6 +8183,7 @@ local function CollectAndReanchor()
                             -- exact item (see slotEquippedItems above); the orphan
                             -- sweep hides any frame from a previous pass.
                             local f = not (slotEquippedItems and slotEquippedItems[itemID])
+                                and not ns._HealthstoneHiddenByPact(itemID)
                                 and GetOrCreateItemPresetFrame(barKey, itemID)
                             if f then
                                 -- Remember the bar that owns this frame so bag

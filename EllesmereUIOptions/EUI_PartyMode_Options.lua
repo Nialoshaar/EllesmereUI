@@ -310,11 +310,12 @@ do
             end }
 
         if EllesmereUI.IS_FOREVER then
-            -- WoW Forever has no keystones, no rated PvP and no Mythic, Heroic or
-            -- Raid Finder difficulties, and its vanilla raids report difficulty 9 or
+            -- WoW Forever has no keystones, no rated PvP, no Sated or Exhaustion
+            -- debuffs for the Bloodlust trigger and no Mythic, Heroic or Raid
+            -- Finder difficulties, and its vanilla raids report difficulty 9 or
             -- 148, which no boss kill trigger maps. Show only what can fire there.
             _, h = W:TripleRow(parent, y,
-                randomlyCheckbox, bloodlustCheckbox, levelUpCheckbox,
+                randomlyCheckbox, levelUpCheckbox, nil,
                 CB_SPLITS
             );  y = y - h
         else

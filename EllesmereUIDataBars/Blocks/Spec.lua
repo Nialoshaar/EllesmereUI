@@ -1,4 +1,5 @@
 if EUI_CLIENT_BLOCKED then return end -- pre-12.1 client failsafe (EllesmereUI_ClientGate.lua)
+if EllesmereUI.IS_FOREVER then return end -- one spec per class on WoW Forever, nothing to switch: no factory, no loadout hook (the main file drops the block from BLOCK_TYPES too)
 -- Blocks\Spec.lua
 -- Specialization block factory (spec, loot spec, loadout popups).
 

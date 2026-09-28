@@ -21,6 +21,30 @@ if EllesmereUI.IS_FOREVER then
     ns._threatPctPositionOrder = { "RIGHT", "LEFT", "CENTER" }
 end
 
+-- Settings-cog rows of a text slot that can show a name. WoW Forever puts its
+-- Name Format row at the top (the name's first word, its last word, or all of
+-- it -- unset); every other client gets rows back untouched. prefix is the
+-- slot's key prefix ("leftText", "btbLeft"): content at <prefix>Content, format
+-- at <prefix>NameFormat. get(key, default) / set(key, v) are the page's
+-- accessors. On ns for the same upvalue cap.
+if EllesmereUI.IS_FOREVER then
+    local HAS_NAME = { name = true, levelname = true, namelevel = true, nametotarget = true, targetname = true }
+    local FORMATS = { first = "First Name", last = "Last Name", full = "First and Last" }
+    local FORMAT_ORDER = { "first", "last", "full" }
+    function ns.UF_NameFormatRows(prefix, contentDefault, get, set, rows)
+        local contentKey, formatKey = prefix .. "Content", prefix .. "NameFormat"
+        table.insert(rows, 1, { type="dropdown", label="Name Format", values=FORMATS, order=FORMAT_ORDER,
+            get=function() return get(formatKey, "full") end,
+            -- First and Last is the unset default.
+            set=function(v) set(formatKey, (v ~= "full") and v or nil) end,
+            disabled=function() return not HAS_NAME[get(contentKey, contentDefault)] end,
+            disabledTooltip="This option only applies when the text shows a name." })
+        return rows
+    end
+else
+    function ns.UF_NameFormatRows(_, _, _, _, rows) return rows end
+end
+
 -- Classic WoW UI: a cast bar section's closing Border Size row (the odd last
 -- slot), sizing the vanilla frame round the bar. getS() returns the unit's
 -- settings table and `key` its frame-size key (ns.UF_CastClassicKey);
@@ -104,6 +128,46 @@ function ns.UF_Ask3DPortraits(onConfirm)
         end,
     })
     return true
+end
+
+-- A cog whose own rows depend on one of its settings: that setter calls
+-- ns.UF_RebuildCog(key), which closes the cog, rebuilds the page and reopens
+-- the cog on its rebuilt button (the builder passes BuildInlineCog's returns
+-- to ns.UF_TrackCog under the same key). On ns: the page builders sit at
+-- their upvalue caps.
+ns._ufCogShows = {}
+function ns.UF_TrackCog(key, btn, show)
+    if not btn then return end
+    ns._ufCogShows[key] = show
+    if ns._ufCogReopen == key then
+        ns._ufCogReopen = nil
+        show(btn)
+    end
+end
+function ns.UF_RebuildCog(key)
+    local show = ns._ufCogShows[key]
+    local pf = show and show._popupFrame
+    if pf then
+        -- Spec Overrides: file the write under the cog's slot while the popup
+        -- still knows its owner (closing it clears the owner).
+        EllesmereUI._NotifySettingWrite(pf._owner)
+        pf:Hide()
+    end
+    ns._ufCogReopen = key
+    EllesmereUI:RefreshPage(true)
+    ns._ufCogReopen = nil
+end
+
+-- Wingless Dragon Strata dropdown (player Shape Border cog, target Elite/Rare
+-- Indicator cog): Match Frame keeps the frame's own strata, then the base
+-- stratas.
+do
+    local values, order = { inherit = "Match Frame" }, { "inherit" }
+    for _, k in ipairs(EllesmereUI.FRAME_STRATA_ORDER_BASE) do
+        values[k] = EllesmereUI.FRAME_STRATA_LABELS[k]
+        order[#order + 1] = k
+    end
+    ns._ufDragonStrataValues, ns._ufDragonStrataOrder = values, order
 end
 
 -- Custom Border Style rows of a cast bar section, built only while the Cast
@@ -616,7 +680,7 @@ end
 -- spellsteal (the live frame's own gate). The host is our own frame.
 function ns.UFOpt_PreviewPurgeGlow(bf, unitKey, s, w, h)
     local Glows = EllesmereUI.Glows
-    if not (Glows and Glows.StartEngineGlow) then return end
+    if not ns.UF_PurgeGlowSpec then return end
     local g = (unitKey == "target" or unitKey == "focus") and s and s.buffPurgeGlow
     local on = type(g) == "number" and g > 0
     if on then
@@ -629,8 +693,6 @@ function ns.UFOpt_PreviewPurgeGlow(bf, unitKey, s, w, h)
     if not on then
         if host then
             if host._euiGlowActive then Glows.StopGlow(host) end
-            if Glows.HideStealableBorder then Glows.HideStealableBorder(host) end
-            host._pgS = nil
             host:Hide()
         end
         return
@@ -642,23 +704,8 @@ function ns.UFOpt_PreviewPurgeGlow(bf, unitKey, s, w, h)
         bf._purgeGlow = host
     end
     host:Show()
-    local c = s.buffPurgeGlowColor
-    local cr, cg, cb = c and c.r, c and c.g, c and c.b
-    -- Blizzard Border: the static stealable art, as on the live frame.
-    if g == Glows.STEALABLE_BORDER then
-        if host._euiGlowActive then Glows.StopGlow(host) end
-        host:SetAlpha(1)
-        Glows.ShowStealableBorder(host, w, h, cr, cg, cb)
-        host._pgS = g
-        return
-    end
-    if Glows.HideStealableBorder then Glows.HideStealableBorder(host) end
-    if (not host._euiGlowActive) or host._pgS ~= g or host._pgW ~= w or host._pgH ~= h
-       or host._pgR ~= cr or host._pgG ~= cg or host._pgB ~= cb then
-        Glows.StartEngineGlow(host, g, w, cr, cg, cb, nil, h)
-        host._pgS, host._pgW, host._pgH = g, w, h
-        host._pgR, host._pgG, host._pgB = cr, cg, cb
-    end
+    -- The live renderer's own spec, so the preview is the live look.
+    Glows.StartSpecGlow(host, ns.UF_PurgeGlowSpec(s), w, h, "engine", Glows.PANEL_EXTRA)
 end
 
 -- Target/focus/boss Debuff Filter: ONE single-select mode, an engine VIEW over
@@ -908,6 +955,92 @@ initFrame:SetScript("OnEvent", function(self)
         pet          = function() return db.profile.pet end,
         boss         = function() return db.profile.boss end,
     }
+
+    ---------------------------------------------------------------------------
+    --  Glow site: the target/focus Purgeable Buff Glow as a shared glow
+    --  descriptor over one unit's settings (getS), used by the Buffs cog and the
+    --  Global Settings Glows page. Engine aura buttons: C-side styles only; an
+    --  unset color is the suite default (gold).
+    ---------------------------------------------------------------------------
+    local function UF_PurgeGlowDesc(getS)
+        -- Blizzard Border: Blizzard's static stealable art, outside the style list.
+        local border = EllesmereUI.Glows.STEALABLE_BORDER
+        return {
+            host = "engine",
+            extras = { { value = border, label = "Blizzard Border", style = border } },
+            caps = { mode = true, params = true, bg = true },
+            defaultColor = EllesmereUI.Glows.DEFAULT_COLOR,
+            onChange = ReloadAndUpdate,
+            get = function(f)
+                local s = getS()
+                if f == "style" then return s.buffPurgeGlow or 0
+                elseif f == "mode" then
+                    return s.buffPurgeGlowColorMode or (s.buffPurgeGlowColor and "custom" or "default")
+                end
+                return EllesmereUI.GlowOptions.FlatGet(s, "buffPurgeGlow", f)
+            end,
+            set = function(f, a, b, c)
+                local s = getS()
+                if f == "style" then s.buffPurgeGlow = (a ~= 0) and a or nil
+                elseif f == "mode" then s.buffPurgeGlowColorMode = a
+                else EllesmereUI.GlowOptions.FlatSet(s, "buffPurgeGlow", f, a, b, c)
+                end
+            end,
+        }
+    end
+    -- Target/focus Important Cast Glow: a bar host storing shared style
+    -- indices (every style but Shape); an unset mode is the stored custom color.
+    local function UF_ImpCastGlowDesc(getS, onChange)
+        return {
+            host = "bar",
+            caps = { mode = true, params = true, bg = true },
+            defaultColor = { r = 1, g = 0.2, b = 0.2 },
+            onChange = onChange or ReloadAndUpdate,
+            isOff = function() return getS().castbarImportantGlow ~= true end,
+            get = function(f)
+                local s = getS()
+                if f == "style" then return s.castbarImportantGlowStyle or 1
+                elseif f == "mode" then return s.castbarImportantGlowColorMode or "custom"
+                end
+                return EllesmereUI.GlowOptions.FlatGet(s, "castbarImportantGlow", f)
+            end,
+            set = function(f, a, b, c)
+                local s = getS()
+                if f == "style" then
+                    if a == 0 then s.castbarImportantGlow = false
+                    else s.castbarImportantGlow = true; s.castbarImportantGlowStyle = a end
+                elseif f == "mode" then s.castbarImportantGlowColorMode = a
+                else EllesmereUI.GlowOptions.FlatSet(s, "castbarImportantGlow", f, a, b, c)
+                end
+            end,
+        }
+    end
+    do
+        local GO = EllesmereUI.GlowOptions
+        -- Open Settings selects the unit first (the page shows one unit at a time).
+        local function SelectUnit(unit)
+            return function() EllesmereUI._setUnitFrameUnit(unit); EllesmereUI._pendingUnitSelect = unit end
+        end
+        GO.RegisterSite({ id = "uf_purge_target", label = "Target Purgeable Buff Glow", group = "module",
+            module = "EllesmereUIUnitFrames", page = PAGE_DISPLAY, section = "BUFFS AND DEBUFFS",
+            preSelect = SelectUnit("target"),
+            -- The Purgeable Buffs cog sits on the unit's Buff Filter row.
+            highlight = "Buff Filter",
+            desc = UF_PurgeGlowDesc(UNIT_DB_MAP.target) })
+        GO.RegisterSite({ id = "uf_purge_focus", label = "Focus Purgeable Buff Glow", group = "module",
+            module = "EllesmereUIUnitFrames", page = PAGE_DISPLAY, section = "BUFFS AND DEBUFFS",
+            preSelect = SelectUnit("focus"),
+            highlight = "Buff Filter",
+            desc = UF_PurgeGlowDesc(UNIT_DB_MAP.focus) })
+        GO.RegisterSite({ id = "uf_importantcast_target", label = "Target Important Cast Glow", group = "module",
+            module = "EllesmereUIUnitFrames", page = PAGE_DISPLAY, section = "CAST BAR",
+            preSelect = SelectUnit("target"), highlight = "Important Cast Glow",
+            desc = UF_ImpCastGlowDesc(UNIT_DB_MAP.target) })
+        GO.RegisterSite({ id = "uf_importantcast_focus", label = "Focus Important Cast Glow", group = "module",
+            module = "EllesmereUIUnitFrames", page = PAGE_DISPLAY, section = "CAST BAR",
+            preSelect = SelectUnit("focus"), highlight = "Important Cast Glow",
+            desc = UF_ImpCastGlowDesc(UNIT_DB_MAP.focus) })
+    end
 
     local GROUP_UNIT_ORDER = { "player", "target", "focus" }
     local SHORT_LABELS = {
@@ -1301,12 +1434,14 @@ initFrame:SetScript("OnEvent", function(self)
             PP.Point(pFrame._previewModel, "BOTTOMRIGHT", pFrame, "BOTTOMRIGHT", 0, 0)
         end
 
-        -- Outer Ring / Inner Shadow: the live portrait's own helper. A shown
-        -- Outer Ring (and an unmasked ring below Size 7) reaches past the
-        -- frame, so the detached preview stops clipping (every layout
-        -- branch of Update sets its clip again first).
+        -- Outer Ring / Inner Shadow / Wingless Dragon: the live portrait's own
+        -- helper. A shown Outer Ring, an unmasked ring below Size 7 and the
+        -- Wingless Dragon's holder reach past the frame, so the detached
+        -- preview stops clipping (every layout branch of Update sets its clip
+        -- again first).
         ns.UF_PortraitExtras(pFrame, s, shape)
-        if ringInset or (pFrame._outerRing and pFrame._outerRing:IsShown()) then
+        if ringInset or (pFrame._outerRing and pFrame._outerRing:IsShown())
+            or (pFrame._winglessHolder and pFrame._winglessHolder:IsShown()) then
             pFrame:SetClipsChildren(false)
         end
     end
@@ -1794,6 +1929,7 @@ initFrame:SetScript("OnEvent", function(self)
                 end
             end
             portraitFrame._applyMode = ApplyPortraitMode
+            portraitFrame._isPreview = true
             portraitFrame._previewTex = portraitTex
             portraitFrame._previewModel = portraitModel
             ApplyPortraitMode()
@@ -1940,7 +2076,8 @@ initFrame:SetScript("OnEvent", function(self)
             -- global flag is on, integer otherwise.
             local function _pvAbbrev(v)
                 local cfg = _G._EUI_AbbrevDecimalCfg
-                return cfg and AbbreviateNumbers(v, cfg) or AbbreviateNumbers(v)
+                -- The live tags' function (WoW Forever: none under 10,000 abbreviates).
+                return cfg and ns.AbbreviateNumbers(v, cfg) or ns.AbbreviateNumbers(v)
             end
             local function _pvPct(p01)
                 if not _G._EUI_TextDecimals then return tostring(math.floor(p01 * 100)) end
@@ -1949,8 +2086,14 @@ initFrame:SetScript("OnEvent", function(self)
                 return string.format("%.1f", p01 * 100)
             end
             local function _pvName()
-                if unitKey == "player" then return UnitName("player") or "Player" end
-                return _previewCreatureNames[unitKey] or unitKey
+                -- The player's name as the live frame shows it (Forever surname).
+                local n = (unitKey == "player") and (EllesmereUI.WithSurname(UnitName("player")) or "Player")
+                    or (_previewCreatureNames[unitKey] or unitKey)
+                -- Name Format (WoW Forever only; nil on retail).
+                if EllesmereUI.ForeverShortName and prefix and s then
+                    n = EllesmereUI.ForeverShortName(n, s[prefix .. "NameFormat"])
+                end
+                return n
             end
             -- literal: the Target content's padded prefix in place of the
             -- separator ("" = none); plain: the name in the slot colour.
@@ -2023,14 +2166,14 @@ initFrame:SetScript("OnEvent", function(self)
             elseif content == "curpp" then
                 local maxPP = UnitPowerMax("player") or 100
                 local ppPct = _previewPowerPct or 0.85
-                return AbbreviateNumbers(math.floor(maxPP * ppPct))
+                return ns.AbbreviateNumbers(math.floor(maxPP * ppPct))
             elseif content == "curhp_curpp" then
                 local maxHP = UnitHealthMax("player") or 1
                 local pct = _previewHealthPct or 0.70
                 local curHP = math.floor(maxHP * pct)
                 local maxPP = UnitPowerMax("player") or 100
                 local ppPct2 = _previewPowerPct or 0.85
-                return _pvAbbrev(curHP) .. " | " .. AbbreviateNumbers(math.floor(maxPP * ppPct2))
+                return _pvAbbrev(curHP) .. " | " .. ns.AbbreviateNumbers(math.floor(maxPP * ppPct2))
             elseif content == "perhp_perpp" then
                 local pct = _previewHealthPct or 0.70
                 local ppPct3 = _previewPowerPct or 0.85
@@ -3648,6 +3791,8 @@ initFrame:SetScript("OnEvent", function(self)
             local bh = hh + pvPpExtra
             -- Class power "above" position adds height above health bar ("top" floats outside)
             local cpStyle = (unitKey == "player") and (s.classPowerStyle or "none") or "none"
+            -- The style that builds (WoW Forever reads a saved "blizzard" as modern).
+            if ns.UF_ForeverCPStyle then cpStyle = ns.UF_ForeverCPStyle(cpStyle) end
             local cpPos = (cpStyle == "modern") and (s.classPowerPosition or "top") or "none"
             local cpAboveH = 0
             if cpStyle == "modern" and cpPos == "above" and cpPips then
@@ -4013,7 +4158,7 @@ initFrame:SetScript("OnEvent", function(self)
                 -- Spell Cost Prediction eyeball (player, WoW Forever): the last
                 -- third of the fill in the prediction color, as during a cast.
                 -- Mana only, as live.
-                if unitKey == "player" and EllesmereUI.IS_FOREVER == true and pf._powerFill
+                if unitKey == "player" and EllesmereUI.SpellCostPrediction and pf._powerFill
                    and ns._ufShowPowerCostPreview and s.powerCostPrediction == true
                    and UnitPowerType("player") == Enum.PowerType.Mana then
                     local seg = pf._pvCostSeg
@@ -4087,7 +4232,7 @@ initFrame:SetScript("OnEvent", function(self)
                     local ppPctVal = _previewPowerPct or 0.85
                     local ppPctRaw = math.floor(ppPctVal * 100)
                     local ppSuffix = (s.powerShowPercent == false) and "" or "%"
-                    local ppCurFake = AbbreviateNumbers(18200)
+                    local ppCurFake = ns.AbbreviateNumbers(18200)
                     local ppTxt
                     if ppFmt == "smart" then
                         ppTxt = ppPctRaw .. ppSuffix  -- preview always shows percent for smart
@@ -5428,7 +5573,14 @@ initFrame:SetScript("OnEvent", function(self)
                 local et = pf._pvElite
                 if et then
                     if unitKey == "target" and eyes.elite and s.eliteIndicatorEnabled == true then
-                        if s.eliteIndicatorStyle == "pixelsDragon" and portraitFrame and sp and not blizzG then
+                        et:SetDesaturated(false)
+                        et:SetVertexColor(1, 1, 1)
+                        if s.eliteIndicatorStyle == "wingless" and portraitFrame and sp and not blizzG then
+                            ns.UF_PlaceWinglessDragon(et, portraitFrame, ns.UF_WINGLESS_GOLD,
+                                s.eliteIndicatorWinglessFlip == true,
+                                s.eliteIndicatorWinglessClassColor, s.eliteIndicatorWinglessScale,
+                                s.eliteIndicatorX, s.eliteIndicatorY)
+                        elseif s.eliteIndicatorStyle == "pixelsDragon" and portraitFrame and sp and not blizzG then
                             -- Pixels Dragon (Elite sample) around the portrait, as live
                             -- (the stock styles draw the Badge).
                             local d = portraitFrame:GetHeight() * ns.UF_ELITE_DRAGON_SCALE
@@ -5439,6 +5591,9 @@ initFrame:SetScript("OnEvent", function(self)
                             et:SetPoint("CENTER", portraitFrame, "CENTER", 0, 0)
                         else
                             local sz = s.eliteIndicatorSize or 16
+                            -- Clear a dragon style's sheet coords first (SetAtlas
+                            -- can keep custom coords, reading them inside the atlas box).
+                            et:SetTexCoord(0, 1, 0, 1)
                             et:SetAtlas("nameplates-icon-elite-gold")
                             et:SetSize(sz, sz)
                             PlaceCorner(et, s.eliteIndicatorPosition or "topleft",
@@ -7456,7 +7611,7 @@ initFrame:SetScript("OnEvent", function(self)
         -- Cog on Shape Border for border settings
         if not EllesmereUI._prebuilding then
             local borderRgn = sharedShapeBorderRow._rightRegion
-            EllesmereUI.BuildInlineCog(borderRgn, {
+            local borderCog = {
                 disabled = function() return SVal("portraitStyle", "attached") ~= "detached" end,
                 disabledTooltip = "This option is only available when Portrait Mode is Detached.",
                 title = "Shape Border Settings",
@@ -7484,8 +7639,9 @@ initFrame:SetScript("OnEvent", function(self)
                           ["pixels-textured"]        = "Pixels Textured Ring",
                           ["pixels-shadow"]          = "Pixels Ring Shadow",
                           ["pixels-textured-shadow"] = "Pixels Textured Ring Shadow",
+                          ["thin-border"]            = "Naowh Thin Circle",
                       },
-                      order={ "none", "border", "pixels", "pixels-textured", "pixels-shadow", "pixels-textured-shadow" },
+                      order={ "none", "border", "pixels", "pixels-textured", "pixels-shadow", "pixels-textured-shadow", "thin-border" },
                       -- "Pixels Textured Ring Shadow" needs more than the 130px default.
                       ddWidth=190,
                       tooltip="Adds a second ring around a round portrait; Match Frame Border follows your frame border style.",
@@ -7526,7 +7682,60 @@ initFrame:SetScript("OnEvent", function(self)
                       get=function() return SVal("detachedPortraitInnerShadow", false) end,
                       set=function(v) SSet("detachedPortraitInnerShadow", v); UpdatePreview() end },
                 },
-            })
+            }
+            -- The target frame's dragon is an Elite/Rare Indicator style instead.
+            -- Its tuning rows are built only while it is on: the toggle rebuilds
+            -- the page and reopens this cog.
+            if selectedUnit == "player" then
+                local shapeTip = "This option requires a Circle, Pixels Circle, Square or Rounded Square Shape."
+                local function badShape() return not ns.UF_DRAGON_SHAPES[SVal("detachedPortraitShape", "portrait")] end
+                local rows = borderCog.rows
+                rows[#rows + 1] = { type="toggle", label="Wingless Dragon",
+                  tooltip="Curls a gold dragon around the portrait.",
+                  disabled=badShape, disabledTooltip=shapeTip, rawTooltip=true,
+                  get=function() return SVal("detachedPortraitWinglessDragon", false) end,
+                  set=function(v)
+                      SSet("detachedPortraitWinglessDragon", v); UpdatePreview()
+                      ns.UF_RebuildCog("shapeBorder")
+                  end }
+                if SVal("detachedPortraitWinglessDragon", false) then
+                    rows[#rows + 1] = { type="slider", label="Dragon X Offset", min=-100, max=100, step=1,
+                      disabled=badShape, disabledTooltip=shapeTip, rawTooltip=true,
+                      get=function() return SVal("detachedPortraitWinglessDragonX", 0) end,
+                      set=function(v) SSet("detachedPortraitWinglessDragonX", v); UpdatePreview() end }
+                    rows[#rows + 1] = { type="slider", label="Dragon Y Offset", min=-100, max=100, step=1,
+                      disabled=badShape, disabledTooltip=shapeTip, rawTooltip=true,
+                      get=function() return SVal("detachedPortraitWinglessDragonY", 0) end,
+                      set=function(v) SSet("detachedPortraitWinglessDragonY", v); UpdatePreview() end }
+                    rows[#rows + 1] = { type="slider", label="Dragon Size", min=50, max=200, step=1,
+                      tooltip="Size of the Wingless Dragon, as a percent of its fit around the portrait.",
+                      disabled=badShape, disabledTooltip=shapeTip, rawTooltip=true,
+                      get=function() return SVal("detachedPortraitWinglessDragonScale", 100) end,
+                      set=function(v) SSet("detachedPortraitWinglessDragonScale", v); UpdatePreview() end }
+                    rows[#rows + 1] = { type="toggle", label="Flip Dragon",
+                      tooltip="Turns the Wingless Dragon to face the other way around the portrait.",
+                      disabled=badShape, disabledTooltip=shapeTip, rawTooltip=true,
+                      get=function() return SVal("detachedPortraitWinglessDragonFlip", false) end,
+                      set=function(v) SSet("detachedPortraitWinglessDragonFlip", v); UpdatePreview() end }
+                    rows[#rows + 1] = { type="toggle", label="Use Class Color",
+                      tooltip="Tints the Wingless Dragon with your class color instead of gold.",
+                      disabled=badShape, disabledTooltip=shapeTip, rawTooltip=true,
+                      get=function() return SVal("detachedPortraitWinglessDragonClassColor", false) end,
+                      set=function(v) SSet("detachedPortraitWinglessDragonClassColor", v); UpdatePreview() end }
+                    rows[#rows + 1] = { type="dropdown", label="Dragon Strata",
+                      values=ns._ufDragonStrataValues, order=ns._ufDragonStrataOrder,
+                      tooltip="Match Frame draws the dragon with the portrait. A higher strata draws it over the rest of the frame, border included.",
+                      disabled=badShape, disabledTooltip=shapeTip, rawTooltip=true,
+                      get=function() return SVal("detachedPortraitWinglessDragonStrata", "inherit") end,
+                      set=function(v) SSet("detachedPortraitWinglessDragonStrata", v); UpdatePreview() end }
+                    rows[#rows + 1] = { type="slider", label="Dragon Frame Level", min=1, max=30, step=1,
+                      tooltip="Raises the dragon within its strata. Higher values draw it over more of the frame.",
+                      disabled=badShape, disabledTooltip=shapeTip, rawTooltip=true,
+                      get=function() return SVal("detachedPortraitWinglessDragonLevel", 1) end,
+                      set=function(v) SSet("detachedPortraitWinglessDragonLevel", v); UpdatePreview() end }
+                end
+            end
+            ns.UF_TrackCog("shapeBorder", EllesmereUI.BuildInlineCog(borderRgn, borderCog))
         end
         -- Sync icons: Shape (left) and Shape Border (right)
         if not EllesmereUI._prebuilding then
@@ -8305,7 +8514,7 @@ initFrame:SetScript("OnEvent", function(self)
                 disabled = function() return SVal("leftTextContent", "name") == "none" end,
                 disabledTooltip = "This option requires a text selection other than none.",
                 title = "Left Text Settings",
-                rows = {
+                rows = ns.UF_NameFormatRows("leftText", "name", SVal, SSet, {
                     { type="slider", label="Size", min=8, max=100, step=1,
                       get=function() return SVal("leftTextSize", SDB().textSize or 12) end,
                       set=function(v) SSet("leftTextSize", v); UpdatePreview() end },
@@ -8363,7 +8572,7 @@ initFrame:SetScript("OnEvent", function(self)
                       end,
                       disabled=function() return SVal("leftTextContent","name") ~= "targetname" end,
                       disabledTooltip="This option only applies when Target is selected." },
-                                    },
+                                    }),
             })
         end
         -- Sync icon: Right Text (right)
@@ -8487,7 +8696,7 @@ initFrame:SetScript("OnEvent", function(self)
                 disabled = function() return SVal("rightTextContent", "both") == "none" end,
                 disabledTooltip = "This option requires a text selection other than none.",
                 title = "Right Text Settings",
-                rows = {
+                rows = ns.UF_NameFormatRows("rightText", "both", SVal, SSet, {
                     { type="slider", label="Size", min=8, max=100, step=1,
                       get=function() return SVal("rightTextSize", SDB().textSize or 12) end,
                       set=function(v) SSet("rightTextSize", v); UpdatePreview() end },
@@ -8545,7 +8754,7 @@ initFrame:SetScript("OnEvent", function(self)
                       end,
                       disabled=function() return SVal("rightTextContent","both") ~= "targetname" end,
                       disabledTooltip="This option only applies when Target is selected." },
-                                    },
+                                    }),
             })
         end
 
@@ -8675,7 +8884,7 @@ initFrame:SetScript("OnEvent", function(self)
                 disabled = function() return SVal("centerTextContent", "none") == "none" end,
                 disabledTooltip = "This option requires a text selection other than none.",
                 title = "Center Text Settings",
-                rows = {
+                rows = ns.UF_NameFormatRows("centerText", "none", SVal, SSet, {
                     { type="slider", label="Size", min=8, max=100, step=1,
                       get=function() return SVal("centerTextSize", SDB().textSize or 12) end,
                       set=function(v) SSet("centerTextSize", v); UpdatePreview() end },
@@ -8733,7 +8942,7 @@ initFrame:SetScript("OnEvent", function(self)
                       end,
                       disabled=function() return SVal("centerTextContent","none") ~= "targetname" end,
                       disabledTooltip="This option only applies when Target is selected." },
-                                    },
+                                    }),
             })
         end
 
@@ -8847,7 +9056,7 @@ initFrame:SetScript("OnEvent", function(self)
                 disabled = function() return SVal("extraTextContent", "none") == "none" end,
                 disabledTooltip = "This option requires a text selection other than none.",
                 title = "Extra Text Settings",
-                rows = {
+                rows = ns.UF_NameFormatRows("extraText", "none", SVal, SSet, {
                     { type="dropdown", label="Alignment",
                       values={ ["left"]="Left", ["right"]="Right", ["center"]="Center" }, order={ "left", "right", "center" },
                       get=function() return SVal("extraTextAlign", "left") end,
@@ -8909,7 +9118,7 @@ initFrame:SetScript("OnEvent", function(self)
                       end,
                       disabled=function() return SVal("extraTextContent","none") ~= "targetname" end,
                       disabledTooltip="This option only applies when Target is selected." },
-                                    },
+                                    }),
             })
         end
 
@@ -9747,8 +9956,10 @@ initFrame:SetScript("OnEvent", function(self)
 
         -- Spell Cost Prediction (player only, WoW Forever only; the page rebuilds
         -- on unit change): toggle with a preview eyeball | its color. Above Power
-        -- Type, which keeps its height when hidden.
-        if selectedUnit == "player" and EllesmereUI.IS_FOREVER == true then
+        -- Type, which keeps its height when hidden. Built with the engine
+        -- (EllesmereUI_SpellCostPrediction.lua, nil off Forever) loaded: the
+        -- color and the preview read its color rule.
+        if selectedUnit == "player" and EllesmereUI.SpellCostPrediction then
             local costRow
             costRow, h = W:DualRow(parent, y,
                 { type="toggle", text="Spell Cost Prediction",
@@ -9794,13 +10005,15 @@ initFrame:SetScript("OnEvent", function(self)
                     EllesmereUI.HideWidgetTooltip()
                 end)
             end
+        end
+        if selectedUnit == "player" and EllesmereUI.IS_FOREVER == true then
             -- Mana Regen Spark (EllesmereUI_ManaRegenSpark.lua), the section's
             -- last row; warriors and rogues get no spark engine, so no row. A
             -- druid's Power Type shares it: one choice for every form, stored
             -- under a string key so it can never meet a retail spec ID in the
             -- table.
             local sparkCfg = { type="toggle", text="Mana Regen Spark",
-                  tooltip="Sweeps a spark across the bar for 5 seconds after you spend mana, then every 2 seconds while mana regenerates.",
+                  tooltip="Sweeps a spark across the bar for 5 seconds after you spend mana, until mana regen resumes.",
                   getValue=function() return SVal("manaRegenSpark", false) == true end,
                   setValue=function(v) SSet("manaRegenSpark", v) end }
             local _, playerClass = UnitClass("player")
@@ -10849,36 +11062,12 @@ initFrame:SetScript("OnEvent", function(self)
                   db = function(u) local f = UNIT_DB_MAP[u]; return f and f() end })
         end
         -- Important Cast Glow (target/focus); in Classic WoW UI it fills the Border Size row's free slot.
-        local impGlowCfg, impGlowOff
+        local impGlowCfg, impGlowDesc
         if selectedUnit == "target" or selectedUnit == "focus" then
-            impGlowOff = function() return not SValSupported("castbarImportantGlow", false) end
-            local impGlowValues, impGlowOrder = { [0] = "None" }, { 0 }
-            do
-                local styles = EllesmereUI.Glows and EllesmereUI.Glows.STYLES
-                for _, idx in ipairs(ns.UF_IMPORTANT_GLOW_STYLES) do
-                    local entry = styles and styles[idx]
-                    impGlowValues[idx] = entry and entry.name or ("Style " .. idx)
-                    impGlowOrder[#impGlowOrder + 1] = idx
-                end
-            end
-            impGlowCfg = { type="dropdown", text="Important Cast Glow",
-                values=impGlowValues, order=impGlowOrder,
-                getValue=function()
-                  if impGlowOff() then return 0 end
-                  local v = SValSupported("castbarImportantGlowStyle", 1)
-                  return impGlowValues[v] and v or 1
-                end,
-                setValue=function(v)
-                  local s = UNIT_DB_MAP[selectedUnit]()
-                  if v == 0 then
-                      s.castbarImportantGlow = false
-                  else
-                      s.castbarImportantGlow = true
-                      s.castbarImportantGlowStyle = v
-                  end
-                  ReloadAndUpdate(); UpdatePreview(); EllesmereUI:RefreshPage()
-                end,
-                tooltip="Show a glow on the cast bar when the unit is casting a spell Blizzard marks as important." }
+            impGlowDesc = UF_ImpCastGlowDesc(function() return UNIT_DB_MAP[selectedUnit]() end,
+                function() ReloadAndUpdate(); UpdatePreview() end)
+            impGlowCfg = EllesmereUI.GlowOptions.DropdownSpec(impGlowDesc, "Important Cast Glow",
+                "Show a glow on the cast bar when the unit is casting a spell Blizzard marks as important.")
         end
         -- Classic WoW UI: Border Size closes the section (odd last slot).
         local classicH, classicRow = ns.UF_ClassicCastBorderRow(W, parent, y,
@@ -10894,75 +11083,26 @@ initFrame:SetScript("OnEvent", function(self)
         if impGlowCfg then
             local impGlowRow, impGlowSide = classicRow, "_rightRegion"
             if not impGlowRow then
-                impGlowRow, h = W:DualRow(parent, y, impGlowCfg, EllesmereUI.BlankRowCfg());  y = y - h
+                impGlowRow, h = W:DualRow(parent, y, impGlowCfg, { type="label", text="Glow Color" });  y = y - h
                 impGlowSide = "_leftRegion"
             end
             if not EllesmereUI._prebuilding then
                 local rgn = impGlowRow[impGlowSide]
-                -- Inline color swatch
-                local sw, updateSw = EllesmereUI.BuildColorSwatch(rgn, rgn:GetFrameLevel() + 5,
-                    function()
-                        local c = SValSupported("castbarImportantGlowColor", { r = 1, g = 0.2, b = 0.2 })
-                        return c.r, c.g, c.b, 1
-                    end,
-                    function(r, g, b)
-                        SSetSupported("castbarImportantGlowColor", { r = r, g = g, b = b })
-                    end, false, 20)
-                PP.Point(sw, "RIGHT", rgn._lastInline or rgn._control, "LEFT", -12, 0)
-                rgn._lastInline = sw
-                local swBlock = CreateFrame("Frame", nil, sw)
-                swBlock:SetAllPoints()
-                swBlock:SetFrameLevel(sw:GetFrameLevel() + 10)
-                swBlock:EnableMouse(true)
-                swBlock:SetScript("OnEnter", function()
-                    EllesmereUI.ShowWidgetTooltip(sw, EllesmereUI.DisabledTooltip("Important Cast Glow"))
-                end)
-                swBlock:SetScript("OnLeave", function() EllesmereUI.HideWidgetTooltip() end)
-                local function applySwState()
-                    local off = impGlowOff()
-                    sw:SetAlpha(off and 0.3 or 1)
-                    if off then swBlock:Show() else swBlock:Hide() end
-                    if updateSw then updateSw() end
+                -- Color swatches (in the free right half when there is one), the
+                -- Pixel Glow cog and a small preview.
+                local GO = EllesmereUI.GlowOptions
+                GO.AttachInline(rgn, impGlowDesc,
+                    impGlowSide == "_leftRegion" and impGlowRow._rightRegion or nil)
+                local pv = GO.BuildPreview(rgn, impGlowDesc, { width = 40, height = 14,
+                    anchor = rgn._lastInline or rgn._control, x = -12 })
+                if pv then
+                    pv:SetFrameLevel(rgn:GetFrameLevel() + 5)
+                    rgn._lastInline = pv
                 end
-                applySwState()
-                EllesmereUI.RegisterWidgetRefresh(applySwState)
-
-                -- Inline cog: Pixel Glow settings
-                EllesmereUI.BuildInlineCog(rgn, {
-                    gap = 6,
-                    tip = "Pixel Glow Settings",
-                    disabled = function()
-                        return impGlowOff() or SValSupported("castbarImportantGlowStyle", 1) ~= 1
-                    end,
-                    disabledTooltip = "This option requires Pixel Glow to be the selected glow type",
-                    title = "Pixel Glow Settings",
-                    rows = {
-                        { type = "slider", label = "Lines", min = 2, max = 16, step = 1,
-                          get = function() return SValSupported("castbarImportantGlowLines", 8) end,
-                          set = function(v) SSetSupported("castbarImportantGlowLines", v) end },
-                        { type = "slider", label = "Thickness", min = 1, max = 4, step = 1,
-                          get = function() return SValSupported("castbarImportantGlowThickness", 2) end,
-                          set = function(v) SSetSupported("castbarImportantGlowThickness", v) end },
-                        -- Stored as the animation period (lower = faster); shown inverted so right = faster.
-                        { type = "slider", label = "Speed", min = 1, max = 8, step = 1,
-                          get = function() return 9 - SValSupported("castbarImportantGlowSpeed", 4) end,
-                          set = function(v) SSetSupported("castbarImportantGlowSpeed", 9 - v) end },
-                        { type = "toggle", label = "Background",
-                          get = function() return SValSupported("castbarImportantGlowBackground", false) == true end,
-                          set = function(v) SSetSupported("castbarImportantGlowBackground", v and true or nil) end },
-                        { type = "colorpicker", label = "Background Color",
-                          get = function()
-                              local c = SValSupported("castbarImportantGlowBackgroundColor", { r = 0, g = 0, b = 0 })
-                              return c.r or 0, c.g or 0, c.b or 0
-                          end,
-                          set = function(r, g, b) SSetSupported("castbarImportantGlowBackgroundColor", { r = r, g = g, b = b }) end,
-                          disabled = function() return SValSupported("castbarImportantGlowBackground", false) ~= true end,
-                          disabledTooltip = "Pixel Glow Background" },
-                    },
-                })
 
                 -- Sync icon: apply glow settings to the other kick unit (target <-> focus)
                 local GLOW_KEYS = { "castbarImportantGlow", "castbarImportantGlowStyle",
+                    "castbarImportantGlowColorMode",
                     "castbarImportantGlowLines", "castbarImportantGlowThickness",
                     "castbarImportantGlowSpeed", "castbarImportantGlowBackground" }
                 local GLOW_COLOR_KEYS = { "castbarImportantGlowColor", "castbarImportantGlowBackgroundColor" }
@@ -11366,7 +11506,7 @@ initFrame:SetScript("OnEvent", function(self)
                 disabled = function() return not SVal("bottomTextBar", false) or SVal("btbLeftContent", "none") == "none" end,
                 disabledTooltip = function() return not SVal("bottomTextBar", false) and "Text Bar" or "This option requires a text selection other than none." end,
                 title = "BTB Left Text Settings",
-                rows = {
+                rows = ns.UF_NameFormatRows("btbLeft", "none", SVal, SSet, {
                     { type="slider", label="Size", min=8, max=100, step=1,
                       get=function() return SVal("btbLeftSize", 11) end,
                       set=function(v) SSet("btbLeftSize", v); UpdatePreview() end },
@@ -11414,7 +11554,7 @@ initFrame:SetScript("OnEvent", function(self)
                       end,
                       disabled=function() return SVal("btbLeftContent","none") ~= "nametotarget" end,
                       disabledTooltip="Only applies when Name > Target is selected." },
-                                    },
+                                    }),
             })
         end
         -- Inline color swatches on BTB Right Text: Custom + Class (Power Color stays in
@@ -11499,7 +11639,7 @@ initFrame:SetScript("OnEvent", function(self)
                 disabled = function() return not SVal("bottomTextBar", false) or SVal("btbRightContent", "none") == "none" end,
                 disabledTooltip = function() return not SVal("bottomTextBar", false) and "Text Bar" or "This option requires a text selection other than none." end,
                 title = "BTB Right Text Settings",
-                rows = {
+                rows = ns.UF_NameFormatRows("btbRight", "none", SVal, SSet, {
                     { type="slider", label="Size", min=8, max=100, step=1,
                       get=function() return SVal("btbRightSize", 11) end,
                       set=function(v) SSet("btbRightSize", v); UpdatePreview() end },
@@ -11547,7 +11687,7 @@ initFrame:SetScript("OnEvent", function(self)
                       end,
                       disabled=function() return SVal("btbRightContent","none") ~= "nametotarget" end,
                       disabledTooltip="Only applies when Name > Target is selected." },
-                                    },
+                                    }),
             })
         end
         -- Sync icons: BTB Left Text (left) and BTB Right Text (right)
@@ -11713,7 +11853,7 @@ initFrame:SetScript("OnEvent", function(self)
                 disabled = function() return not SVal("bottomTextBar", false) or SVal("btbCenterContent", "none") == "none" end,
                 disabledTooltip = function() return not SVal("bottomTextBar", false) and "Text Bar" or "This option requires a text selection other than none." end,
                 title = "BTB Center Text Settings",
-                rows = {
+                rows = ns.UF_NameFormatRows("btbCenter", "none", SVal, SSet, {
                     { type="slider", label="Size", min=8, max=100, step=1,
                       get=function() return SVal("btbCenterSize", 11) end,
                       set=function(v) SSet("btbCenterSize", v); UpdatePreview() end },
@@ -11761,7 +11901,7 @@ initFrame:SetScript("OnEvent", function(self)
                       end,
                       disabled=function() return SVal("btbCenterContent","none") ~= "nametotarget" end,
                       disabledTooltip="Only applies when Name > Target is selected." },
-                                    },
+                                    }),
             })
         end
         -- Cogwheel on Class Icon for size/location/x/y
@@ -11861,6 +12001,15 @@ initFrame:SetScript("OnEvent", function(self)
         local sharedClassResHeader
         sharedClassResHeader, h = W:SectionHeader(parent, "CLASS RESOURCE", y); y = y - h
 
+        -- The class resource style that builds: WoW Forever outside its own
+        -- style builds a saved "blizzard" as modern (ns.UF_ForeverCPStyle, nil
+        -- elsewhere). Display and gating only; writes and syncs keep the saved value.
+        local function SCPStyle()
+            local v = SValSupported("classPowerStyle", "none")
+            if ns.UF_ForeverCPStyle then v = ns.UF_ForeverCPStyle(v) end
+            return v
+        end
+
         -- Row 1: Enable Class Resource + Class Colors (with inline swatch)
         local sharedClassResRow
         sharedClassResRow, h = W:DualRow(parent, y,
@@ -11882,7 +12031,7 @@ initFrame:SetScript("OnEvent", function(self)
                       end
                   end
               end,
-              getValue=function() return SValSupported("classPowerStyle", "none") end,
+              getValue=function() return SCPStyle() end,
               -- DependentSetValue: Rows 2-3 below are hidden while the style
               -- is None; only the None <-> enabled flip forces the rebuild
               -- (style-to-style changes keep the cheap refresh path).
@@ -11898,7 +12047,7 @@ initFrame:SetScript("OnEvent", function(self)
                       C_Timer.After(0, function() local rl = EllesmereUI._widgetRefreshList; if rl then for i = 1, #rl do rl[i]() end end end)
                   end) },
             { type="multiSwatch", text="Fill Color",
-              disabled=function() return SValSupported("classPowerStyle", "none") ~= "modern" end,
+              disabled=function() return SCPStyle() ~= "modern" end,
               disabledTooltip="Class Resource must be set to Modern", rawTooltip=true,
               swatches = {
                 { tooltip = "Custom Colored",
@@ -11968,7 +12117,7 @@ initFrame:SetScript("OnEvent", function(self)
             emptySwatch:SetPoint("RIGHT", ccRgn._lastInline or ccRgn._control, "LEFT", -6, 0)
             ccRgn._lastInline = emptySwatch
             local function UpdateEmptySwatch()
-                local crOff = SValSupported("classPowerStyle", "none") ~= "modern"
+                local crOff = SCPStyle() ~= "modern"
                 if crOff then
                     emptySwatch:SetAlpha(0.15); emptySwatch:Disable()
                 else
@@ -11978,7 +12127,7 @@ initFrame:SetScript("OnEvent", function(self)
             UpdateEmptySwatch()
             RegisterWidgetRefresh(UpdateEmptySwatch)
             emptySwatch:HookScript("OnEnter", function(self)
-                if SValSupported("classPowerStyle", "none") ~= "modern" then
+                if SCPStyle() ~= "modern" then
                     EllesmereUI.ShowWidgetTooltip(self, EllesmereUI.DisabledTooltip("This option requires Class Resource to be set to Modern."))
                 else
                     EllesmereUI.ShowWidgetTooltip(self, "Empty Bar Color")
@@ -12065,7 +12214,7 @@ initFrame:SetScript("OnEvent", function(self)
         -- Row 2: Position (with cog for x/y) + Size
         row, h = W:DualRow(parent, y,
             { type="dropdown", text="Position", values=classPowerPosValues, order=classPowerPosOrder,
-              disabled=function() return SValSupported("classPowerStyle", "none") ~= "modern" end,
+              disabled=function() return SCPStyle() ~= "modern" end,
               disabledTooltip="Class Resource must be set to Modern", rawTooltip=true,
               getValue=function() return SValSupported("classPowerPosition", "top") end,
               setValue=function(v)
@@ -12076,7 +12225,7 @@ initFrame:SetScript("OnEvent", function(self)
                   UpdatePreview(); UpdatePreview()
               end },
             { type="slider", text="Size", min=4, max=100, step=1,
-              disabled=function() return SValSupported("classPowerStyle", "none") ~= "modern" end,
+              disabled=function() return SCPStyle() ~= "modern" end,
               disabledTooltip="Class Resource must be set to Modern", rawTooltip=true,
               getValue=function() return SValSupported("classPowerSize", 8) end,
               setValue=function(v)
@@ -12093,8 +12242,8 @@ initFrame:SetScript("OnEvent", function(self)
             local posRgn = row._leftRegion
             EllesmereUI.BuildInlineCog(posRgn, {
                 icon = EllesmereUI.DIRECTIONS_ICON,
-                disabled = function() return SValSupported("classPowerStyle", "none") ~= "modern" or SValSupported("classPowerPosition", "top") == "above" end,
-                disabledTooltip = function() return SValSupported("classPowerStyle", "none") ~= "modern" and "This option requires Class Resource to be set to Modern." or "This option requires a dropdown selection other than Above Health Bar" end,
+                disabled = function() return SCPStyle() ~= "modern" or SValSupported("classPowerPosition", "top") == "above" end,
+                disabledTooltip = function() return SCPStyle() ~= "modern" and "This option requires Class Resource to be set to Modern." or "This option requires a dropdown selection other than Above Health Bar" end,
                 title = "Class Resource Position",
                 rows = {
                     { type="slider", label="X Offset", min=-100, max=100, step=1,
@@ -12176,7 +12325,7 @@ initFrame:SetScript("OnEvent", function(self)
         local sharedClassResRow3
         sharedClassResRow3, h = W:DualRow(parent, y,
             { type="slider", pixel=true, text="Bar Spacing", min=0, max=10, step=1,
-              disabled=function() return SValSupported("classPowerStyle", "none") ~= "modern" end,
+              disabled=function() return SCPStyle() ~= "modern" end,
               disabledTooltip="Class Resource must be set to Modern", rawTooltip=true,
               getValue=function() return SValSupported("classPowerSpacing", 2) end,
               setValue=function(v)
@@ -12185,7 +12334,7 @@ initFrame:SetScript("OnEvent", function(self)
                   UpdatePreview(); UpdatePreview()
               end },
             { type="colorpicker", text="Background Color", hasAlpha=true,
-              disabled=function() return SValSupported("classPowerStyle", "none") ~= "modern" end,
+              disabled=function() return SCPStyle() ~= "modern" end,
               disabledTooltip="Class Resource must be set to Modern", rawTooltip=true,
               getValue=function()
                   local c = SGetSupported("classPowerBgColor")
@@ -12901,7 +13050,14 @@ initFrame:SetScript("OnEvent", function(self)
                     -- Any Show-lane filter, or a direct Extra Spell, counts as a
                     -- content source once neither broad mode is on.
                     local function OtherContent()
-                        if ps.buffFilters and next(ps.buffFilters) then return true end
+                        if ps.buffFilters and next(ps.buffFilters) then
+                            -- WoW Forever: visible filters only (a hidden retail
+                            -- preset shows nothing on this client).
+                            if not EllesmereUI.IS_FOREVER then return true end
+                            for fid in pairs(ps.buffFilters) do
+                                if not ns.PAB_HiddenPresetFilter(fid) then return true end
+                            end
+                        end
                         if ps.buffSpells and #ps.buffSpells > 0 then return true end
                         return false
                     end
@@ -13084,58 +13240,19 @@ initFrame:SetScript("OnEvent", function(self)
                 -- Filter. The glow styles whichever purgeable buffs the filter
                 -- shows; the engine gates it on the character's offensive dispel.
                 if selectedUnit == "target" or selectedUnit == "focus" then
-                    local glowValues, glowOrder = { [0] = "None" }, { 0 }
-                    local GS = EllesmereUI.Glows and EllesmereUI.Glows.STYLES or {}
-                    for i, entry in ipairs(GS) do
-                        -- Engine aura buttons take C-side glows only; Auto-Cast
-                        -- Shine and Shape Glow have no equivalent there.
-                        if not (entry.autocast or entry.shapeGlow) then
-                            glowValues[i] = entry.name
-                            glowOrder[#glowOrder + 1] = i
-                        end
-                    end
-                    -- Blizzard's static stealable border art (outside the STYLES list).
-                    local BLIZZ = EllesmereUI.Glows and EllesmereUI.Glows.STEALABLE_BORDER
-                    if BLIZZ then
-                        glowValues[BLIZZ] = "Blizzard Border"
-                        glowOrder[#glowOrder + 1] = BLIZZ
-                    end
-                    local function GlowOff()
-                        local g = SDB().buffPurgeGlow
-                        return not (type(g) == "number" and g > 0)
-                    end
+                    -- Shared glow controls over the unit's own keys. Engine aura
+                    -- buttons: C-side styles only. Unset color = the suite default (gold).
+                    local GO = EllesmereUI.GlowOptions
+                    local pgDesc = UF_PurgeGlowDesc(SDB)
+                    local pgRows = GO.PopupRows(pgDesc, "Glow Style")
+                    pgRows[1].tooltip = "Glows the buffs you can purge or spellsteal. Glowing buffs lead the row and have their own Max Buffs count."
                     EllesmereUI.BuildInlineCog(rgn, {
                         title = "Purgeable Buffs",
                         tip = "Glow the buffs you can purge or spellsteal",
                         -- Greys out with the Buff Display (None = no buffs to glow).
                         disabled = BuffDisabled,
                         disabledTooltip = "Buffs",
-                        rows = {
-                            { type="dropdown", label="Glow Style", values=glowValues, order=glowOrder,
-                              -- Full glow names ("Action Button Glow") need more than the 130px default.
-                              ddWidth=170,
-                              tooltip="Glows the buffs you can purge or spellsteal. Glowing buffs lead the row and have their own Max Buffs count.",
-                              get=function()
-                                  local g = SDB().buffPurgeGlow
-                                  if type(g) == "number" and glowValues[g] then return g end
-                                  return 0
-                              end,
-                              set=function(v)
-                                  if v == 0 then SDB().buffPurgeGlow = nil else SDB().buffPurgeGlow = v end
-                                  ReloadAndUpdate(); UpdatePreview()
-                              end },
-                            { type="colorpicker", label="Glow Color",
-                              get=function()
-                                  local c = SDB().buffPurgeGlowColor
-                                  if c then return c.r, c.g, c.b end
-                                  return 1, 1, 1
-                              end,
-                              set=function(r, g, b)
-                                  SDB().buffPurgeGlowColor = { r = r, g = g, b = b }
-                                  ReloadAndUpdate(); UpdatePreview()
-                              end,
-                              disabled=GlowOff, disabledTooltip="a Glow Style" },
-                        },
+                        rows = pgRows,
                     })
                 end
             end
@@ -14534,9 +14651,14 @@ initFrame:SetScript("OnEvent", function(self)
             local function eliteIndOff()
                 return SValSupported("eliteIndicatorEnabled", false) ~= true
             end
-            -- Pixels Dragon sits on the portrait: Size, Position and the offsets
-            -- apply to the Badge style only. The stock styles always draw the Badge.
+            -- The dragon styles sit on the portrait: Size and Position apply to
+            -- the Badge style only, the X/Y offsets to the Badge and the Wingless
+            -- Dragon. The stock styles always draw the Badge.
             local function eliteDragon()
+                return SValSupported("eliteIndicatorStyle", "badge") ~= "badge"
+                    and not EllesmereUI.BlizzStyle.Get("unitframes")
+            end
+            local function pixelsDragon()
                 return SValSupported("eliteIndicatorStyle", "badge") == "pixelsDragon"
                     and not EllesmereUI.BlizzStyle.Get("unitframes")
             end
@@ -14573,32 +14695,68 @@ initFrame:SetScript("OnEvent", function(self)
             if not EllesmereUI._prebuilding then
                 local elitePosValues = { ["topleft"]="Top Left", ["topright"]="Top Right", ["bottomleft"]="Bottom Left", ["bottomright"]="Bottom Right", ["portrait"]="Portrait" }
                 local elitePosOrder = { "topleft", "topright", "bottomleft", "bottomright", "portrait" }
-                EllesmereUI.BuildInlineCog(eliteRow._rightRegion, { disabled = eliteIndOff, disabledTooltip = "Elite/Rare Indicator",
+                local function stockStyle() return EllesmereUI.BlizzStyle.Get("unitframes") end
+                local function stockStyleTip() return EllesmereUI.BlizzStyle.Label("unitframes") end
+                local rows = {
+                    { type="dropdown", label="Style",
+                      tooltip="Badge shows a small icon; Pixels Dragon wraps the portrait in classification art; Wingless Dragon curls the gold or silver dragon around it.",
+                      values={ badge = "Badge", pixelsDragon = "Pixels Dragon", wingless = "Wingless Dragon" },
+                      order={ "badge", "pixelsDragon", "wingless" },
+                      disabled=stockStyle, disabledTooltip=stockStyleTip, requireState="disabled",
+                      get=function() return SValSupported("eliteIndicatorStyle", "badge") end,
+                      -- The Wingless Dragon's rows are built only for that style: a
+                      -- change into or out of it rebuilds the page and reopens this
+                      -- cog; any other change only dims the Elite Icon Size slider.
+                      set=function(v)
+                          local rebuild = (v == "wingless") ~= (SValSupported("eliteIndicatorStyle", "badge") == "wingless")
+                          SSetSupported("eliteIndicatorStyle", v)
+                          if rebuild then ns.UF_RebuildCog("elite") else EllesmereUI:RefreshPage() end
+                      end },
+                    { type="dropdown", label="Position", values=elitePosValues, order=elitePosOrder,
+                      disabled=eliteDragon, disabledTooltip="This option only applies to the Badge style.",
+                      get=function() return SValSupported("eliteIndicatorPosition", "topleft") end,
+                      set=function(v) SSetSupported("eliteIndicatorPosition", v) end },
+                    { type="slider", label="X Offset", min=-200, max=200, step=1,
+                      disabled=pixelsDragon, disabledTooltip="This option does not apply to the Pixels Dragon style.",
+                      get=function() return SValSupported("eliteIndicatorX", 0) end,
+                      set=function(v) SSetSupported("eliteIndicatorX", v) end },
+                    { type="slider", label="Y Offset", min=-200, max=200, step=1,
+                      disabled=pixelsDragon, disabledTooltip="This option does not apply to the Pixels Dragon style.",
+                      get=function() return SValSupported("eliteIndicatorY", 0) end,
+                      set=function(v) SSetSupported("eliteIndicatorY", v) end },
+                }
+                if SValSupported("eliteIndicatorStyle", "badge") == "wingless" then
+                    rows[#rows + 1] = { type="slider", label="Dragon Size", min=50, max=200, step=1,
+                      tooltip="Size of the Wingless Dragon, as a percent of its fit around the portrait.",
+                      disabled=stockStyle, disabledTooltip=stockStyleTip, requireState="disabled",
+                      get=function() return SValSupported("eliteIndicatorWinglessScale", 100) end,
+                      set=function(v) SSetSupported("eliteIndicatorWinglessScale", v) end }
+                    rows[#rows + 1] = { type="toggle", label="Flip Dragon",
+                      tooltip="Turns the Wingless Dragon to face the other way around the portrait.",
+                      disabled=stockStyle, disabledTooltip=stockStyleTip, requireState="disabled",
+                      get=function() return SValSupported("eliteIndicatorWinglessFlip", false) == true end,
+                      set=function(v) SSetSupported("eliteIndicatorWinglessFlip", v) end }
+                    rows[#rows + 1] = { type="toggle", label="Use Class Color",
+                      tooltip="Tints the Wingless Dragon with your class color instead of gold or silver.",
+                      disabled=stockStyle, disabledTooltip=stockStyleTip, requireState="disabled",
+                      get=function() return SValSupported("eliteIndicatorWinglessClassColor", false) == true end,
+                      set=function(v) SSetSupported("eliteIndicatorWinglessClassColor", v) end }
+                    rows[#rows + 1] = { type="dropdown", label="Dragon Strata",
+                      values=ns._ufDragonStrataValues, order=ns._ufDragonStrataOrder,
+                      tooltip="Match Frame draws the dragon with the portrait. A higher strata draws it over the rest of the frame, border included.",
+                      disabled=stockStyle, disabledTooltip=stockStyleTip, requireState="disabled",
+                      get=function() return SValSupported("eliteIndicatorWinglessStrata", "inherit") end,
+                      set=function(v) SSetSupported("eliteIndicatorWinglessStrata", v) end }
+                    rows[#rows + 1] = { type="slider", label="Dragon Frame Level", min=1, max=30, step=1,
+                      tooltip="Raises the dragon within its strata. Higher values draw it over more of the frame.",
+                      disabled=stockStyle, disabledTooltip=stockStyleTip, requireState="disabled",
+                      get=function() return SValSupported("eliteIndicatorWinglessLevel", 1) end,
+                      set=function(v) SSetSupported("eliteIndicatorWinglessLevel", v) end }
+                end
+                ns.UF_TrackCog("elite", EllesmereUI.BuildInlineCog(eliteRow._rightRegion, { disabled = eliteIndOff, disabledTooltip = "Elite/Rare Indicator",
                     title = "Elite/Rare Indicator Settings",
-                    rows = {
-                        { type="dropdown", label="Style",
-                          tooltip="Badge shows a small icon; Pixels Dragon wraps the portrait in classification art.",
-                          values={ badge = "Badge", pixelsDragon = "Pixels Dragon" }, order={ "badge", "pixelsDragon" },
-                          disabled=function() return EllesmereUI.BlizzStyle.Get("unitframes") end,
-                          disabledTooltip=function() return EllesmereUI.BlizzStyle.Label("unitframes") end,
-                          requireState="disabled",
-                          get=function() return SValSupported("eliteIndicatorStyle", "badge") end,
-                          -- RefreshPage: the Elite Icon Size slider dims with it.
-                          set=function(v) SSetSupported("eliteIndicatorStyle", v); EllesmereUI:RefreshPage() end },
-                        { type="dropdown", label="Position", values=elitePosValues, order=elitePosOrder,
-                          disabled=eliteDragon, disabledTooltip="This option only applies to the Badge style.",
-                          get=function() return SValSupported("eliteIndicatorPosition", "topleft") end,
-                          set=function(v) SSetSupported("eliteIndicatorPosition", v) end },
-                        { type="slider", label="X Offset", min=-200, max=200, step=1,
-                          disabled=eliteDragon, disabledTooltip="This option only applies to the Badge style.",
-                          get=function() return SValSupported("eliteIndicatorX", 0) end,
-                          set=function(v) SSetSupported("eliteIndicatorX", v) end },
-                        { type="slider", label="Y Offset", min=-200, max=200, step=1,
-                          disabled=eliteDragon, disabledTooltip="This option only applies to the Badge style.",
-                          get=function() return SValSupported("eliteIndicatorY", 0) end,
-                          set=function(v) SSetSupported("eliteIndicatorY", v) end },
-                    },
-                })
+                    rows = rows,
+                }))
             end
             ns._ufAddPvEye(eliteRow._leftRegion, "elite", "elite/rare indicator")
             parent._ufEliteRow = eliteRow
@@ -15581,7 +15739,7 @@ initFrame:SetScript("OnEvent", function(self)
                 disabled = function() return MVal("leftTextContent", "name") == "none" end,
                 disabledTooltip = "This option requires a text selection other than none.",
                 title = "Left Text Settings",
-                rows = {
+                rows = ns.UF_NameFormatRows("leftText", "name", MVal, MSet, {
                     { type="slider", label="Size", min=8, max=100, step=1,
                       get=function() return MVal("leftTextSize", settingsTable.textSize or 12) end,
                       set=function(v) MSet("leftTextSize", v) end },
@@ -15639,7 +15797,7 @@ initFrame:SetScript("OnEvent", function(self)
                       end,
                       disabled=function() return MVal("leftTextContent","name") ~= "targetname" end,
                       disabledTooltip="This option only applies when Target is selected." },
-                                    },
+                                    }),
             })
         end
         -- Inline color swatches + cog on Right Text: Custom + Class (CDM Border Size pattern)
@@ -15694,7 +15852,7 @@ initFrame:SetScript("OnEvent", function(self)
                 disabled = function() return MVal("rightTextContent", "none") == "none" end,
                 disabledTooltip = "This option requires a text selection other than none.",
                 title = "Right Text Settings",
-                rows = {
+                rows = ns.UF_NameFormatRows("rightText", "none", MVal, MSet, {
                     { type="slider", label="Size", min=8, max=100, step=1,
                       get=function() return MVal("rightTextSize", settingsTable.textSize or 12) end,
                       set=function(v) MSet("rightTextSize", v) end },
@@ -15752,7 +15910,7 @@ initFrame:SetScript("OnEvent", function(self)
                       end,
                       disabled=function() return MVal("rightTextContent","none") ~= "targetname" end,
                       disabledTooltip="This option only applies when Target is selected." },
-                                    },
+                                    }),
             })
         end
 
@@ -15826,7 +15984,7 @@ initFrame:SetScript("OnEvent", function(self)
                 disabled = function() return MVal("centerTextContent", "none") == "none" end,
                 disabledTooltip = "This option requires a text selection other than none.",
                 title = "Center Text Settings",
-                rows = {
+                rows = ns.UF_NameFormatRows("centerText", "none", MVal, MSet, {
                     { type="slider", label="Size", min=8, max=100, step=1,
                       get=function() return MVal("centerTextSize", settingsTable.textSize or 12) end,
                       set=function(v) MSet("centerTextSize", v) end },
@@ -15884,7 +16042,7 @@ initFrame:SetScript("OnEvent", function(self)
                       end,
                       disabled=function() return MVal("centerTextContent","none") ~= "targetname" end,
                       disabledTooltip="This option only applies when Target is selected." },
-                                    },
+                                    }),
             })
         end
 
@@ -15942,7 +16100,7 @@ initFrame:SetScript("OnEvent", function(self)
                 disabled = function() return MVal("extraTextContent", "none") == "none" end,
                 disabledTooltip = "This option requires a text selection other than none.",
                 title = "Extra Text Settings",
-                rows = {
+                rows = ns.UF_NameFormatRows("extraText", "none", MVal, MSet, {
                     { type="dropdown", label="Alignment",
                       values={ ["left"]="Left", ["right"]="Right", ["center"]="Center" }, order={ "left", "right", "center" },
                       get=function() return MVal("extraTextAlign", "left") end,
@@ -16004,7 +16162,7 @@ initFrame:SetScript("OnEvent", function(self)
                       end,
                       disabled=function() return MVal("extraTextContent","none") ~= "targetname" end,
                       disabledTooltip="This option only applies when Target is selected." },
-                                    },
+                                    }),
             })
         end
 
@@ -16705,8 +16863,9 @@ initFrame:SetScript("OnEvent", function(self)
                     { type="dropdown", text="Stack Direction", values={ up="Up", down="Down" }, order={ "up", "down" },
                       getValue=function() return db.profile.boss.bossStackDirection or "down" end,
                       setValue=function(v) db.profile.boss.bossStackDirection = v; ReloadAndUpdate() end },
-                    { type="slider", pixel=true, text="Vertical Spacing", min=-200, max=200, step=1,
-                      getValue=function() return db.profile.bossSpacing or 80 end,
+                    -- Top-to-top step; Stack Direction sets the side, so no negatives.
+                    { type="slider", pixel=true, text="Vertical Spacing", min=0, max=200, step=1,
+                      getValue=function() return math.abs(db.profile.bossSpacing or 80) end,
                       setValue=function(v) db.profile.bossSpacing = v; ReloadAndUpdate() end })
                 total = total + ch
             end

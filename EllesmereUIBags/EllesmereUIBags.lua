@@ -11,6 +11,8 @@ EUI_Bags:Hide()
 -- Auto-size state: reset on close (next open sizes from its first/active tab);
 -- while open it only grows, never shrinks.
 EUI_Bags:HookScript("OnHide", function(self)
+    -- WoW Forever sizes every open to its content: a hidden UI (Alt-Z) is not a close, keep the size.
+    if EllesmereUI.IS_FOREVER and self:IsShown() then return end
     self._asCols  = nil
     self._asMaxGridW = nil
     self._asMaxH  = nil
@@ -2099,14 +2101,14 @@ local function UpdateCurrencyDisplays(footerWidth)
     return footerHeight
 end
 
--- Re-lay-out the currency footer and grow/shrink the bag frame by the height delta; reads the previous height BEFORE UpdateCurrencyDisplays stamps the new one.
+-- Re-lay-out the currency footer and grow/shrink the bag frame by the height delta (grow-only running max under Auto-Size and on WoW Forever); reads the previous height BEFORE UpdateCurrencyDisplays stamps the new one.
 local function SyncBagFrameToFooter()
     local prev = EUI_Bags._footerH or FOOTER_H
     local footerH = UpdateCurrencyDisplays() or FOOTER_H
     if footerH == prev then return end
     if not EUI_Bags:IsVisible() then return end
     local delta = footerH - prev
-    if BP().bagAutoSize then
+    if BP().bagAutoSize or EUI.IS_FOREVER then
         EUI_Bags._asMaxH = math.max(EUI_Bags._asMaxH or EUI_Bags:GetHeight() or 0, EUI_Bags:GetHeight() + delta)
         EUI_Bags:SetHeight(EUI_Bags._asMaxH)
     else
@@ -3353,6 +3355,34 @@ function EUI_Bags.SetBindTypeText(fs, isWuE, bindType, quality)
 end
 
 -------------------------------------------------------------------------------
+--  Third-party item overlay icons (opt-in extension point for compatibility bridges with addons like CanIMogIt)
+-------------------------------------------------------------------------------
+-- Public API (other addons call it): updateFn(btn, data) runs for every
+-- painted slot in the bags, the reagent bag and the bank. btn is our secure
+-- container item button: keep state off it (parent frames to btn._textOverlay
+-- and track them in your own table), never touch it from a click handler.
+-- data = { bag, slot, info, itemLink }, valid during the call only (the bank
+-- reuses one table); placeholder slots pass bag 0 / slot 0 and no item. A
+-- painter error is reported and never stops our render.
+EUI_Bags.itemOverlayIcons = EUI_Bags.itemOverlayIcons or {}
+
+function EUI_Bags.RegisterItemOverlayIcon(name, updateFn)
+    EUI_Bags.itemOverlayIcons[name] = updateFn
+end
+
+function EUI_Bags.UnregisterItemOverlayIcon(name)
+    EUI_Bags.itemOverlayIcons[name] = nil
+end
+
+function EUI_Bags.RunItemOverlays(btn, data)
+    local fns = EUI_Bags.itemOverlayIcons
+    if next(fns) == nil then return end
+    for _, fn in pairs(fns) do
+        securecallfunction(fn, btn, data)
+    end
+end
+
+-------------------------------------------------------------------------------
 --  RenderButton
 -------------------------------------------------------------------------------
 local function RenderButton(btn, data, _, col, row, startX, currentY, _, interactiveEmpties)
@@ -3618,6 +3648,8 @@ local function RenderButton(btn, data, _, col, row, startX, currentY, _, interac
 
     end
     UpdatePawnArrow(btn, data.itemLink)
+    EUI_Bags.RunItemOverlays(btn, data)
+
     -- Same requery the native container update does after re-assigning a slot: the
     -- cursor can be resting on this button while the repaint moves another item under
     -- it, and nothing re-reads the tooltip until the mouse moves (it kept showing the
@@ -4106,7 +4138,11 @@ EnterPinSelectMode = function()
     end
     -- Position catcher over the scroll frame area
     local sf = EUI_Bags._scrollFrame
-    if sf then
+    if sf and EUI.IS_FOREVER then
+        -- WoW Forever: the window can grow while open (fit to content), so the catcher follows the scroll frame.
+        EUI_Bags._pinCatcher:ClearAllPoints()
+        EUI_Bags._pinCatcher:SetAllPoints(sf)
+    elseif sf then
         local l, b, w, h = sf:GetRect()
         if l and b and w and h then
             EUI_Bags._pinCatcher:ClearAllPoints()
@@ -7433,6 +7469,7 @@ function EUI_Bags:RefreshInventory()
 
     -- 6. Size frame. Default: fixed height, dynamic width. Auto-size: height grows to fit content
     -- (no vertical scroll), width follows column count; both track a running max while open (never shrink mid-session), floored at FIXED_H and capped at the screen.
+    -- WoW Forever: height always fits the content on that running max, with no FIXED_H floor (see below).
     local FIXED_H = 650
     local gridContentW = gridW + gridPadX * 2 + scrollbarPad + 2
     local totalW = sidebarW + gridContentW
@@ -7442,11 +7479,22 @@ function EUI_Bags:RefreshInventory()
     end
     local currencyFooterH = UpdateCurrencyDisplays(totalW) or FOOTER_H
 
-    if BP().bagAutoSize then
+    if BP().bagAutoSize or EUI.IS_FOREVER then
         local sc = EUI_Bags:GetScale(); if not sc or sc <= 0 then sc = 1 end
         local maxH = (UIParent:GetHeight() / sc) * 0.95
-        -- Cap at the screen first, then floor at FIXED_H so the window is never smaller than normal (even on short screens).
-        local neededH = math.max(FIXED_H, math.min(contentH + HEADER_H + currencyFooterH + 2, maxH))
+        local fitH = contentH + HEADER_H + currencyFooterH + 2
+        local neededH
+        if EUI.IS_FOREVER then
+            -- WoW Forever bags hold far fewer slots: fit the content instead of flooring at FIXED_H, never shorter
+            -- than the category list; without Auto-Size the normal height stays the cap (taller content scrolls).
+            if not BP().bagAutoSize then maxH = math.min(maxH, FIXED_H + currencyFooterH - FOOTER_H) end
+            local sbHdr, sbChild = EUI_Bags._sidebarHdr, EUI_Bags._sidebarChild
+            local sbH = HEADER_H + currencyFooterH + (sbHdr and sbHdr:GetHeight() or 0) + (sbChild and sbChild:GetHeight() or 0)
+            neededH = math.min(math.max(fitH, sbH), maxH)
+        else
+            -- Cap at the screen first, then floor at FIXED_H so the window is never smaller than normal (even on short screens).
+            neededH = math.max(FIXED_H, math.min(fitH, maxH))
+        end
         EUI_Bags._asMaxH = math.max(EUI_Bags._asMaxH or 0, neededH)
         EUI_Bags:SetWidth(totalW)
         EUI_Bags:SetHeight(EUI_Bags._asMaxH)
@@ -7559,6 +7607,10 @@ function EUI_BagsReagent:RefreshInventory()
             else SetInsetBorderColor(btn, 0.25, 0.25, 0.25, 1) end
         end
         UpdatePawnArrow(btn, itemLink)
+        if next(EUI_Bags.itemOverlayIcons) ~= nil then
+            data.itemLink = itemLink
+            EUI_Bags.RunItemOverlays(btn, data)
+        end
         -- Tooltip requery after the slot re-assignment (see RenderButton).
         if GameTooltip:IsOwned(btn) then
             if data.info and btn.UpdateTooltip then btn:UpdateTooltip() else GameTooltip:Hide() end

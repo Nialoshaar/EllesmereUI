@@ -296,8 +296,8 @@ local function ResolveItemBorderColor(itemLink)
         return STYLE.colors.itemDefaultBorder
     end
 
-    -- GetItemInfo reads the link (bonus-modified quality); ByID reads the base item.
-    local _, _, quality = GetItemInfo(itemLink)
+    -- C_Item.GetItemInfo reads the link (bonus-modified quality); ByID reads the base item.
+    local _, _, quality = C_Item.GetItemInfo(itemLink)
     if not quality and C_Item and C_Item.GetItemQualityByID then
         quality = C_Item.GetItemQualityByID(itemLink)
     end

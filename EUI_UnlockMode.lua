@@ -1329,11 +1329,19 @@ local function ValidateStoredLinks()
     local function ufKey(key)
         return resolveFolder ~= nil and resolveFolder(key) == "EllesmereUIUnitFrames"
     end
+    -- WoW Forever never builds the House Favor bar or the Battle Res and
+    -- Bloodlust icons: a link whose CHILD is one of them stays for the other
+    -- client on the same terms (its other end live, a unit frame key, or
+    -- another such key).
+    local function clientAbsent(key)
+        return EllesmereUI.IS_FOREVER == true
+            and (key == "FavorBar" or key == "EUI_BattleRes" or key == "EUI_Bloodlust")
+    end
     local function LinkGone(childKey, targetKey)
         local childGone, targetGone = MissingForGood(childKey), MissingForGood(targetKey)
         if not (childGone or targetGone) then return false end
-        if childGone and ufKey(childKey)
-           and (not targetGone or ufKey(targetKey)) then
+        if childGone and (ufKey(childKey) or clientAbsent(childKey))
+           and (not targetGone or ufKey(targetKey) or clientAbsent(targetKey)) then
             return false
         end
         return true
@@ -3142,6 +3150,10 @@ do
             specID = EllesmereUI._specID
         end
         if not specID or specID == 0 then return nil end
+        -- WoW Forever: the spec the class acts as for Spec Overrides.
+        if EllesmereUI.IS_FOREVER and EllesmereUI.SpecOverrides_CurrentSpecID then
+            specID = EllesmereUI.SpecOverrides_CurrentSpecID() or specID
+        end
         local groups = Groups()
         if not groups then return nil end
         for _, g in ipairs(groups) do

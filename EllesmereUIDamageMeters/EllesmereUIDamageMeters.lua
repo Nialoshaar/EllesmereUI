@@ -1828,6 +1828,32 @@ function ns._DeathTimeText(src, live)
     return FormatTimer(st)
 end
 
+-- A hidden window never paints, but a Deaths row's in-combat time is stamped on first
+-- sight and the feign cache only drops a GUID it sees at 0 HP: a hidden Deaths window
+-- keeps both moving without a paint, so it reads right the moment it shows. On ns:
+-- CreateDMWindow sits at the 60-upvalue cap.
+function ns._DMHiddenDeathsPass(w)
+    if not _inCombat or w.curDMType ~= Enum.DamageMeterType.Deaths then return end
+    CleanupFeignCache()
+    -- Only the live Current view stamps (see ns._DeathTimeText)
+    if w.curSessionID or w.curSession ~= Enum.DamageMeterSessionType.Current then return end
+    -- A window switched onto this view while the ticks were off (combat-start auto-Current)
+    if not _sharedTicker then StartSharedTicker() end
+    local s = C_DamageMeter and C_DamageMeter.GetCombatSessionFromType
+        and C_DamageMeter.GetCombatSessionFromType(Enum.DamageMeterSessionType.Current, Enum.DamageMeterType.Deaths)
+    local srcs = s and s.combatSources
+    if not srcs then return end
+    for i = 1, #srcs do
+        local src = srcs[i]
+        local rid, t = src.deathRecapID, src.deathTimeSeconds
+        -- A readable death time needs no stamp.
+        if rid and not (issecretvalue and issecretvalue(rid)) and rid > 0 and not _deathStamps[rid]
+           and (t == nil or (issecretvalue and issecretvalue(t))) then
+            ns._DeathTimeText(src, true)
+        end
+    end
+end
+
 local function FormatTimerDecimal(seconds)
     if not seconds or (issecretvalue and issecretvalue(seconds)) then return "0:00.0" end
     return format("%d:%02d.%d", math.floor(seconds / 60), math.floor(seconds % 60),
@@ -3335,26 +3361,33 @@ local function CreateDMWindow(winIdx)
             mStartEntry(L("Dispels"), Enum.DamageMeterType.Dispels),
             mStartEntry(L("Deaths"), Enum.DamageMeterType.Deaths),
         }
-        ShowEDMMenu({
+        -- An instance rule changed: re-apply every window now, and move the mouseover
+        -- scan's cached predicate on next frame (deferred like the hotkey toggle), so a
+        -- hover cannot reveal a window the new rule hides.
+        local function rulesChanged()
+            for _, w in ipairs(_windows) do w.UpdateVisibility() end
+            C_Timer.After(0, EUI.RequestVisibilityUpdate)
+        end
+        local items = {
             { text = L("Hide in Dungeons"), isActive = wdb.hideInDungeon, onClick = function()
                 wdb.hideInDungeon = not wdb.hideInDungeon
-                for _, w in ipairs(_windows) do w.UpdateVisibility() end
+                rulesChanged()
             end },
             { text = L("Hide in Raids"), isActive = wdb.hideInRaid, onClick = function()
                 wdb.hideInRaid = not wdb.hideInRaid
-                for _, w in ipairs(_windows) do w.UpdateVisibility() end
+                rulesChanged()
             end },
-            { text = L("Hide in Delves"), isActive = wdb.hideInDelve, onClick = function()
+            { text = L("Hide in Delves"), noForever = true, isActive = wdb.hideInDelve, onClick = function()
                 wdb.hideInDelve = not wdb.hideInDelve
-                for _, w in ipairs(_windows) do w.UpdateVisibility() end
+                rulesChanged()
             end },
             { text = L("Hide in PvP"), isActive = wdb.hideInPvP, onClick = function()
                 wdb.hideInPvP = not wdb.hideInPvP
-                for _, w in ipairs(_windows) do w.UpdateVisibility() end
+                rulesChanged()
             end },
             { text = L("Hide out of Instances"), isActive = wdb.hideOutOfInstance, onClick = function()
                 wdb.hideOutOfInstance = not wdb.hideOutOfInstance
-                for _, w in ipairs(_windows) do w.UpdateVisibility() end
+                rulesChanged()
             end },
             "---",
             { text = L("Width"), isInput = true,
@@ -3383,7 +3416,7 @@ local function CreateDMWindow(winIdx)
                 wdb.hideTimer = not wdb.hideTimer
                 W.timerText:SetShown(not wdb.hideTimer)
             end },
-            { text = L("Auto Swap Current/Overall"),
+            { text = L("Auto Swap Current/Overall"), noForever = true,
               tooltip = L("Auto switch your window to overall at the end of an M+ run, and current at the start"),
               isActive = wdb.autoSwapMythic, onClick = function()
                 wdb.autoSwapMythic = not wdb.autoSwapMythic
@@ -3398,13 +3431,22 @@ local function CreateDMWindow(winIdx)
               isActive = wdb.syncSegments, onClick = function()
                 wdb.syncSegments = not wdb.syncSegments
             end },
-            { text = L("Default on M+ Start"),
+            { text = L("Default on M+ Start"), noForever = true,
               tooltip = L("Set your window to this Meter Type on dungeon start"),
               children = mStartChildren },
             { text = L("Settings"), onClick = function()
                 EUI:ShowModule("EllesmereUIDamageMeters")
             end },
-        }, W.settingsBtn)
+        }
+        -- WoW Forever has no delves and no keystones: the entries only those drive are
+        -- left out of the menu there (their saved values stay, and stay inert).
+        if EUI.IS_FOREVER then
+            for i = #items, 1, -1 do
+                local e = items[i]
+                if type(e) == "table" and e.noForever then table.remove(items, i) end
+            end
+        end
+        ShowEDMMenu(items, W.settingsBtn)
     end, "settings")
 
     W.segmentBtn = MakeHeaderBtn("dm_sheet.png", -(btnSize + btnPad * 2 + 2), L("Select Segment"), function()
@@ -4232,6 +4274,9 @@ local function CreateDMWindow(winIdx)
     RefreshUI = function(session)
 
         if not frame then return end
+        -- Hidden (a deferred or repopulate pass landing after a hide): no paint. The
+        -- OnShow catch-up refetches, so the skipped session never reaches the screen.
+        if not frame:IsVisible() then W._refreshPending = true; return end
         W._lastSession = session  -- cache for scroll-triggered refresh
 
         -- Populate rows
@@ -4452,8 +4497,11 @@ local function CreateDMWindow(winIdx)
     -- Header combat timer, decoupled from the meter refresh rate: the shared timer ticker calls this
     -- between refreshes so the clock ticks smoothly at slow rates. Memoized on the displayed second (inputs: resolved duration second + the blank state from Overall/no-data gates).
     function W.UpdateTimerText()
-        -- Hidden timer (hideTimer) skips duration reads entirely; the second-memo repaints on the first tick after it is shown again
-        if not W.timerText or not W.timerText:IsShown() then return end
+        -- IsVisible covers a hidden timer (hideTimer) and a hidden window alike: no duration
+        -- read. The second-memo repaints on the first tick after it shows again, and a
+        -- window's OnShow catch-up refresh runs this at once.
+        if not W.timerText or not W.timerText:IsVisible() then return end
+        local isOverall = (not W.curSessionID and W.curSession == Enum.DamageMeterSessionType.Overall)
         local dur
         if W.curSessionID then
             -- Historical session: use that session's stored API duration
@@ -4465,11 +4513,10 @@ local function CreateDMWindow(winIdx)
             -- Live "Current" view: derived from the SAME session the bars render, so it resets
             -- on a Current roll and freezes at combat end in lockstep with the bars (see GetCurrentViewDuration)
             dur = GetCurrentViewDuration()
-        else
-            -- Overall (timer is hidden for Overall by the isOverall gate below)
+        elseif not isOverall then
+            -- Overall never reads a duration (the isOverall gate below blanks its timer)
             dur = C_DamageMeter and C_DamageMeter.GetSessionDurationSeconds and C_DamageMeter.GetSessionDurationSeconds(W.curSession)
         end
-        local isOverall = (not W.curSessionID and W.curSession == Enum.DamageMeterSessionType.Overall)
         -- Hide timer when segment has no data (count == 0) or is Overall
         local sec = -1
         if not isOverall and dur and type(dur) == "number" and dur > 0 and (W.visibleCount or 0) > 0 then
@@ -4484,8 +4531,20 @@ local function CreateDMWindow(winIdx)
         end
     end
 
-    function W.Refresh()
+    -- sync: paint in this call even past PEAK_BUDGET (the OnShow catch-up, which must
+    -- never leave the pre-hide rows up for a frame).
+    function W.Refresh(sync)
         if not frame then return end
+        -- Hidden by any rule (instance rule, the hotkey, a failing global rule, between
+        -- hovers, Alt-Z): no fetch, no paint. The frame's OnShow runs one catch-up.
+        if not frame:IsVisible() then
+            W._refreshPending = true
+            -- The standalone timer rides window 1's refresh and has its own visibility
+            if winIdx == 1 then UpdateSATimerText() end
+            -- A live Deaths view still stamps its in-combat death times
+            ns._DMHiddenDeathsPass(W)
+            return
+        end
 
         local apiStart = debugprofilestop()
         local session
@@ -4498,7 +4557,7 @@ local function CreateDMWindow(winIdx)
         local apiMs = debugprofilestop() - apiStart
 
         -- If API spiked, defer UI work to next frame so peaks don't stack
-        if apiMs > PEAK_BUDGET then
+        if apiMs > PEAK_BUDGET and not sync then
             C_Timer.After(0, function()
                 RefreshUI(session)
             end)
@@ -4511,6 +4570,8 @@ local function CreateDMWindow(winIdx)
     function W.RefreshBreakdown()
         if not W.sourceOpen then return end
         if not W.sourceGUID and not W.sourceCreatureID then return end
+        -- Hidden: the OnShow catch-up reaches the breakdown through RefreshUI
+        if not frame:IsVisible() then W._refreshPending = true; return end
         if not C_DamageMeter then return end
         EnsureSpellPool()
 
@@ -5164,6 +5225,18 @@ local function CreateDMWindow(winIdx)
 
     -- (Refresh ticker is shared across all windows -- see file scope below CreateDMWindow)
 
+    -- Per-window instance rules (Hide in Dungeons / Raids / Delves / PvP / out of
+    -- Instances); shared by UpdateVisibility and the mouseover predicate below.
+    local function InstanceHidden()
+        local _, iType = IsInInstance()
+        if wdb.hideInDungeon and iType == "party" then return true end
+        if wdb.hideInRaid and iType == "raid" then return true end
+        if wdb.hideInDelve and C_PartyInfo and C_PartyInfo.IsDelveInProgress and C_PartyInfo.IsDelveInProgress() then return true end
+        if wdb.hideInPvP and (iType == "pvp" or iType == "arena") then return true end
+        if wdb.hideOutOfInstance and (iType == "none" or iType == nil) then return true end
+        return false
+    end
+
     -- Visibility
     function W.UpdateVisibility()
         if not frame then return end
@@ -5174,12 +5247,7 @@ local function CreateDMWindow(winIdx)
         local vis = EUI.EvalVisibility(c)
         if not vis or vis == false then frame:Hide(); return end
         -- Per-window instance visibility
-        local _, iType = IsInInstance()
-        if wdb.hideInDungeon and iType == "party" then frame:Hide(); return end
-        if wdb.hideInRaid and iType == "raid" then frame:Hide(); return end
-        if wdb.hideInDelve and C_PartyInfo and C_PartyInfo.IsDelveInProgress and C_PartyInfo.IsDelveInProgress() then frame:Hide(); return end
-        if wdb.hideInPvP and (iType == "pvp" or iType == "arena") then frame:Hide(); return end
-        if wdb.hideOutOfInstance and (iType == "none" or iType == nil) then frame:Hide(); return end
+        if InstanceHidden() then frame:Hide(); return end
         if vis == "mouseover" then frame:Hide()
         else frame:SetAlpha(1); frame:EnableMouse(true); frame:Show() end
     end
@@ -5189,20 +5257,32 @@ local function CreateDMWindow(winIdx)
         -- Hover-gated sets only reveal while their conditions pass; a legacy single "mouseover" behaves exactly as before
         EUI.RegisterMouseoverTarget(frame, function()
             -- The mouseover scanner shows the frame without going through UpdateVisibility,
-            -- so the toggle has to be refused here as well
-            if ns._toggleHidden then return false end
+            -- so the toggle and the window's instance rules have to be refused here as well
+            if ns._toggleHidden or InstanceHidden() then return false end
             local c = DB()
             return c ~= nil and EUI.VisWantsMouseover(c, "visibility")
         end)
     end
+
+    -- Catch-up: refreshes skipped while hidden leave W._refreshPending, so the first show
+    -- (a rule, the hotkey, a hover, the options preview, Alt-Z) repaints once, in-call,
+    -- before the frame draws; then the ticks a fully hidden meter let lapse come back.
+    frame:HookScript("OnShow", function()
+        if W._refreshPending then
+            W._refreshPending = nil
+            W.Refresh(true)
+        end
+        ns._DMReviveTicks()
+    end)
 
 
     -- Destroy
     function W.Destroy()
         if W._hoverTicker then W._hoverTicker:Cancel() end
         resizeFrame:SetScript("OnUpdate", nil)
-        -- Unregister from global visibility system (prevents ghost resurrection)
+        -- Unregister from the global visibility system and the mouseover scan (prevents ghost resurrection)
         EUI.UnregisterVisibilityUpdater(W.UpdateVisibility)
+        EUI.UnregisterMouseoverTarget(frame)
         frame:Hide(); frame:SetParent(nil)
         -- Remove from runtime array
         local oldCount = #_windows
@@ -5938,6 +6018,24 @@ local function StopTimerTicker()
     if _saDecimalTicker then _saDecimalTicker:Cancel(); _saDecimalTicker = nil end
 end
 
+-- What the ticks feed: true while something is on screen (a visible window, or the enabled
+-- standalone timer, whose clock lives on these tickers); "stamp" while only a hidden window
+-- on the live Current Deaths view needs them (ns._DMHiddenDeathsPass, no clock); false
+-- otherwise. A hidden window's refresh only marks it stale for its OnShow catch-up.
+local function AnyTickViewer()
+    if DB().standaloneTimer then return true end
+    local stamp = false
+    for _, w in ipairs(_windows) do
+        local f = w.frame
+        if f then
+            if f:IsVisible() then return true end
+            if w.curDMType == Enum.DamageMeterType.Deaths and not w.curSessionID
+               and w.curSession == Enum.DamageMeterSessionType.Current then stamp = "stamp" end
+        end
+    end
+    return stamp
+end
+
 local function SharedRefreshTick()
     -- Player out of combat but group still fighting (player died mid-pull)
     if _needsFinalRefresh then
@@ -5967,11 +6065,28 @@ local function SharedRefreshTick()
         return
     end
     for _, w in ipairs(_windows) do w.Refresh() end
+    -- Nothing on screen any more (each window above only marked itself stale): stop, and the
+    -- next window to show restarts the ticks. The group-fight poll and a hidden live Deaths
+    -- view keep their tick, no clock.
+    local v = AnyTickViewer()
+    if v ~= true then
+        if _needsFinalRefresh or v then StopTimerTicker() else StopSharedTicker() end
+    end
 end
 
--- Only active during combat to avoid idle CPU cost.
+-- Only active during combat to avoid idle CPU cost, and only while AnyTickViewer or the
+-- group-fight poll (_needsFinalRefresh) needs a tick. Gated here rather than at the call
+-- sites, so the session-event revivals cannot bring back a ticker with nothing to paint.
 StartSharedTicker = function()
-    if _sharedTicker then _sharedTicker:Cancel() end
+    if _sharedTicker then _sharedTicker:Cancel(); _sharedTicker = nil end
+    StopTimerTicker()
+    local viewers = AnyTickViewer()
+    if not viewers and not _needsFinalRefresh then
+        -- Data keeps moving with nothing refreshing it: mark every (hidden) window stale so
+        -- its show catches up at once instead of a tick later.
+        for _, w in ipairs(_windows) do w._refreshPending = true end
+        return
+    end
     local rate = DB().refreshRate or TICK_COMBAT
     -- Belt for values the login clamp has not seen yet (a profile imported
     -- mid-session from an old export can carry a sub-floor rate). Respects
@@ -5980,7 +6095,8 @@ StartSharedTicker = function()
     local floor = DB().unsafeRefreshRate and REFRESH_RATE_HARD_FLOOR or REFRESH_RATE_FLOOR
     if rate < floor then rate = floor end
     _sharedTicker = C_Timer.NewTicker(rate, SharedRefreshTick)
-    StopTimerTicker()
+    -- The poll or a hidden live Deaths view alone (nothing on screen) needs no clock
+    if viewers ~= true then return end
     _timerTicker = C_Timer.NewTicker(0.5, TimerTick)
     -- Tenths display needs a faster brush than the 0.5s timer tick; combat-only, opt-in only, standalone timer only
     local cfg = DB()
@@ -5992,6 +6108,14 @@ end
 StopSharedTicker = function()
     if _sharedTicker then _sharedTicker:Cancel(); _sharedTicker = nil end
     StopTimerTicker()
+end
+
+-- Something came on screen (a window's OnShow, after its catch-up; a build or profile
+-- swap, whose windows show without an OnShow edge): start the ticks, or add the clock
+-- to a clockless ticker. The clock runs whenever anything is on screen, so its absence
+-- is the signal. On ns: CreateDMWindow sits at the 60-upvalue cap.
+ns._DMReviveTicks = function()
+    if (_inCombat or _needsFinalRefresh) and not _timerTicker then StartSharedTicker() end
 end
 
 -- Stop the ticker after `delay`, no-op if a newer combat segment started (generation mismatch)
@@ -6152,6 +6276,8 @@ combatFrame:SetScript("OnEvent", function(_, event, ...)
         -- Check if group is still fighting (player died but boss alive)
         if IsGroupInCombat() then
             _needsFinalRefresh = true  -- let tick poll until group leaves combat
+            -- The poll needs its tick even when a fully hidden meter let the ticker lapse
+            if not _sharedTicker then StartSharedTicker() end
             -- Don't freeze timer -- group is still in combat
         else
             -- Freeze timer: entire group out of combat. Guard against overwriting an earlier freeze (e.g. ENCOUNTER_END already froze at the boss end)
@@ -6279,7 +6405,7 @@ initFrame:SetScript("OnEvent", function(self)
             -- All windows exist: register them with the core unlock mode system
             ns.RegisterDMUnlock()
             if cfg.standaloneTimer then CreateSATimer() end
-            if _inCombat and not _sharedTicker then StartSharedTicker() end
+            ns._DMReviveTicks()
             -- Pre-create tooltip frame so first hover doesn't pay creation cost
             EnsureTooltipFrame()
             local sc = (cfg.hoverTooltipScale or 100) / 100
@@ -6304,7 +6430,10 @@ initFrame:SetScript("OnEvent", function(self)
             if EUI.UnregisterVisibilityUpdater and w.UpdateVisibility then
                 EUI.UnregisterVisibilityUpdater(w.UpdateVisibility)
             end
-            if w.frame then w.frame:Hide(); w.frame:SetParent(nil) end
+            if w.frame then
+                EUI.UnregisterMouseoverTarget(w.frame)
+                w.frame:Hide(); w.frame:SetParent(nil)
+            end
         end
         wipe(_windows)
         -- Destroy standalone timer if present
@@ -6342,6 +6471,6 @@ initFrame:SetScript("OnEvent", function(self)
             local sc = (c.hoverTooltipScale or 100) / 100
             _ttFrame:SetScale(sc)
         end
-        if _inCombat and not _sharedTicker then StartSharedTicker() end
+        ns._DMReviveTicks()
     end
 end)

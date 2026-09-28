@@ -9,6 +9,9 @@ local ADDON_NAME = "EllesmereUIRaidFrames"
 local ns = EllesmereUI._ModuleNS[ADDON_NAME]  -- module namespace (published by the module at its load)
 if not ns then return end  -- module disabled: no options page
 
+-- WoW Forever: the preview's numbers follow the live frames (EllesmereUI_NumberFormat.lua).
+local AbbreviateNumbers = (EllesmereUI.IS_FOREVER and EllesmereUI.ForeverAbbreviateNumbers) or AbbreviateNumbers
+
 local PAGE_MAIN = "Frames"
 local PAGE_PARTY = "Party"
 local PAGE_BUFFS = "Buff Manager"
@@ -1287,7 +1290,6 @@ initFrame:SetScript("OnEvent", function(self)
                 wipe(ns._healthAnimState)
 
                 local frames = ns.PvActiveFrames()
-                local s = (ns.PvEffectiveProfile and ns.PvEffectiveProfile()) or db.profile
                 for i = 1, 20 do
                     local f = frames[i]
                     if f and f._health then
@@ -1306,8 +1308,9 @@ initFrame:SetScript("OnEvent", function(self)
                 ns._healthAnimTicker = C_Timer.NewTicker(0.1, function()
                     if not ns._healthAnimActive then return end
                     -- Real preview contract: ticks must render effective-overlay values only, never the panel view's swapped values.
-                    local s = (ns.PvEffectiveProfile and ns.PvEffectiveProfile()) or db.profile
+                    local s = ns.PvSettings()
                     local smooth = s.smoothBars
+                    local invert = ns.RF_IsInvertedFill(s)
 
                     for i, st in ipairs(ns._healthAnimState) do
                         local f = st.frame
@@ -1321,10 +1324,11 @@ initFrame:SetScript("OnEvent", function(self)
                                 st.current = st.target
                                 st.target = 15 + math.random(85)
 
+                                local barPct = invert and (100 - st.current) or st.current
                                 if smooth and smoothInterp then
-                                    f._health:SetValue(st.current, smoothInterp)
+                                    f._health:SetValue(barPct, smoothInterp)
                                 else
-                                    f._health:SetValue(st.current)
+                                    f._health:SetValue(barPct)
                                 end
 
                                 if f._healthText then
@@ -1544,6 +1548,10 @@ initFrame:SetScript("OnEvent", function(self)
                       get=function() return SVal("healthVerticalFill", false) end,
                       -- RefreshPage re-labels Absorbs Placement for the new axis; cog popups bake labels in on first build.
                       set=function(v) SSet("healthVerticalFill", v); EllesmereUI:RefreshPage() end }),
+                    ns.RF_PartyKitGate({ type="toggle", label="Fill Missing Health",
+                      tooltip="The bar fills with missing health, growing as the unit takes damage.",
+                      get=function() return SVal("healthInvertFill", false) end,
+                      set=function(v) SSet("healthInvertFill", v) end }),
                 },
             })
         end
@@ -2396,6 +2404,8 @@ initFrame:SetScript("OnEvent", function(self)
                                 else
                                     f._power:SetValue(st.current)
                                 end
+                                -- Power Text follows the animated value (ApplyPreviewData sets f._pwtMode; nil = hidden).
+                                if f._pwtMode then ns.RF_PowerTextInto(f._powerText, f._pwtMode, st.current, nil, nil, f._pwtPer) end
                             end
                         end
                     end
@@ -2848,6 +2858,116 @@ initFrame:SetScript("OnEvent", function(self)
             })
         end
         end   -- close Health Text dependent-row gate
+
+        -- Power Text (+ Custom/Class/Accent/Power swatches) | Power Text Size (+ position cog). Shows only on frames whose power bar shows, so everything greys while no role shows one.
+        do
+            local function PTOff() return IsPowerOff() or SVal("powerTextMode", "none") == "none" end
+            local function PTReq() return IsPowerOff() and "Show Power Bar For" or "Power Text" end
+            row, h = W:DualRow(parent, y,
+                { type="dropdown", text="Power Text",
+                  values={ ["none"]="None", ["percent"]="Percent", ["percentNoSign"]="Percent (No Sign)",
+                           ["number"]="Number", ["numberPercent"]="Number | Percent", ["percentNumber"]="Percent | Number" },
+                  order={ "none", "percent", "percentNoSign", "number", "numberPercent", "percentNumber" },
+                  disabled=IsPowerOff,
+                  disabledTooltip="Show Power Bar For",
+                  getValue=function() return SVal("powerTextMode", "none") end,
+                  setValue=function(v) SSet("powerTextMode", v); EllesmereUI:RefreshPage() end },
+                { type="slider", text="Power Text Size", min=6, max=26, step=1,
+                  disabled=PTOff,
+                  disabledTooltip=PTReq,
+                  getValue=function() return SVal("powerTextSize", 8) end,
+                  setValue=function(v) SSet("powerTextSize", v) end });  y = y - h
+            -- Swatches: Custom is added FIRST so the _lastInline chain places it next to the dropdown; Power (leftmost) shows the player's power color and is not editable. Each dims and blocks while Power Text is None or power is off.
+            if not EllesmereUI._prebuilding then
+                local rgn = row._leftRegion
+                local function AddPTSwatch(getColor, setColor, mode, opensPicker, tooltip)
+                    local sw, updateSw = EllesmereUI.BuildColorSwatch(
+                        rgn, row:GetFrameLevel() + 3, getColor, setColor, false, 20)
+                    sw:SetPoint("RIGHT", rgn._lastInline or rgn._control, "LEFT", -8, 0)
+                    rgn._lastInline = sw
+                    -- Preserve the picker-opening click, then switch mode on click (same technique as the Health Text swatches).
+                    sw._eabOrigClick = sw:GetScript("OnClick")
+                    sw:SetScript("OnClick", function(self)
+                        if SVal("powerTextColorMode", "custom") ~= mode then
+                            SSet("powerTextColorMode", mode)
+                            EllesmereUI:RefreshPage()
+                            return
+                        end
+                        if opensPicker and self._eabOrigClick then self._eabOrigClick(self) end
+                    end)
+                    sw:HookScript("OnEnter", function() EllesmereUI.ShowWidgetTooltip(sw, tooltip) end)
+                    sw:HookScript("OnLeave", function() EllesmereUI.HideWidgetTooltip() end)
+                    local block = CreateFrame("Frame", nil, sw)
+                    block:SetAllPoints(); block:SetFrameLevel(sw:GetFrameLevel() + 10); block:EnableMouse(true)
+                    block:SetScript("OnEnter", function() EllesmereUI.ShowWidgetTooltip(sw, EllesmereUI.DisabledTooltip(PTReq())) end)
+                    block:SetScript("OnLeave", function() EllesmereUI.HideWidgetTooltip() end)
+                    local function vis()
+                        updateSw()
+                        if PTOff() then
+                            sw:SetAlpha(0.3); block:Show()
+                        else
+                            sw:SetAlpha(SVal("powerTextColorMode", "custom") == mode and 1 or 0.3); block:Hide()
+                        end
+                    end
+                    EllesmereUI.RegisterWidgetRefresh(vis)
+                    vis()
+                end
+                -- Custom (rightmost): editable, opens the picker when active.
+                AddPTSwatch(
+                    function()
+                        local c = SGet("powerTextCustomColor")
+                        if c then return c.r, c.g, c.b, 1 end
+                        return 1, 1, 1, 1
+                    end,
+                    function(r, g, b)
+                        SWrite("powerTextCustomColor", { r=r, g=g, b=b })
+                        ReloadAndUpdate()
+                    end, "custom", true, "Custom Color")
+                AddPTSwatch(
+                    function()
+                        local _, ct = UnitClass("player")
+                        if ct and RAID_CLASS_COLORS[ct] then
+                            local cc = RAID_CLASS_COLORS[ct]
+                            return cc.r, cc.g, cc.b, 1
+                        end
+                        return 1, 1, 1, 1
+                    end,
+                    function() end, "class", false, "Class Color")
+                AddPTSwatch(
+                    function()
+                        local r, g, b = EllesmereUI.ResolveActiveAccent()
+                        return r or 1, g or 1, b or 1, 1
+                    end,
+                    function() end, "accent", false, "Accent Color")
+                -- Power (leftmost): each frame's own power-type color at runtime.
+                AddPTSwatch(
+                    function()
+                        local _, pToken = UnitPowerType("player")
+                        local info = EllesmereUI.GetPowerColor(pToken or "MANA")
+                        if info then return info.r, info.g, info.b, 1 end
+                        return 0, 0.5, 1, 1
+                    end,
+                    function() end, "power", false, "Power Colored Text")
+            end
+            -- Position + offset cog on the Power Text Size slider.
+            EllesmereUI.BuildInlineCog(row._rightRegion, {
+                icon = EllesmereUI.DIRECTIONS_ICON,
+                disabled = PTOff,
+                disabledTooltip = PTReq,
+                title = "Power Text Position",
+                rows = {
+                    { type="dropdown", label="Position", values=namePositionValues, order=namePositionOrder,
+                      get=function() return SVal("powerTextPosition", "bottom") end,
+                      set=function(v) SSet("powerTextPosition", v) end },
+                    { type="slider", label="Offset X", min=-150, max=150, step=1,
+                      get=function() return SVal("powerTextOffsetX", 0) end,
+                      set=function(v) SSet("powerTextOffsetX", v) end },
+                    { type="slider", label="Offset Y", min=-75, max=75, step=1,
+                      get=function() return SVal("powerTextOffsetY", 0) end,
+                      set=function(v) SSet("powerTextOffsetY", v) end },
+                },
+            })
+        end
 
         -- Heal Absorb Text (+swatches) | Heal Absorb Text Position (+offset cog); Heal Absorb Text Size row is 1:1 with Health Text. Shows the heal-absorb shield amount (short/full), hidden at zero.
         row, h = W:DualRow(parent, y,

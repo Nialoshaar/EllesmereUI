@@ -5570,12 +5570,47 @@ initFrame:SetScript("OnEvent", function(self)
             ECHAT.WHISPER_SOUND_NAMES = WHISPER_SOUND_NAMES
             ECHAT.WHISPER_SOUND_ORDER = WHISPER_SOUND_ORDER
 
+            -- "none" (the stored default) keeps Blizzard's own whisper sound;
+            -- "mute" silences it and plays nothing; any sound replaces it.
+            WHISPER_SOUND_NAMES.none = "Blizzard Default"
+            WHISPER_SOUND_NAMES.mute = "None"
+            table.insert(WHISPER_SOUND_ORDER, 2, "mute")
+
             -- Append SharedMedia sounds
             EllesmereUI.AppendSharedMediaSounds(
                 WHISPER_SOUND_PATHS,
                 WHISPER_SOUND_NAMES,
                 WHISPER_SOUND_ORDER
             )
+
+            -- Blizzard's whisper sound (SOUNDKIT.TELL_MESSAGE plays this one
+            -- file), muted while a non-default choice is set. A mute outlives
+            -- /reload and relog (not a client restart), so the account-wide
+            -- chatTellMuted flag remembers that the mute is ours: a character
+            -- on Blizzard Default unmutes only a mute we made, never another
+            -- addon's. Runs at init, from the setting and from
+            -- _ECHAT_RefreshAll (profile swaps, imports, spec overrides).
+            local TELL_SOUND_FILE = 567421
+            local _tellMuted = false
+            function ECHAT.ApplyWhisperMute()
+                if not MuteSoundFile then return end
+                local cfg = ECHAT.DB()
+                local key = cfg and cfg.whisperSoundKey
+                local want = key ~= nil and key ~= "none"
+                local db = EllesmereUIDB
+                if want then
+                    if not _tellMuted then
+                        MuteSoundFile(TELL_SOUND_FILE)
+                        _tellMuted = true
+                        if db then db.chatTellMuted = true end
+                    end
+                elseif _tellMuted or (db and db.chatTellMuted) then
+                    UnmuteSoundFile(TELL_SOUND_FILE)
+                    _tellMuted = false
+                    if db then db.chatTellMuted = nil end
+                end
+            end
+            ECHAT.ApplyWhisperMute()
 
             local _whisperThrottle = 0
             local whisperFrame = CreateFrame("Frame")
@@ -5585,7 +5620,7 @@ initFrame:SetScript("OnEvent", function(self)
                 OnActiveMessage()
                 local cfg = ECHAT.DB()
                 local key = cfg and cfg.whisperSoundKey
-                if not key or key == "none" then return end
+                if not key or key == "none" or key == "mute" then return end
                 local now = GetTime()
                 if now - _whisperThrottle < 5 then return end
                 _whisperThrottle = now
@@ -5608,7 +5643,10 @@ initFrame:SetScript("OnEvent", function(self)
             if over and not _idleMouseOver then
                 _idleMouseOver = true
                 CancelIdleFade()
-            elseif not over and _idleMouseOver then
+            elseif not over and (_idleMouseOver or not (idleTimer or _idleFadeActive)) then
+                -- Also re-arm when nothing is armed: a hover that began while
+                -- faded is cleared by the reveal (ApplyIdleFadeHoverMotion),
+                -- so its leave would otherwise find no edge and no timer.
                 _idleMouseOver = false
                 ECHAT.ResetIdleTimer()
             end
@@ -5853,6 +5891,7 @@ initFrame:SetScript("OnEvent", function(self)
         -- A profile swap or import re-points db.profile, so the bubbles feature has to
         -- re-read enabled/channels and re-assert Blizzard's CVars against the new values.
         if ns.ChatBubbles then ns.ChatBubbles.Refresh() end
+        ECHAT.ApplyWhisperMute()
     end
 
     ---------------------------------------------------------------------------

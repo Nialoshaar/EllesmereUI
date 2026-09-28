@@ -159,6 +159,8 @@ local InCombatLockdown      = InCombatLockdown
 local GetNumGroupMembers    = GetNumGroupMembers
 local C_Timer               = C_Timer
 local issecretvalue         = issecretvalue
+-- WoW Forever: no number under 10,000 abbreviates (EllesmereUI_NumberFormat.lua).
+local AbbreviateNumbers     = (EllesmereUI.IS_FOREVER and EllesmereUI.ForeverAbbreviateNumbers) or AbbreviateNumbers
 local CreateFrame           = CreateFrame
 local RAID_CLASS_COLORS     = RAID_CLASS_COLORS
 
@@ -418,6 +420,8 @@ local defaults = {
         bgDarkness       = 50,
         -- Fill axis: off = left-to-right, on = bottom-to-top. Party can hold its own (key is in the healthBar override section).
         healthVerticalFill = false,
+        -- Invert health fill: when true the bar is full at low health and empty at high health.
+        healthInvertFill = false,
 
         -- Power bar (on when any powerShowFor* role is true)
         showPowerBar     = true,
@@ -463,6 +467,14 @@ local defaults = {
         healthTextPosition = "center",
         healthTextOffsetX  = 0,
         healthTextOffsetY  = 0,
+        -- Power Text (Health Text's controls, on the same health bar host): shown only where the power bar shows. None = nothing built.
+        powerTextMode   = "none",   -- "none", "percent", "percentNoSign", "number", "numberPercent", "percentNumber"
+        powerTextColorMode   = "custom",  -- "custom", "class", "accent", "power"
+        powerTextCustomColor = { r = 1, g = 1, b = 1 },
+        powerTextSize   = 8,
+        powerTextPosition = "bottom",
+        powerTextOffsetX  = 0,
+        powerTextOffsetY  = 0,
         -- Heal Absorb Text (1:1 with Health Text): amount in short/full format, hidden at zero. Red default = healer-UI convention.
         healAbsorbTextMode   = "none",   -- "none", "amount", "short"
         healAbsorbTextColorMode   = "custom",  -- "class", "accent", "custom"
@@ -635,14 +647,6 @@ local defaults = {
         -- Debuffs
         debuffFilter     = "all",  -- "none", "all", "raid", "dispellable"
         hideLustDebuff   = true,
-        -- CC Debuff Glow: glow displayed debuff icons whose aura is crowd control
-        -- (Blizzard CROWD_CONTROL filter); mirrors CDM Buff Glow. 0 = None; style 1 = Pixel Glow.
-        debuffCCGlowType       = 0,
-        debuffCCGlowClassColor = false,
-        debuffCCGlowR = 1.0, debuffCCGlowG = 0.776, debuffCCGlowB = 0.376,
-        debuffCCGlowLines = 8, debuffCCGlowThickness = 2, debuffCCGlowSpeed = 4,
-        debuffCCGlowBackground = false,
-        debuffCCGlowBackgroundR = 0, debuffCCGlowBackgroundG = 0, debuffCCGlowBackgroundB = 0,
         -- Defensives & Externals
         showDefensives   = true,
         showExternals    = true,
@@ -1106,7 +1110,7 @@ end
 -- Party page): the party settings view reads them neutral while it is on
 -- (with the kit's debuff row: ns.RF_KitViewKeys, EUI_RaidFrames_Stock.lua).
 ns.RF_KIT_NEUTRAL = {
-    healthVerticalFill = false, topNameBarEnabled = false,
+    healthVerticalFill = false, healthInvertFill = false, topNameBarEnabled = false,
     powerUniformAnchors = false, extendHealthBehindPower = false,
 }
 -- The EllesmereUI border's effective size (0 under a stock style, whose edge
@@ -1185,6 +1189,15 @@ ns.RF_ApplyFillRotation = function(bar)
     bar:SetRotatesTexture((vert and not tiled) and true or false)
 end
 
+-- Inverted health fill: SetReverseFill swaps which SIDE of the seam the fill
+-- texture paints -- missing health takes the bar colour and current health is
+-- left to the background. Raid and party resolve through the caller's settings
+-- table (party gets its own when the Health Bar section is unsynced).
+-- On ns (200-local cap).
+ns.RF_IsInvertedFill = function(s)
+    return ((s or db.profile).healthInvertFill) and true or false
+end
+
 -------------------------------------------------------------------------------
 --  Health-fill tint overlays
 --
@@ -1193,12 +1206,14 @@ end
 --  solid block beside untinted ones; the overlay borrows the bar's own fill
 --  texture instead and recolors it with a vertex color.
 --
---  The overlay is anchored to the fill texture, so it inherits the bar's fill
---  geometry for free: these fills clip by resizing rather than by moving their
---  tex coords (measured -- identical coords at full and at half fill), so the
---  overlay stretches exactly as the bar art does with nothing to update per tick.
---  The coords are copied anyway so anything the orientation pass does to them
---  comes along, which is also why the refresh runs after that pass.
+--  The overlay is anchored to the current-health area (ns.RF_AnchorCurHealth:
+--  the fill texture, or under Inverted Fill the rest of the bar up to the fill's
+--  HP edge), so it inherits the bar's fill geometry for free: these fills clip
+--  by resizing rather than by moving their tex coords (measured -- identical
+--  coords at full and at half fill), so the overlay stretches exactly as the bar
+--  art does with nothing to update per tick. The coords are copied anyway so
+--  anything the orientation pass does to them comes along, which is also why
+--  the refresh runs after that pass (the anchor reads the direction it set).
 --
 --  Live BM/DM slots register on the bar, so a Health Bar Texture change can
 --  re-anchor them to the new fill object and repaint (ReanchorAbsorbToFill for
@@ -1272,12 +1287,13 @@ ns.RF_TintOverBarFill = function(tex, bar, r, g, b, a)
     tex:SetVertexColor(r, g, b, a)
 end
 
--- Repaint BEFORE re-anchoring, and re-anchor with a bare SetAllPoints: the caller
--- isolates this, and a ClearAllPoints that succeeded ahead of a denied SetAllPoints
--- would strand the overlay with no anchor at all for the rest of the session.
+-- Repaint BEFORE re-anchoring, and re-anchor with no ClearAllPoints
+-- (RF_AnchorCurHealth only rewrites one TOPLEFT/BOTTOMRIGHT pair): the caller
+-- isolates this, and a ClearAllPoints that succeeded ahead of a denied anchor
+-- write would strand the overlay with no anchor at all for the rest of the session.
 ns.RF_RefreshOneBarTint = function(bar, tex, ent, fill)
     if ent.r then ns.RF_TintOverBarFill(tex, bar, ent.r, ent.g, ent.b, ent.a) end
-    if fill then (tex._euiTintHost or tex):SetAllPoints(fill) end
+    if fill then ns.RF_AnchorCurHealth(tex._euiTintHost or tex, bar, fill) end
 end
 
 -- Isolated per entry: the overlay can hang off an engine aura button, and this
@@ -1293,12 +1309,60 @@ ns.RF_RefreshBarTints = function(bar)
     end
 end
 
+-- Fill axis AND inversion, applied and returned together: axis via
+-- SetOrientation, inversion via SetReverseFill. Sole owner of both -- callers
+-- take the returns rather than re-reading the settings, so the flags and the
+-- anchors derived from them cannot disagree. Restyle/style passes only
+-- (StyleButton, ReanchorAbsorbToFill, FB.StyleVisuals for the boss and pet
+-- frames, ApplyPreviewData); the per-tick value paths must never touch either
+-- property. They read the _euiInv stamp left on the bar (always our own
+-- StatusBar) instead of the settings, so the value they paint -- current or
+-- missing health -- always matches the fill direction set here.
 ns.RF_ApplyHealthOrientation = function(bar, s)
     if not bar then return false end
     local vert = ns.RF_IsVerticalFill(s)
+    local invert = ns.RF_IsInvertedFill(s)
     bar:SetOrientation(vert and "VERTICAL" or "HORIZONTAL")
+    bar:SetReverseFill(invert)
+    bar._euiInv = invert
     ns.RF_ApplyFillRotation(bar)
-    return vert
+    return vert, invert
+end
+
+-- The fill texture's two corners on its HP edge (the current-health seam) that
+-- the absorb, heal and clip anchors hang off: its right edge, its top edge on a
+-- vertical bar, and the opposite edge under Inverted Fill. Paired top then
+-- bottom on the horizontal axis, left then right on the vertical one.
+ns.RF_HpEdge = function(vert, invert)
+    if vert then
+        if invert then return "BOTTOMLEFT", "BOTTOMRIGHT" end
+        return "TOPLEFT", "TOPRIGHT"
+    end
+    if invert then return "TOPLEFT", "BOTTOMLEFT" end
+    return "TOPRIGHT", "BOTTOMRIGHT"
+end
+
+-- Anchors a tint or wash over the bar's CURRENT-health area: the fill texture,
+-- or under Inverted Fill (the fill then paints missing health) the rest of the
+-- bar up to the fill's HP edge, the rect the alive bg takes there
+-- (ns._ApplyHealthBg). Region anchors only, so no health value is read, and one
+-- TOPLEFT/BOTTOMRIGHT pair in every case, so a re-anchor overwrites both points
+-- without a ClearAllPoints. vert/invert: the fill direction from the caller's
+-- settings; omitted, it is read off the bar. Style passes only.
+ns.RF_AnchorCurHealth = function(region, bar, fill, vert, invert)
+    if invert == nil then invert = bar.GetReverseFill and bar:GetReverseFill() end
+    if not (fill and invert) then
+        region:SetAllPoints(fill or bar)
+        return
+    end
+    if vert == nil then vert = bar.GetOrientation and bar:GetOrientation() == "VERTICAL" end
+    if vert then
+        region:SetPoint("TOPLEFT", fill, "BOTTOMLEFT", 0, 0)
+        region:SetPoint("BOTTOMRIGHT", bar, "BOTTOMRIGHT", 0, 0)
+    else
+        region:SetPoint("TOPLEFT", bar, "TOPLEFT", 0, 0)
+        region:SetPoint("BOTTOMRIGHT", fill, "BOTTOMLEFT", 0, 0)
+    end
 end
 
 -- Resolve an absorb/heal/max-health style key to a texture path: built-ins from
@@ -1410,8 +1474,11 @@ ns._currentSizeTier = 20
 -------------------------------------------------------------------------------
 --  Color helpers
 -------------------------------------------------------------------------------
--- Safe health percent: returns 0-100, no secret value arithmetic
-local function GetSafeHealthPercent(unit)
+-- Safe health percent: returns 0-100, no secret value arithmetic. inv: the
+-- missing-health percent instead (100-0, the reversed curve), for a bar under
+-- Inverted Fill.
+local function GetSafeHealthPercent(unit, inv)
+    if inv then return UnitHealthPercent(unit, true, CurveConstants.ReverseTo100) end
     return UnitHealthPercent(unit, true, CurveConstants.ScaleTo100)
 end
 
@@ -1585,6 +1652,10 @@ function ns._ApplyHealthBg(d, health, s, unit, connected, deadOrGhost)
         local c = (not connected) and (s.statusColorOffline or { r = 0x66/255, g = 0x66/255, b = 0x66/255 })
             or (s.statusColorDead or { r = 0x24/255, g = 0x17/255, b = 0x17/255 })
         local st = (not connected) and 3 or 2
+        -- Under Inverted Fill a corpse paints a full missing-health bar (UpdateButton):
+        -- its own state, so that fill is hidden and the status colour shows undimmed.
+        local hideFill = deadOrGhost and health and health._euiInv
+        if hideFill then st = st + 2 end
         if d._bgSt ~= st or d._bgR ~= c.r or d._bgG ~= c.g or d._bgB ~= c.b then
             d._bgSt, d._bgR, d._bgG, d._bgB = st, c.r, c.g, c.b
             d._bgTex, d._bgA = nil, nil
@@ -1594,31 +1665,47 @@ function ns._ApplyHealthBg(d, health, s, unit, connected, deadOrGhost)
                 bg:SetColorTexture(c.r, c.g, c.b, 1)
             end
             if health then
-                if st == 3 then health:SetStatusBarColor(0.3, 0.3, 0.3, 0.3)
+                if hideFill then health:SetStatusBarColor(0.3, 0.3, 0.3, 0)
+                elseif not connected then health:SetStatusBarColor(0.3, 0.3, 0.3, 0.3)
                 else health:SetStatusBarColor(0.3, 0.3, 0.3, 0.5) end
             end
         end
         return
     end
     if not bg then return end
-    -- Alive: the bg covers only MISSING health, so it hangs off the far side of the
-    -- fill: the fill's right edge normally, its top edge on a vertical bar. The
-    -- anchor set only changes when the fill texture object or the axis does; both
-    -- change only in the restyle passes (ReloadFrames / ReloadPartyFrames), which
-    -- clear d._bgSt right after, so the steady-state tick skips the two reads and
-    -- the anchor pass entirely.
+    -- Alive: the bg covers exactly the half of the bar the fill texture does NOT
+    -- paint, so it hangs off the fill's leading edge -- the fill's right edge
+    -- normally, its top edge on a vertical bar, and the opposite edge under
+    -- Inverted Fill (where the fill paints missing health and the bg becomes the
+    -- current-health surface). The anchor set changes only when the fill texture
+    -- object, the axis, or the inversion does; all three change only in the
+    -- restyle passes (ReloadFrames / ReloadPartyFrames), which clear d._bgSt right
+    -- after, so the steady-state tick skips the reads and the anchor pass entirely.
     if d._bgSt ~= 1 then
+        -- Axis and inversion both read off the bar, never the settings, so the
+        -- bg follows the direction the fill actually paints.
         local vert = health.GetOrientation and health:GetOrientation() == "VERTICAL"
+        local invert = health:GetReverseFill()
         local tex = health:GetStatusBarTexture()
         d._bgSt, d._bgTex, d._bgVert = 1, tex, vert
         d._bgA = nil
         bg:ClearAllPoints()
         if vert then
-            bg:SetPoint("TOPLEFT", health, "TOPLEFT", 0, 0)
-            bg:SetPoint("BOTTOMRIGHT", tex, "TOPRIGHT", 0, 0)
+            if invert then
+                bg:SetPoint("TOPLEFT", tex, "BOTTOMLEFT", 0, 0)
+                bg:SetPoint("BOTTOMRIGHT", health, "BOTTOMRIGHT", 0, 0)
+            else
+                bg:SetPoint("TOPLEFT", health, "TOPLEFT", 0, 0)
+                bg:SetPoint("BOTTOMRIGHT", tex, "TOPRIGHT", 0, 0)
+            end
         else
-            bg:SetPoint("TOPLEFT", tex, "TOPRIGHT", 0, 0)
-            bg:SetPoint("BOTTOMRIGHT", health, "BOTTOMRIGHT", 0, 0)
+            if invert then
+                bg:SetPoint("TOPLEFT", health, "TOPLEFT", 0, 0)
+                bg:SetPoint("BOTTOMRIGHT", tex, "BOTTOMLEFT", 0, 0)
+            else
+                bg:SetPoint("TOPLEFT", tex, "TOPRIGHT", 0, 0)
+                bg:SetPoint("BOTTOMRIGHT", health, "BOTTOMRIGHT", 0, 0)
+            end
         end
     end
     local br, bgr, bb, ba
@@ -1965,15 +2052,18 @@ function ns.GetHealAbsorbTextColor(unit, s)
 end
 
 -- A preview text's colour for its colour mode: accent, class (classToken: the sample member's
--- class; none, as for a pet, reads white) or custom (custom: the colour). r, g, b: the colour
--- without one.
-function ns.RF_PreviewTextColor(mode, custom, classToken, r, g, b)
+-- class; none, as for a pet, reads white), power (pToken: the sample member's power type) or
+-- custom (custom: the colour). r, g, b: the colour without one.
+function ns.RF_PreviewTextColor(mode, custom, classToken, r, g, b, pToken)
     if mode == "accent" then
         local ar, ag, ab = EllesmereUI.ResolveActiveAccent()
         if ar then return ar, ag, ab end
     elseif mode == "class" then
         local cc = EllesmereUI.GetClassColor(classToken)
         return cc.r, cc.g, cc.b
+    elseif mode == "power" then
+        local pc = EllesmereUI.GetPowerColor(pToken or "MANA")
+        if pc then return pc.r, pc.g, pc.b end
     elseif custom then
         return custom.r, custom.g, custom.b
     end
@@ -2158,6 +2248,120 @@ ns._RFPowerTypeEdge = function(d, unit, force)
             d._pwBgTintF = f
         end
     end
+    -- Power Text's colour is identity-class state too (its Power mode is this type's colour).
+    if d._pwtMode then ns._RFPowerTextColor(d, unit, s, pr, pg, pb) end
+end
+
+-------------------------------------------------------------------------------
+--  Power Text (opt-in, default None): the unit's power as text in Health Text's
+--  9-point scheme on the same health bar host, shown only while the button's
+--  power bar shows. Nothing exists while None: the FontString is built the first
+--  time a shown power bar paints with a mode set. d._pwtMode (the mode, nil = no
+--  text shown) is the one field the per-tick power paths and the UNIT_HEALTH
+--  path test; the colour rides the identity edge above, the value rides every
+--  power value push, and dead/offline blanks it as Health Text. On ns
+--  (200-local cap).
+-------------------------------------------------------------------------------
+
+-- Power text in one of its modes (Health Text's minus Missing). pct: the bar's percent
+-- (UnitPowerPercent, which can be secret in combat: it only ever reaches a format setter).
+-- unit + pType: the live unit, blank while dead or offline like Health Text (both checks return
+-- clean booleans for group units); its amount is read only in the modes that show it and goes
+-- straight through AbbreviateNumbers into the setter, never compared. A preview (unit nil)
+-- shows made-up amounts, perPct per percent. Returns false when it blanks the text (dead,
+-- offline, None or an unknown mode).
+function ns.RF_PowerTextInto(fs, mode, pct, unit, pType, perPct)
+    if unit and (UnitIsDeadOrGhost(unit) or not UnitIsConnected(unit)) then
+        fs:SetText("")
+        return false
+    end
+    if mode == "percent" then
+        fs:SetFormattedText("%.0f%%", pct)
+    elseif mode == "percentNoSign" then
+        fs:SetFormattedText("%.0f", pct)
+    elseif mode == "number" or mode == "numberPercent" or mode == "percentNumber" then
+        local num
+        if unit then num = AbbreviateNumbers(UnitPower(unit, pType)) else num = AbbreviateNumbers(pct * perPct) end
+        if mode == "number" then
+            fs:SetText(num)
+        elseif mode == "numberPercent" then
+            fs:SetFormattedText("%s | %.0f%%", num, pct)
+        else
+            fs:SetFormattedText("%.0f%% | %s", pct, num)
+        end
+    else
+        fs:SetText("")
+        return false
+    end
+    return true
+end
+
+-- Live Power Text colour for its colour mode. pr, pg, pb: the unit's power-type colour, already
+-- resolved by the caller (the identity edge above, or the cross-module colour push).
+ns._RFPowerTextColor = function(d, unit, s, pr, pg, pb)
+    local mode = s.powerTextColorMode
+    local r, g, b = 1, 1, 1
+    if mode == "power" then
+        r, g, b = pr, pg, pb
+    elseif mode == "class" then
+        local _, classToken = UnitClass(unit)
+        if not issecretvalue(classToken) and classToken then
+            local cc = ns.EllesmereUI.GetClassColor(classToken)
+            if cc then r, g, b = cc.r, cc.g, cc.b end
+        end
+    elseif mode == "accent" then
+        local ar, ag, ab = ns.EllesmereUI.ResolveActiveAccent()
+        if ar then r, g, b = ar, ag, ab end
+    else -- "custom"
+        local c = s.powerTextCustomColor
+        if c then r, g, b = c.r, c.g, c.b end
+    end
+    d.powerText:SetTextColor(r, g, b, 0.9)
+end
+
+-- Anchor on Health Text's host (the health bar, or the Party Frames kit's) with its width and
+-- 9-point scheme. Party/extra-aware like the per-button anchor closures; re-run by every reload
+-- pass and the Party Frames kit pass.
+ns._RFAnchorPowerText = function(d)
+    local s = d._isParty and ns._scaledPartyProxy or (d._isExtra and ns._scaledExtraProxy) or ns._scaledProfile
+    ns.AnchorRFText(d.powerText, ns.RF_BarHost(d.health, s), s.powerTextPosition or "bottom",
+        s.powerTextOffsetX or 0, s.powerTextOffsetY or 0,
+        d.kitG and d.kitG.health.w or (s.frameWidth or 72) * 0.75)
+end
+
+-- Show or hide by mode for a button whose power bar shows (the full power paint, ahead of the
+-- identity edge so a newly shown text takes its colour there); builds the FontString on the
+-- text carrier the first time a mode needs it. Stamps d._pwtMode.
+ns._RFPowerTextSetup = function(d, s)
+    local mode = s.powerTextMode
+    if mode == nil or mode == "none" then
+        if d._pwtMode then d.powerText:Hide(); d._pwtMode = nil end
+        return
+    end
+    local fs = d.powerText
+    if not fs then
+        fs = d.textCarrier:CreateFontString(nil, "OVERLAY")
+        ApplyFont(fs, s.powerTextSize or 8)
+        fs:SetWordWrap(false)
+        fs:SetTextColor(1, 1, 1, 0.9)
+        d.powerText = fs
+        ns._RFAnchorPowerText(d)
+    end
+    if not d._pwtMode then fs:Show() end
+    d._pwtMode = mode
+end
+
+-- Dead/offline edge, from the UNIT_HEALTH path that owns death, release and resurrection (none
+-- of them has to move a power value): blank or refill once per transition. d._pwtGone stamps
+-- the state last seen here (clean booleans); the full power paint clears it so a new occupant
+-- is always re-checked on its next health tick.
+ns._RFPowerTextLife = function(d, unit, gone)
+    if d._pwtGone == gone then return end
+    d._pwtGone = gone
+    if gone then d.powerText:SetText(""); return end
+    local pType = d._pwType or UnitPowerType(unit) or 0
+    ns.RF_PowerTextInto(d.powerText, d._pwtMode,
+        UnitPowerPercent(unit, pType, true, CurveConstants.ScaleTo100), unit, pType)
 end
 
 -------------------------------------------------------------------------------
@@ -2439,7 +2643,8 @@ local function CreateAbsorbBar(button, healthBar)
 
     -- Forward-declared so ReanchorAbsorbToFill captures these as UPVALUES: an undeclared name in
     -- the closure resolves to a nil global and the bar silently never re-anchors. The bars are
-    -- created further down; until then the nil guards inside ReanchorAbsorbToFill skip them.
+    -- created further down, before the first call (at the end of this function), so every
+    -- button's first pass anchors them too, including buttons built mid-session.
     local healAbsorbBar, healPredBar, healClip, reducedBar
 
     -- Re-anchor clip frames and forward bar to the current health fill texture.
@@ -2451,10 +2656,17 @@ local function CreateAbsorbBar(button, healthBar)
         -- the horizontal layout axis-swapped (the fill's RIGHT "HP edge" that shields/heal
         -- absorb/prediction hang off becomes its TOP edge; frame right/left become top/bottom).
         -- Resolved live off the button's settings source so party keeps its own Health Bar section.
+        -- Inverted fill: the seam (the current-HP point) sits at the same coordinate
+        -- either way -- only which side of it the fill texture paints changes. So the
+        -- "HP edge" the cluster hangs off moves from the fill's RIGHT/TOP to its
+        -- LEFT/BOTTOM and every anchor on it flips; anchors on the health FRAME's edges
+        -- are unaffected and are deliberately left alone below.
         local vs = d._isParty and ns._scaledPartyProxy
             or (d._isExtra and ns._scaledExtraProxy) or ns._scaledProfile
-        local isVert = ns.RF_ApplyHealthOrientation(healthBar, vs)
+        local isVert, isInvert = ns.RF_ApplyHealthOrientation(healthBar, vs)
         backfillBar._axisVert = isVert  -- read by the Blizzard Glow Line (hidden on a vertical fill)
+        -- The fill's two HP-edge corners: every fill anchor below is on one of these.
+        local hpA, hpB = ns.RF_HpEdge(isVert, isInvert)
 
         -- Health Bar Color overlays track this bar's fill, so they follow the swap
         -- for the same reason the absorb cluster below does. After the orientation
@@ -2462,7 +2674,7 @@ local function CreateAbsorbBar(button, healthBar)
         -- is what rotates them.
         healthBar._euiFillOpacity = (vs.healthBarOpacity or 100) / 100
         ns.RF_RefreshBarTints(healthBar)
-        -- Indexed, not ipairs: the creation-time call runs before the heal/max bars exist, and ipairs stops at the first nil.
+        -- Indexed, not ipairs: a nil entry must not end the walk early.
         local axisBars = { backfillBar, forwardBar, healAbsorbBar, healPredBar, reducedBar }
         for i = 1, 5 do
             local b = axisBars[i]
@@ -2475,17 +2687,17 @@ local function CreateAbsorbBar(button, healthBar)
         if isVert then
             curClip:ClearAllPoints()
             curClip:SetPoint("BOTTOMLEFT", healthBar, "BOTTOMLEFT", 0, 0)
-            curClip:SetPoint("TOPRIGHT", fill, "TOPRIGHT", 0, 0)
+            curClip:SetPoint("TOPRIGHT", fill, hpB, 0, 0)
             missClip:ClearAllPoints()
-            missClip:SetPoint("BOTTOMLEFT", fill, "TOPLEFT", 0, -1)
+            missClip:SetPoint("BOTTOMLEFT", fill, hpA, 0, -1)
             missClip:SetPoint("TOPRIGHT", healthBar, "TOPRIGHT", 0, 0)
             forwardBar:ClearAllPoints()
-            forwardBar:SetPoint("BOTTOMLEFT", fill, "TOPLEFT", 0, 0)
-            forwardBar:SetPoint("BOTTOMRIGHT", fill, "TOPRIGHT", 0, 0)
+            forwardBar:SetPoint("BOTTOMLEFT", fill, hpA, 0, 0)
+            forwardBar:SetPoint("BOTTOMRIGHT", fill, hpB, 0, 0)
             if healPredBar then
                 healPredBar:ClearAllPoints()
-                healPredBar:SetPoint("BOTTOMLEFT", fill, "TOPLEFT", 0, 0)
-                healPredBar:SetPoint("BOTTOMRIGHT", fill, "TOPRIGHT", 0, 0)
+                healPredBar:SetPoint("BOTTOMLEFT", fill, hpA, 0, 0)
+                healPredBar:SetPoint("BOTTOMRIGHT", fill, hpB, 0, 0)
             end
             -- Edge modes keep their key names: "right" = the far edge of the fill axis (top when vertical), "left" = the near one (bottom).
             local vAbsorbMode = db.profile.absorbEdgeMode or "overlay"
@@ -2504,12 +2716,12 @@ local function CreateAbsorbBar(button, healthBar)
                     backfillBar:SetPoint("TOPRIGHT", healthBar, "TOPRIGHT", 0, 0)
                 end
             elseif vAbsorbMode == "overlayReverse" then
-                -- Overlay Reverse, vertical axis: whole absorb fills DOWN into
-                -- the fill from its top edge; default filled-region clip masks
-                -- any excess (see the horizontal branch).
+                -- Overlay Reverse, vertical axis: whole absorb fills DOWN into the fill from
+                -- its top edge (UP from its bottom edge under Inverted Fill); default
+                -- filled-region clip masks any excess (see the horizontal branch).
                 backfillBar:SetReverseFill(true)
-                backfillBar:SetPoint("TOPLEFT", fill, "TOPLEFT", 0, 0)
-                backfillBar:SetPoint("TOPRIGHT", fill, "TOPRIGHT", 0, 0)
+                backfillBar:SetPoint("TOPLEFT", fill, hpA, 0, 0)
+                backfillBar:SetPoint("TOPRIGHT", fill, hpB, 0, 0)
             else
                 -- Overshield "From Left" on the vertical axis: excess grows
                 -- from the bar's bottom (origin) edge -- see the horizontal
@@ -2518,8 +2730,8 @@ local function CreateAbsorbBar(button, healthBar)
                 if osm == nil then osm = (db.profile.showOvershield == false) and "never" or "always" end
                 if osm == "fromleft" and db.profile.absorbStyle ~= "blizzardModern" then
                     backfillBar:SetReverseFill(false)
-                    backfillBar:SetPoint("TOPLEFT", fill, "TOPLEFT", 0, 0)
-                    backfillBar:SetPoint("TOPRIGHT", fill, "TOPRIGHT", 0, 0)
+                    backfillBar:SetPoint("TOPLEFT", fill, hpA, 0, 0)
+                    backfillBar:SetPoint("TOPRIGHT", fill, hpB, 0, 0)
                 else
                     backfillBar:SetReverseFill(true)
                     backfillBar:SetPoint("TOPLEFT", healthBar, "TOPLEFT", 0, 0)
@@ -2536,7 +2748,7 @@ local function CreateAbsorbBar(button, healthBar)
                         healClip:SetPoint("BOTTOMRIGHT", healthBar, "BOTTOMRIGHT", 0, 0)
                     else
                         healClip:SetPoint("BOTTOMLEFT", healthBar, "BOTTOMLEFT", 0, 0)
-                        healClip:SetPoint("TOPRIGHT", fill, "TOPRIGHT", 0, 0)
+                        healClip:SetPoint("TOPRIGHT", fill, hpB, 0, 0)
                     end
                 end
                 healAbsorbBar:ClearAllPoints()
@@ -2550,8 +2762,8 @@ local function CreateAbsorbBar(button, healthBar)
                     healAbsorbBar:SetPoint("BOTTOMRIGHT", healthBar, "BOTTOMRIGHT", 0, 0)
                 else
                     healAbsorbBar:SetReverseFill(true)
-                    healAbsorbBar:SetPoint("TOPLEFT", fill, "TOPLEFT", 0, 0)
-                    healAbsorbBar:SetPoint("TOPRIGHT", fill, "TOPRIGHT", 0, 0)
+                    healAbsorbBar:SetPoint("TOPLEFT", fill, hpA, 0, 0)
+                    healAbsorbBar:SetPoint("TOPRIGHT", fill, hpB, 0, 0)
                 end
             end
             return
@@ -2559,17 +2771,17 @@ local function CreateAbsorbBar(button, healthBar)
 
         curClip:ClearAllPoints()
         curClip:SetPoint("TOPLEFT", healthBar, "TOPLEFT", 0, 0)
-        curClip:SetPoint("BOTTOMRIGHT", fill, "BOTTOMRIGHT", 0, 0)
+        curClip:SetPoint("BOTTOMRIGHT", fill, hpB, 0, 0)
         missClip:ClearAllPoints()
-        missClip:SetPoint("TOPLEFT", fill, "TOPRIGHT", -1, 0)
+        missClip:SetPoint("TOPLEFT", fill, hpA, -1, 0)
         missClip:SetPoint("BOTTOMRIGHT", healthBar, "BOTTOMRIGHT", 0, 0)
         forwardBar:ClearAllPoints()
-        forwardBar:SetPoint("TOPLEFT", fill, "TOPRIGHT", 0, 0)
-        forwardBar:SetPoint("BOTTOMLEFT", fill, "BOTTOMRIGHT", 0, 0)
+        forwardBar:SetPoint("TOPLEFT", fill, hpA, 0, 0)
+        forwardBar:SetPoint("BOTTOMLEFT", fill, hpB, 0, 0)
         if healPredBar then
             healPredBar:ClearAllPoints()
-            healPredBar:SetPoint("TOPLEFT", fill, "TOPRIGHT", 0, 0)
-            healPredBar:SetPoint("BOTTOMLEFT", fill, "BOTTOMRIGHT", 0, 0)
+            healPredBar:SetPoint("TOPLEFT", fill, hpA, 0, 0)
+            healPredBar:SetPoint("BOTTOMLEFT", fill, hpB, 0, 0)
         end
         -- Shield absorb placement (independent of heal absorb): overlay = backfill into filled
         -- health from the HP edge (default); right/left = full bar filling from that frame edge.
@@ -2597,8 +2809,8 @@ local function CreateAbsorbBar(button, healthBar)
             -- same as the edge modes).
             backfillBar:SetReverseFill(true)
             backfillBar:ClearAllPoints()
-            backfillBar:SetPoint("TOPRIGHT", fill, "TOPRIGHT", 0, 0)
-            backfillBar:SetPoint("BOTTOMRIGHT", fill, "BOTTOMRIGHT", 0, 0)
+            backfillBar:SetPoint("TOPRIGHT", fill, hpA, 0, 0)
+            backfillBar:SetPoint("BOTTOMRIGHT", fill, hpB, 0, 0)
         else
             -- Overlay: curClip already clipped to the fill above. Overshield "From Left" uses the
             -- Overlay Reverse anchors with FORWARD fill: the bar's origin end sits one bar-width
@@ -2611,8 +2823,8 @@ local function CreateAbsorbBar(button, healthBar)
             backfillBar:ClearAllPoints()
             if osm == "fromleft" and db.profile.absorbStyle ~= "blizzardModern" then
                 backfillBar:SetReverseFill(false)
-                backfillBar:SetPoint("TOPRIGHT", fill, "TOPRIGHT", 0, 0)
-                backfillBar:SetPoint("BOTTOMRIGHT", fill, "BOTTOMRIGHT", 0, 0)
+                backfillBar:SetPoint("TOPRIGHT", fill, hpA, 0, 0)
+                backfillBar:SetPoint("BOTTOMRIGHT", fill, hpB, 0, 0)
             else
                 backfillBar:SetReverseFill(true)
                 backfillBar:SetPoint("TOPRIGHT", healthBar, "TOPRIGHT", 0, 0)
@@ -2630,7 +2842,7 @@ local function CreateAbsorbBar(button, healthBar)
                     healClip:SetPoint("BOTTOMRIGHT", healthBar, "BOTTOMRIGHT", 0, 0)
                 else
                     healClip:SetPoint("TOPLEFT", healthBar, "TOPLEFT", 0, 0)
-                    healClip:SetPoint("BOTTOMRIGHT", fill, "BOTTOMRIGHT", 0, 0)
+                    healClip:SetPoint("BOTTOMRIGHT", fill, hpB, 0, 0)
                 end
             end
             healAbsorbBar:ClearAllPoints()
@@ -2645,12 +2857,11 @@ local function CreateAbsorbBar(button, healthBar)
             else
                 -- Overlay (default): eat into the filled health from the HP edge.
                 healAbsorbBar:SetReverseFill(true)
-                healAbsorbBar:SetPoint("TOPRIGHT", fill, "TOPRIGHT", 0, 0)
-                healAbsorbBar:SetPoint("BOTTOMRIGHT", fill, "BOTTOMRIGHT", 0, 0)
+                healAbsorbBar:SetPoint("TOPRIGHT", fill, hpA, 0, 0)
+                healAbsorbBar:SetPoint("BOTTOMRIGHT", fill, hpB, 0, 0)
             end
         end
     end
-    ReanchorAbsorbToFill()
 
     -- Per-button calculator for reading absorb value (secret-safe)
     local hpCalc
@@ -2753,6 +2964,10 @@ local function CreateAbsorbBar(button, healthBar)
     backfillBar._absorbMask   = absorbMask
 
     d.absorbBar = backfillBar
+    -- First pass here, after every bar it anchors exists: a button built mid-session
+    -- (Extra Frames) may get no restyle pass, and its heal bars would keep their
+    -- creation anchors (horizontal, not inverted).
+    ReanchorAbsorbToFill()
     d.ReanchorAbsorbToFill = ReanchorAbsorbToFill
     return backfillBar
 end
@@ -3613,6 +3828,19 @@ function ns.ApplyHighlightBorder(bf, s, size, r, g, b, a, px)
     bf._hlBorderPx = px
 end
 
+-- Hover/target on a drawn border recolors that same border, so a highlight
+-- color (nearly) equal to the border's own shows no change at all: every
+-- textured style but Pixels seeds a white border and the highlight defaults
+-- to white. Such a highlight draws gold instead (white on a gold border).
+function ns.RF_VisibleHighlight(s, r, g, b)
+    local c = s.borderColor
+    local br, bg, bb = 0, 0, 0
+    if c then br, bg, bb = c.r, c.g, c.b end
+    if math.abs(r - br) + math.abs(g - bg) + math.abs(b - bb) >= 0.15 then return r, g, b end
+    if math.abs(1 - br) + math.abs(0.82 - bg) + math.abs(bb) >= 0.15 then return 1, 0.82, 0 end
+    return 1, 1, 1
+end
+
 -------------------------------------------------------------------------------
 --  Style a single button (called once per button at creation time)
 -------------------------------------------------------------------------------
@@ -3665,8 +3893,9 @@ local function StyleButton(button)
     health:SetStatusBarTexture(texPath)
     health:GetStatusBarTexture():SetHorizTile(false)
     if PP then PP.DisablePixelSnap(health) end
-    -- Fill axis. StyleButton runs before d._isParty is set, so this uses the raid value;
-    -- ReanchorAbsorbToFill re-resolves it against the button's real settings source each update.
+    -- Fill axis + inversion. StyleButton runs before d._isParty is set, so these use
+    -- the raid values; ReanchorAbsorbToFill re-resolves both against the button's real
+    -- settings source each update.
     ns.RF_ApplyHealthOrientation(health, s)
     health:SetMinMaxValues(0, 100)
     health:SetValue(100)
@@ -3773,6 +4002,8 @@ local function StyleButton(button)
     local textCarrier = CreateFrame("Frame", nil, button)
     textCarrier:SetAllPoints(health)
     textCarrier:SetFrameLevel(button:GetFrameLevel() + ns.LVL_TEXT)
+    -- Kept for Power Text, whose FontString is built on it only when a mode first needs it.
+    d.textCarrier = textCarrier
 
     -- Name text
     local nameFS = textCarrier:CreateFontString(nil, "OVERLAY")
@@ -4190,6 +4421,7 @@ local function StyleButton(button)
             ns.ApplyHighlightBorder(d.borderFrame, s, hlSize, r, g, b, a, hlPx)
             return
         end
+        if hlSize then r, g, b = ns.RF_VisibleHighlight(s, r, g, b) end
         d.borderFrame._hlBorderSize = nil
         EllesmereUI.SetBorderStyleColor(d.borderFrame, r, g, b, a)
     end
@@ -4787,7 +5019,17 @@ local function UpdateButton(button)
     local connected = UnitIsConnected(unit)
     local deadOrGhost = UnitIsDeadOrGhost(unit)
     if health then
-        local pct = GetSafeHealthPercent(unit)
+        -- Inverted Fill (the bar's _euiInv stamp) paints missing health for every
+        -- unit, so the current-health area the Health Bar Color tints and the dispel
+        -- wash cover (ns.RF_AnchorCurHealth) is the unit's own, last-known while
+        -- offline. A corpse paints a full missing bar, the empty current-health area
+        -- of a normal bar at 0%; _ApplyHealthBg hides that fill over the Dead colour.
+        local pct
+        if health._euiInv then
+            pct = deadOrGhost and 100 or GetSafeHealthPercent(unit, true)
+        else
+            pct = GetSafeHealthPercent(unit)
+        end
         health:SetMinMaxValues(0, 100)
         if smooth then
             health:SetValue(pct, smooth)
@@ -4873,6 +5115,7 @@ ns._PaintPower = function(button, d, s, unit)
                 if hidePower then
                     power:Hide()
                     if d.powerBorderFrame then d.powerBorderFrame:Hide() end
+                    if d._pwtMode then d.powerText:Hide(); d._pwtMode = nil end
                     -- Expand health bar to full frame height (minus the Top Name Bar)
                     if d.health then
                         d.health:SetHeight(PixelSnap(frameH - tnbH))
@@ -4897,6 +5140,9 @@ ns._PaintPower = function(button, d, s, unit)
             local wasShown = power:IsShown()
             power:Show()
             if d.UpdatePowerBorder then d.UpdatePowerBorder() end
+            -- Power Text: shown/hidden (built on first need) by mode ahead of the edge below,
+            -- which colours it. None and never shown = two field reads, no call.
+            if d._pwtMode or s.powerTextMode ~= "none" then ns._RFPowerTextSetup(d, s) end
             local smoothPower = wasShown and s.smoothPowerBars and Enum
                 and Enum.StatusBarInterpolation
                 and Enum.StatusBarInterpolation.ExponentialEaseOut
@@ -4912,6 +5158,13 @@ ns._PaintPower = function(button, d, s, unit)
                 power:SetValue(ppct, smoothPower)
             else
                 power:SetValue(ppct)
+            end
+            -- Power Text rides the same value; clearing the dead/offline stamp makes the next
+            -- health tick re-check a possibly new occupant.
+            local pwtMode = d._pwtMode
+            if pwtMode then
+                d._pwtGone = nil
+                ns.RF_PowerTextInto(d.powerText, pwtMode, ppct, unit, pType)
             end
         end
     end
@@ -5340,7 +5593,13 @@ function ERF:UpdateAllFrames()
     -- types. _UpdateButtonHealth is lightweight, combat-safe and self-guarding.
     if ns._UpdateButtonHealth then
         if ns._partyUnitToButton then
-            for _, btn in pairs(ns._partyUnitToButton) do ns._UpdateButtonHealth(btn) end
+            for u, btn in pairs(ns._partyUnitToButton) do
+                ns._UpdateButtonHealth(btn)
+                -- Power Text's accent/power colour moves with these pushes too (raid and extra
+                -- buttons take it from the full paint above): one field read while it is off.
+                local pd = GetFFD(btn)
+                if pd._pwtMode then ns._RFPowerTextColor(pd, u, ns._scaledPartyProxy, GetPowerColor(u)) end
+            end
         end
         if ns._xfUnitToButton then
             for _, btn in pairs(ns._xfUnitToButton) do ns._UpdateButtonHealth(btn) end
@@ -5555,10 +5814,15 @@ ns._UpdateButtonHealth = function(button, unit)
         if not d._hb100 then d._hb100 = true; health:SetMinMaxValues(0, 100) end
         local smooth = s.smoothBars and Enum and Enum.StatusBarInterpolation
             and Enum.StatusBarInterpolation.ExponentialEaseOut
+        -- Missing health under Inverted Fill, every unit (see UpdateButton).
+        local barPct = pct
+        if health._euiInv then
+            barPct = deadOrGhost and 100 or GetSafeHealthPercent(unit, true)
+        end
         if smooth then
-            health:SetValue(pct, smooth)
+            health:SetValue(barPct, smooth)
         else
-            health:SetValue(pct)
+            health:SetValue(barPct)
         end
         -- Fill color: dead/offline ticks skip this entirely (_ApplyHealthBg
         -- owns the gray tint and clears the stamp on the transition). The
@@ -5693,6 +5957,10 @@ ns._UpdateButtonHealth = function(button, unit)
     -- Status text (dead/ghost state changes with health)
     ns._PaintStatusText(d, s, unit, connected, deadOrGhost)
 
+    -- Power Text blanks and refills on the same dead/offline edge (death and resurrection need
+    -- not move a power value): one field read while it is off.
+    if d._pwtMode then ns._RFPowerTextLife(d, unit, deadOrGhost or not connected) end
+
     -- Background + dead/offline tint. This path owns death/resurrect transitions
     -- arriving via UNIT_HEALTH, so it runs per tick (state-stamped inside).
     ns._ApplyHealthBg(d, health, s, unit, connected, deadOrGhost)
@@ -5771,6 +6039,25 @@ FB.RANGE_HEAL = {
     EVOKER  = 361469, -- Living Flame (25yd: native Evoker range)
 }
 
+-- WoW Forever: the class's best heal the spellbook holds (EllesmereUI.FOREVER_HEAL_SPELLS, best
+-- first); nil when the class has none or has not learned one yet.
+FB.ForeverKnownHeal = function(pClass)
+    local list = EllesmereUI.FOREVER_HEAL_SPELLS[pClass]
+    if not list then return nil end
+    local bank = C_SpellBook and C_SpellBook.IsSpellInSpellBook and Enum.SpellBookSpellBank
+    for i = 1, #list do
+        local id = list[i]
+        local known
+        if bank then
+            known = C_SpellBook.IsSpellInSpellBook(id, bank.Player, true)
+        else
+            known = IsSpellKnown and IsSpellKnown(id)
+        end
+        if known then return id end
+    end
+    return nil
+end
+
 -- Secret-safe alpha application (result may be secret in instances, which SetAlphaFromBoolean
 -- accepts natively). The result can also be NIL (unit not range-checkable / spell momentarily not
 -- evaluable), which it rejects -- treat NIL as in range. issecretvalue runs FIRST so the nil check
@@ -5818,6 +6105,11 @@ FB.ShouldBeActive = function()
     if not fb then return false end
     if fb.display == "always" then return true end
     if fb.display == "healers" then
+        -- WoW Forever: a class that can heal counts as its healing spec.
+        if EllesmereUI.IS_FOREVER then
+            local _, pClass = UnitClass("player")
+            return EllesmereUI.FOREVER_HEAL_SPELLS[pClass] ~= nil
+        end
         local spec = GetSpecialization and GetSpecialization()
         local role = spec and GetSpecializationRole and GetSpecializationRole(spec)
         return role == "HEALER"
@@ -5914,6 +6206,7 @@ FB.ApplyBorderColor = function(b)
         ns.ApplyHighlightBorder(b._borderFrame, s, hlSize, r, g, bcol, a, hlPx)
         return
     end
+    if hlSize then r, g, bcol = ns.RF_VisibleHighlight(s, r, g, bcol) end
     b._borderFrame._hlBorderSize = nil
     EllesmereUI.SetBorderStyleColor(b._borderFrame, r, g, bcol, a)
 end
@@ -5970,7 +6263,12 @@ FB.PaintHealth = function(b, unit, s, full)
     health:SetMinMaxValues(0, 100)
     local smooth = s.smoothBars and Enum and Enum.StatusBarInterpolation
         and Enum.StatusBarInterpolation.ExponentialEaseOut
-    if smooth then health:SetValue(pct, smooth) else health:SetValue(pct) end
+    -- Missing health under Inverted Fill (the _euiInv stamp FB.StyleVisuals leaves);
+    -- the texts keep the current-health pct. Dead units are not special-cased: there
+    -- is no status colour here, so a full bar is what tells a dead unit apart.
+    local barPct = pct
+    if health._euiInv then barPct = GetSafeHealthPercent(unit, true) end
+    if smooth then health:SetValue(barPct, smooth) else health:SetValue(barPct) end
 
     local ht, hat = b._healthText, b._healAbsorbText
     local mode = s.healthTextMode or "none"
@@ -6552,6 +6850,8 @@ function ns.FB_Apply()
     local role = spec and GetSpecializationRole and GetSpecializationRole(spec)
     local _, pClass = UnitClass("player")
     FB.rangeSpell = (role == "HEALER") and FB.RANGE_HEAL[pClass] or nil
+    -- WoW Forever: a healing class range-checks with its best known heal.
+    if EllesmereUI.IS_FOREVER then FB.rangeSpell = FB.ForeverKnownHeal(pClass) end
     if not FB.rangeSpell then
         for _, b in ipairs(FB.buttons) do b:SetAlpha(1) end
     else
@@ -6954,6 +7254,10 @@ XF.Layout = function()
             ApplyFont(d.healthText, xs.healthTextSize or 9)
             if d.AnchorHealthText then d.AnchorHealthText() end
         end
+        if d.powerText then
+            ApplyFont(d.powerText, xs.powerTextSize or 8)
+            ns._RFAnchorPowerText(d)
+        end
         if d.healAbsorbText then
             ApplyFont(d.healAbsorbText, xs.healAbsorbTextSize or 9)
             if d.AnchorHealAbsorbText then d.AnchorHealAbsorbText() end
@@ -7060,13 +7364,20 @@ XF.EnsureBuilt = function(count)
                         ns._RFPowerTypeEdge(d, unit)
                         pType = d._pwType
                     end
-                    d.power:SetValue(UnitPowerPercent(unit, pType, true, CurveConstants.ScaleTo100))
+                    local ppct = UnitPowerPercent(unit, pType, true, CurveConstants.ScaleTo100)
+                    d.power:SetValue(ppct)
+                    -- Power Text rides the same value (nil = off: this one field test).
+                    local pwtMode = d._pwtMode
+                    if pwtMode then ns.RF_PowerTextInto(d.powerText, pwtMode, ppct, unit, pType) end
                 end
             elseif event == "UNIT_DISPLAYPOWER" then
                 local d = GetFFD(b)
                 if d.power and d.power:IsShown() then
                     ns._RFPowerTypeEdge(d, unit)
-                    d.power:SetValue(UnitPowerPercent(unit, d._pwType, true, CurveConstants.ScaleTo100))
+                    local ppct = UnitPowerPercent(unit, d._pwType, true, CurveConstants.ScaleTo100)
+                    d.power:SetValue(ppct)
+                    local pwtMode = d._pwtMode
+                    if pwtMode then ns.RF_PowerTextInto(d.powerText, pwtMode, ppct, unit, d._pwType) end
                 end
             elseif event == "UNIT_ABSORB_AMOUNT_CHANGED" or event == "UNIT_HEAL_ABSORB_AMOUNT_CHANGED"
                 or event == "UNIT_HEAL_PREDICTION" or event == "UNIT_MAX_HEALTH_MODIFIERS_CHANGED" then
@@ -7713,7 +8024,7 @@ end
 -- its own), plus the UI scale its pixel-sized borders follow, gathered into a reused list, so a
 -- reload that changed none of them leaves the pets' fonts, textures and borders alone. The hover and
 -- target borders are painted, not styled.
-PF.STYLE_N = 34
+PF.STYLE_N = 35
 PF.fp = {}
 PF.fpNew = {}
 PF.StyleInputs = function(t, s, texPath)
@@ -7731,6 +8042,7 @@ PF.StyleInputs = function(t, s, texPath)
     t[30], t[31] = s.borderTextureOffset, s.borderTextureOffsetY
     t[32], t[33] = s.borderTextureShiftX, s.borderTextureShiftY
     t[34] = UIParent:GetEffectiveScale()
+    t[35] = s.healthInvertFill
 end
 
 -- True when the inputs differ from the ones last styled under key ("hdr": the header, "owner": the
@@ -8462,7 +8774,9 @@ PF.PvFrame = function(i, parent, s, w, h, c)
     local pct = pet.hp
     local hc = c.hc
     f._health:SetMinMaxValues(0, 100)
-    f._health:SetValue(pct)
+    -- pet.hp is a made-up plain number (PF.PV_PETS), so it is flipped here for an
+    -- inverted fill (the _euiInv stamp FB.StyleVisuals just left).
+    f._health:SetValue(f._health._euiInv and (100 - pct) or pct)
     f._health:SetStatusBarColor(hc and hc.r or 23/255, hc and hc.g or 172/255, hc and hc.b or 49/255, c.opacity)
     f._nameText:SetText(pet.name)
     f._nameText:SetTextColor(c.nr, c.ng, c.nb)
@@ -10221,6 +10535,14 @@ local function ReloadFrames(skipButtons)
             if d.AnchorHealthText then d.AnchorHealthText() end
         end
 
+        -- Power text (exists once a mode has needed it): hidden with the bar above until
+        -- UpdateAllButtons below shows it again, and restyled.
+        if d.powerText then
+            d.powerText:Hide(); d._pwtMode = nil
+            ApplyFont(d.powerText, s.powerTextSize or 8)
+            ns._RFAnchorPowerText(d)
+        end
+
         -- Heal absorb text
         if d.healAbsorbText then
             ApplyFont(d.healAbsorbText, s.healAbsorbTextSize or 9)
@@ -10462,6 +10784,7 @@ ns._ResizePartyButtons = function(w, h)
                 end
                 if d.nameText then ApplyFont(d.nameText, pp.nameSize or 10) end
                 if d.healthText then ApplyFont(d.healthText, pp.healthTextSize or 9) end
+                if d.powerText then ApplyFont(d.powerText, pp.powerTextSize or 8) end
                 if d.healAbsorbText then ApplyFont(d.healAbsorbText, pp.healAbsorbTextSize or 9) end
                 if d.statusText then ApplyFont(d.statusText, pp.statusTextSize or 14) end
             end
@@ -11628,16 +11951,23 @@ local function OnEvent(self, event, arg1, ...)
                 pType = d._pwType
             end
             -- Percent-based, secret-safe (see UpdateButton power block).
-            d.power:SetValue(UnitPowerPercent(arg1, pType, true, CurveConstants.ScaleTo100))
+            local ppct = UnitPowerPercent(arg1, pType, true, CurveConstants.ScaleTo100)
+            d.power:SetValue(ppct)
+            -- Power Text rides the same value (nil = off: this one field test).
+            local pwtMode = d._pwtMode
+            if pwtMode then ns.RF_PowerTextInto(d.powerText, pwtMode, ppct, arg1, pType) end
         end
     elseif event == "UNIT_DISPLAYPOWER" then
         -- The displayed power type changed (forms, spec swaps, vehicles):
-        -- re-derive type + color + bounds once, then push the value.
+        -- re-derive type + color + bounds once (Power Text's colour too), then push the value.
         local btn = unitToButton[arg1] or ns._partyUnitToButton[arg1]
         if btn and GetFFD(btn).power then
             local d = GetFFD(btn)
             ns._RFPowerTypeEdge(d, arg1)
-            d.power:SetValue(UnitPowerPercent(arg1, d._pwType, true, CurveConstants.ScaleTo100))
+            local ppct = UnitPowerPercent(arg1, d._pwType, true, CurveConstants.ScaleTo100)
+            d.power:SetValue(ppct)
+            local pwtMode = d._pwtMode
+            if pwtMode then ns.RF_PowerTextInto(d.powerText, pwtMode, ppct, arg1, d._pwType) end
         end
     elseif event == "UNIT_NAME_UPDATE" then
         local btn = unitToButton[arg1] or ns._partyUnitToButton[arg1]
@@ -11931,7 +12261,7 @@ do
             "customFillColor", "dynamicColor100", "dynamicColor50", "dynamicColor0",
             "customBgColor", "bgClassColored", "bgDarkness", "smoothBars",
             "healPrediction", "healPredOpacity", "healPredColor",
-            "healthVerticalFill",
+            "healthVerticalFill", "healthInvertFill",
             -- Drawn as "Threat Borders" (and its cog) on the Health Bar row, so they file here.
             "threatBorderSize", "threatCustomBorder",
         },
@@ -11959,6 +12289,8 @@ do
             "healthTextSize", "healthTextPosition", "healthTextOffsetX", "healthTextOffsetY",
             "healAbsorbTextMode", "healAbsorbTextColorMode", "healAbsorbTextCustomColor",
             "healAbsorbTextSize", "healAbsorbTextPosition", "healAbsorbTextOffsetX", "healAbsorbTextOffsetY",
+            "powerTextMode", "powerTextColorMode", "powerTextCustomColor",
+            "powerTextSize", "powerTextPosition", "powerTextOffsetX", "powerTextOffsetY",
         },
         indicators = {
             "roleIconStyle", "roleIconSize", "roleIconPosition", "roleIconOffsetX", "roleIconOffsetY", "roleIconHideInCombat",
@@ -12129,7 +12461,7 @@ ns._xfBmScale = 1
 local INDICATOR_SCALE_KEYS = {}
 for _, k in ipairs({
     -- Font sizes
-    "nameSize", "healthTextSize", "healAbsorbTextSize", "statusTextSize",
+    "nameSize", "healthTextSize", "healAbsorbTextSize", "statusTextSize", "powerTextSize",
     "debuffStacksTextSize", "debuffDurTextSize", "defDurTextSize",
     -- Icon sizes
     "roleIconSize", "leaderIconSize", "raidMarkerSize", "combatIndicatorSize", "pingMarkerSize",
@@ -12138,6 +12470,7 @@ for _, k in ipairs({
     "nameOffsetX", "nameOffsetY",
     "healthTextOffsetX", "healthTextOffsetY",
     "healAbsorbTextOffsetX", "healAbsorbTextOffsetY",
+    "powerTextOffsetX", "powerTextOffsetY",
     "statusTextOffsetX", "statusTextOffsetY",
     "roleIconOffsetX", "roleIconOffsetY",
     "leaderIconOffsetX", "leaderIconOffsetY",
@@ -14021,6 +14354,14 @@ ns.ReloadPartyFrames = function(skipButtons)
             if d.AnchorHealthText then d.AnchorHealthText() end
         end
 
+        -- Power text: hidden with the bar above (not under the kit, whose mana bar stays shown)
+        -- until _UpdateAllPartyButtons below shows it again, and restyled.
+        if d.powerText then
+            if not d.kit then d.powerText:Hide(); d._pwtMode = nil end
+            ApplyFont(d.powerText, pp.powerTextSize or 8)
+            ns._RFAnchorPowerText(d)
+        end
+
         -- Heal absorb text
         if d.healAbsorbText then
             ApplyFont(d.healAbsorbText, pp.healAbsorbTextSize or 9)
@@ -14765,7 +15106,7 @@ end
 -- Position a preview aura icon on a frame (reuses anchor logic)
 local function PvAuraAnchor(icon, f, auraType, slot, totalShown)
     local s2 = PvSettings()
-	
+
     -- Debuffs use the shared grid layout (same DebuffGridPoint helper as the live
     -- frames) so the preview matches exactly -- including row wrapping and CENTER
     -- per-row centering. `slot` is the 0-based index among visible icons.
@@ -15097,7 +15438,7 @@ local function PvAuraTick()
             pulseInfo.active = true
             pulseInfo.expTime = now + dur
         end
-		
+
         -- Row-wrap showcase: when wrapping is enabled, fill the player frame
         -- (index 1) up to debuffCap so the full multi-row layout is actually
         -- visible -- the ambient pulse/random spawns only put 1-2 per frame,
@@ -15219,6 +15560,9 @@ ns._pvBuffTicker = nil
 ns._pvBuffAssignments = {}
 
 local function GetConfiguredBuffSpells()
+    -- WoW Forever: this preview reads only the retired pre-v2 Buff Manager
+    -- keys, which a profile there can still carry; it previews nothing there.
+    if EllesmereUI.IS_FOREVER then return {} end
     if not db or not db.profile or not db.profile.bmIndicators then return {} end
     -- BM indicators are keyed by "CLASS_SPEC" strings (e.g. "PALADIN_HOLY").
     -- Resolve the player's spec via the shared, locale-independent helper (matches
@@ -15918,6 +16262,7 @@ local function CreatePreviewFrame(index, party)
             ns.ApplyHighlightBorder(bdrFrame, s, hlSize, r, g, b, a, hlPx)
             return
         end
+        if hlSize then r, g, b = ns.RF_VisibleHighlight(s, r, g, b) end
         bdrFrame._hlBorderSize = nil
         EllesmereUI.SetBorderStyleColor(bdrFrame, r, g, b, a)
     end
@@ -16014,6 +16359,13 @@ local function CreatePreviewFrame(index, party)
     healthFS:SetPoint("CENTER", health, "CENTER", 0, 0)
     healthFS:SetTextColor(1, 1, 1, 0.9)
 
+    -- Power text (anchored, sized, coloured and shown by ApplyPreviewData)
+    local powerFS = textCarrier:CreateFontString(nil, "OVERLAY")
+    ApplyFont(powerFS, s.powerTextSize or 8)
+    powerFS:SetWordWrap(false)
+    powerFS:SetTextColor(1, 1, 1, 0.9)
+    powerFS:Hide()
+
     -- Heal absorb text (preview)
     local healAbsorbFS = textCarrier:CreateFontString(nil, "OVERLAY")
     ApplyFont(healAbsorbFS, s.healAbsorbTextSize or 9)
@@ -16089,6 +16441,7 @@ local function CreatePreviewFrame(index, party)
     f._topNameBarBg = tnbBg
     f._topNameBarText = tnbText
     f._healthText = healthFS
+    f._powerText = powerFS
     f._healAbsorbText = healAbsorbFS
     f._statusText = statusFS
     f._roleIcon = roleIcon
@@ -16440,6 +16793,8 @@ local function ApplyPreviewData(f, index)
     local healthH = PixelSnap(h - ns.RF_HealthPowerInset(s, powerH))
     local topBarH = (s.topNameBarEnabled and PixelSnap(s.topNameBarHeight or 20)) or 0
 
+    local pvInvert = ns.RF_IsInvertedFill(s)
+
     f:SetSize(w, h)
 
     -- Health bar height/anchor + Top Name Bar (helper re-anchors health top to
@@ -16452,7 +16807,10 @@ local function ApplyPreviewData(f, index)
         f._health:GetStatusBarTexture():SetHorizTile(false)
         ns.RF_ApplyHealthOrientation(f._health, s)
         f._health:SetMinMaxValues(0, 100)
-        f._health:SetValue(healthPct)
+        -- Preview: honor invert setting by flipping the displayed fill percentage
+        local healthBarPct = healthPct
+        if pvInvert then healthBarPct = 100 - healthBarPct end
+        f._health:SetValue(healthBarPct)
         f._healthPct = healthPct
         f._classToken = classToken
 
@@ -16509,11 +16867,21 @@ local function ApplyPreviewData(f, index)
         local function AnchorPreviewBg()
             f._bg:ClearAllPoints()
             if pvVert then
-                f._bg:SetPoint("TOPLEFT", f._health, "TOPLEFT", 0, 0)
-                f._bg:SetPoint("BOTTOMRIGHT", f._health:GetStatusBarTexture(), "TOPRIGHT", 0, 0)
+                if pvInvert then
+                    f._bg:SetPoint("TOPLEFT", f._health:GetStatusBarTexture(), "BOTTOMLEFT", 0, 0)
+                    f._bg:SetPoint("BOTTOMRIGHT", f._health, "BOTTOMRIGHT", 0, 0)
+                else
+                    f._bg:SetPoint("TOPLEFT", f._health, "TOPLEFT", 0, 0)
+                    f._bg:SetPoint("BOTTOMRIGHT", f._health:GetStatusBarTexture(), "TOPRIGHT", 0, 0)
+                end
             else
-                f._bg:SetPoint("TOPLEFT", f._health:GetStatusBarTexture(), "TOPRIGHT", 0, 0)
-                f._bg:SetPoint("BOTTOMRIGHT", f._health, "BOTTOMRIGHT", 0, 0)
+                if pvInvert then
+                    f._bg:SetPoint("TOPLEFT", f._health, "TOPLEFT", 0, 0)
+                    f._bg:SetPoint("BOTTOMRIGHT", f._health:GetStatusBarTexture(), "BOTTOMLEFT", 0, 0)
+                else
+                    f._bg:SetPoint("TOPLEFT", f._health:GetStatusBarTexture(), "TOPRIGHT", 0, 0)
+                    f._bg:SetPoint("BOTTOMRIGHT", f._health, "BOTTOMRIGHT", 0, 0)
+                end
             end
         end
         if s.healthColorMode == "dark" then
@@ -16738,6 +17106,7 @@ local function ApplyPreviewData(f, index)
             -- Vertical fill: same layout with the axis swapped (the fill's right
             -- edge becomes its top edge). Mirrors the live vertical branch.
             local pvAbVert = ns.RF_IsVerticalFill(s)
+            local hpA, hpB = ns.RF_HpEdge(pvAbVert, pvInvert)
             local pvAxisBars = { f._absorbBar, fw }
             for i = 1, 2 do
                 local b = pvAxisBars[i]
@@ -16768,26 +17137,26 @@ local function ApplyPreviewData(f, index)
                     -- the filled-region clip masks excess (mirrors live).
                     cc:ClearAllPoints()
                     cc:SetPoint("BOTTOMLEFT", f._health, "BOTTOMLEFT", 0, 0)
-                    cc:SetPoint("TOPRIGHT", vfill, "TOPRIGHT", 0, 0)
+                    cc:SetPoint("TOPRIGHT", vfill, hpB, 0, 0)
                     f._absorbBar:SetReverseFill(true)
                     f._absorbBar:ClearAllPoints()
-                    f._absorbBar:SetPoint("TOPLEFT", vfill, "TOPLEFT", 0, 0)
-                    f._absorbBar:SetPoint("TOPRIGHT", vfill, "TOPRIGHT", 0, 0)
+                    f._absorbBar:SetPoint("TOPLEFT", vfill, hpA, 0, 0)
+                    f._absorbBar:SetPoint("TOPRIGHT", vfill, hpB, 0, 0)
                     if fw then fw:Hide() end
                 else
                     cc:ClearAllPoints()
                     cc:SetPoint("BOTTOMLEFT", f._health, "BOTTOMLEFT", 0, 0)
-                    cc:SetPoint("TOPRIGHT", vfill, "TOPRIGHT", 0, 0)
+                    cc:SetPoint("TOPRIGHT", vfill, hpB, 0, 0)
                     mc:ClearAllPoints()
-                    mc:SetPoint("BOTTOMLEFT", vfill, "TOPLEFT", 0, -1)
+                    mc:SetPoint("BOTTOMLEFT", vfill, hpA, 0, -1)
                     mc:SetPoint("TOPRIGHT", f._health, "TOPRIGHT", 0, 0)
                     f._absorbBar:ClearAllPoints()
                     local pvOsm2 = s.overshieldMode
                     if pvOsm2 == nil then pvOsm2 = (s.showOvershield == false) and "never" or "always" end
                     if pvOsm2 == "fromleft" and s.absorbStyle ~= "blizzardModern" then
                         f._absorbBar:SetReverseFill(false)
-                        f._absorbBar:SetPoint("TOPLEFT", vfill, "TOPLEFT", 0, 0)
-                        f._absorbBar:SetPoint("TOPRIGHT", vfill, "TOPRIGHT", 0, 0)
+                        f._absorbBar:SetPoint("TOPLEFT", vfill, hpA, 0, 0)
+                        f._absorbBar:SetPoint("TOPRIGHT", vfill, hpB, 0, 0)
                     else
                         f._absorbBar:SetReverseFill(true)
                         f._absorbBar:SetPoint("TOPLEFT", f._health, "TOPLEFT", 0, 0)
@@ -16796,8 +17165,8 @@ local function ApplyPreviewData(f, index)
                 end
                 if fw then
                     fw:ClearAllPoints()
-                    fw:SetPoint("BOTTOMLEFT", vfill, "TOPLEFT", 0, 0)
-                    fw:SetPoint("BOTTOMRIGHT", vfill, "TOPRIGHT", 0, 0)
+                    fw:SetPoint("BOTTOMLEFT", vfill, hpA, 0, 0)
+                    fw:SetPoint("BOTTOMRIGHT", vfill, hpB, 0, 0)
                 end
             elseif absorbMode == "right" or absorbMode == "left" then
                 cc:ClearAllPoints()
@@ -16820,19 +17189,19 @@ local function ApplyPreviewData(f, index)
                 local fill = f._health:GetStatusBarTexture()
                 cc:ClearAllPoints()
                 cc:SetPoint("TOPLEFT", f._health, "TOPLEFT", 0, 0)
-                cc:SetPoint("BOTTOMRIGHT", fill, "BOTTOMRIGHT", 0, 0)
+                cc:SetPoint("BOTTOMRIGHT", fill, hpB, 0, 0)
                 f._absorbBar:SetReverseFill(true)
                 f._absorbBar:ClearAllPoints()
-                f._absorbBar:SetPoint("TOPRIGHT", fill, "TOPRIGHT", 0, 0)
-                f._absorbBar:SetPoint("BOTTOMRIGHT", fill, "BOTTOMRIGHT", 0, 0)
+                f._absorbBar:SetPoint("TOPRIGHT", fill, hpA, 0, 0)
+                f._absorbBar:SetPoint("BOTTOMRIGHT", fill, hpB, 0, 0)
                 if fw then fw:Hide() end
             else
                 local fill = f._health:GetStatusBarTexture()
                 cc:ClearAllPoints()
                 cc:SetPoint("TOPLEFT", f._health, "TOPLEFT", 0, 0)
-                cc:SetPoint("BOTTOMRIGHT", fill, "BOTTOMRIGHT", 0, 0)
+                cc:SetPoint("BOTTOMRIGHT", fill, hpB, 0, 0)
                 mc:ClearAllPoints()
-                mc:SetPoint("TOPLEFT", fill, "TOPRIGHT", -1, 0)
+                mc:SetPoint("TOPLEFT", fill, hpA, -1, 0)
                 mc:SetPoint("BOTTOMRIGHT", f._health, "BOTTOMRIGHT", 0, 0)
                 -- Overlay backfill: overshield "From Left" mirrors the live
                 -- anchors (fill-edge + forward fill); else the classic
@@ -16842,8 +17211,8 @@ local function ApplyPreviewData(f, index)
                 if pvOsm2 == nil then pvOsm2 = (s.showOvershield == false) and "never" or "always" end
                 if pvOsm2 == "fromleft" and s.absorbStyle ~= "blizzardModern" then
                     f._absorbBar:SetReverseFill(false)
-                    f._absorbBar:SetPoint("TOPRIGHT", fill, "TOPRIGHT", 0, 0)
-                    f._absorbBar:SetPoint("BOTTOMRIGHT", fill, "BOTTOMRIGHT", 0, 0)
+                    f._absorbBar:SetPoint("TOPRIGHT", fill, hpA, 0, 0)
+                    f._absorbBar:SetPoint("BOTTOMRIGHT", fill, hpB, 0, 0)
                 else
                     f._absorbBar:SetReverseFill(true)
                     f._absorbBar:SetPoint("TOPRIGHT", f._health, "TOPRIGHT", 0, 0)
@@ -16855,8 +17224,8 @@ local function ApplyPreviewData(f, index)
             if not pvAbVert and fw then
                 local hfill = f._health:GetStatusBarTexture()
                 fw:ClearAllPoints()
-                fw:SetPoint("TOPLEFT", hfill, "TOPRIGHT", 0, 0)
-                fw:SetPoint("BOTTOMLEFT", hfill, "BOTTOMRIGHT", 0, 0)
+                fw:SetPoint("TOPLEFT", hfill, hpA, 0, 0)
+                fw:SetPoint("BOTTOMLEFT", hfill, hpB, 0, 0)
             end
         end
     end
@@ -16908,6 +17277,7 @@ local function ApplyPreviewData(f, index)
             local healMode = s.healAbsorbEdgeMode or "overlay"
             -- Vertical fill: same layout, axis swapped (mirrors the live branch).
             local pvHaVert = ns.RF_IsVerticalFill(s)
+            local hpA, hpB = ns.RF_HpEdge(pvHaVert, pvInvert)
             f._healAbsorbBar:SetOrientation(pvHaVert and "VERTICAL" or "HORIZONTAL")
             ns.RF_ApplyFillRotation(f._healAbsorbBar)
             if pvHaVert then
@@ -16919,7 +17289,7 @@ local function ApplyPreviewData(f, index)
                         f._healClip:SetPoint("BOTTOMRIGHT", f._health, "BOTTOMRIGHT", 0, 0)
                     else
                         f._healClip:SetPoint("BOTTOMLEFT", f._health, "BOTTOMLEFT", 0, 0)
-                        f._healClip:SetPoint("TOPRIGHT", vfill, "TOPRIGHT", 0, 0)
+                        f._healClip:SetPoint("TOPRIGHT", vfill, hpB, 0, 0)
                     end
                 end
                 f._healAbsorbBar:ClearAllPoints()
@@ -16933,8 +17303,8 @@ local function ApplyPreviewData(f, index)
                     f._healAbsorbBar:SetPoint("BOTTOMRIGHT", f._health, "BOTTOMRIGHT", 0, 0)
                 else
                     f._healAbsorbBar:SetReverseFill(true)
-                    f._healAbsorbBar:SetPoint("TOPLEFT", vfill, "TOPLEFT", 0, 0)
-                    f._healAbsorbBar:SetPoint("TOPRIGHT", vfill, "TOPRIGHT", 0, 0)
+                    f._healAbsorbBar:SetPoint("TOPLEFT", vfill, hpA, 0, 0)
+                    f._healAbsorbBar:SetPoint("TOPRIGHT", vfill, hpB, 0, 0)
                 end
             else
                 if f._healClip then
@@ -16944,7 +17314,7 @@ local function ApplyPreviewData(f, index)
                         f._healClip:SetPoint("BOTTOMRIGHT", f._health, "BOTTOMRIGHT", 0, 0)
                     else
                         f._healClip:SetPoint("TOPLEFT", f._health, "TOPLEFT", 0, 0)
-                        f._healClip:SetPoint("BOTTOMRIGHT", f._health:GetStatusBarTexture(), "BOTTOMRIGHT", 0, 0)
+                        f._healClip:SetPoint("BOTTOMRIGHT", f._health:GetStatusBarTexture(), hpB, 0, 0)
                     end
                 end
                 f._healAbsorbBar:ClearAllPoints()
@@ -16959,8 +17329,8 @@ local function ApplyPreviewData(f, index)
                 else
                     local fill = f._health:GetStatusBarTexture()
                     f._healAbsorbBar:SetReverseFill(true)
-                    f._healAbsorbBar:SetPoint("TOPRIGHT", fill, "TOPRIGHT", 0, 0)
-                    f._healAbsorbBar:SetPoint("BOTTOMRIGHT", fill, "BOTTOMRIGHT", 0, 0)
+                    f._healAbsorbBar:SetPoint("TOPRIGHT", fill, hpA, 0, 0)
+                    f._healAbsorbBar:SetPoint("BOTTOMRIGHT", fill, hpB, 0, 0)
                 end
             end
         end
@@ -16987,13 +17357,14 @@ local function ApplyPreviewData(f, index)
                 f._healPredBar:SetOrientation(pvPredVert and "VERTICAL" or "HORIZONTAL")
                 ns.RF_ApplyFillRotation(f._healPredBar)
                 if pFill then
+                    local hpA, hpB = ns.RF_HpEdge(pvPredVert, pvInvert)
                     f._healPredBar:ClearAllPoints()
                     if pvPredVert then
-                        f._healPredBar:SetPoint("BOTTOMLEFT", pFill, "TOPLEFT", 0, 0)
-                        f._healPredBar:SetPoint("BOTTOMRIGHT", pFill, "TOPRIGHT", 0, 0)
+                        f._healPredBar:SetPoint("BOTTOMLEFT", pFill, hpA, 0, 0)
+                        f._healPredBar:SetPoint("BOTTOMRIGHT", pFill, hpB, 0, 0)
                     else
-                        f._healPredBar:SetPoint("TOPLEFT", pFill, "TOPRIGHT", 0, 0)
-                        f._healPredBar:SetPoint("BOTTOMLEFT", pFill, "BOTTOMRIGHT", 0, 0)
+                        f._healPredBar:SetPoint("TOPLEFT", pFill, hpA, 0, 0)
+                        f._healPredBar:SetPoint("BOTTOMLEFT", pFill, hpB, 0, 0)
                     end
                 end
             end
@@ -17222,12 +17593,9 @@ local function ApplyPreviewData(f, index)
             -- Reset any prior vertex tint so fill/full render their explicit color cleanly.
             olTex:SetVertexColor(1, 1, 1, 1)
             if olMode == "fill" then
-                local fillTex = f._health:GetStatusBarTexture()
-                if fillTex then
-                    olTex:SetAllPoints(fillTex)
-                else
-                    olTex:SetAllPoints(f._health)
-                end
+                -- Current health, as on the live frames (the fill, or the rest of
+                -- the bar under Inverted Fill), off the bar oriented above.
+                ns.RF_AnchorCurHealth(olTex, f._health, f._health:GetStatusBarTexture())
                 olTex:SetColorTexture(dispelDC.r, dispelDC.g, dispelDC.b, olAlpha)
             elseif olMode == "full" then
                 olTex:SetAllPoints(f._health)
@@ -17607,6 +17975,31 @@ local function ApplyPreviewData(f, index)
         end
     end
 
+    -- Power text (preview): the sample member's bar value, only where its power bar shows and
+    -- (as Health Text) not on the dead or offline sample members.
+    -- f._pwtMode / f._pwtPer (mode and made-up amount per percent, nil = hidden) let the
+    -- Power Bar section's animated preview keep the text in step with the bar.
+    if f._powerText then
+        local pwtMode = s.powerTextMode or "none"
+        if hidePower or pwtMode == "none" or isDead or isOffline then
+            f._powerText:Hide()
+            f._pwtMode = nil
+        else
+            ApplyFont(f._powerText, s.powerTextSize or 8)
+            ns.AnchorRFText(f._powerText, ns.RF_BarHost(f._health, s), s.powerTextPosition or "bottom",
+                s.powerTextOffsetX or 0, s.powerTextOffsetY or 0,
+                f.kitG and f.kitG.health.w or (s.frameWidth or 72) * 0.75)
+            local pwtTok = EllesmereUI.CLASS_POWER_MAP[classToken] or "MANA"
+            f._pwtPer = (pwtTok == "MANA") and 2500 or 1
+            ns.RF_PowerTextInto(f._powerText, pwtMode, f._powerPct or 100, nil, nil, f._pwtPer)
+            local pr, pg, pb = ns.RF_PreviewTextColor(s.powerTextColorMode or "custom",
+                s.powerTextCustomColor, classToken, 1, 1, 1, pwtTok)
+            f._powerText:SetTextColor(pr, pg, pb, 0.9)
+            f._powerText:Show()
+            f._pwtMode = pwtMode
+        end
+    end
+
     -- Status text (DEAD / OFFLINE / AFK)
     if f._statusText then
         local pvStc = s.statusTextColor or { r = 1, g = 1, b = 1 }
@@ -17660,7 +18053,9 @@ local function ApplyPreviewData(f, index)
     -- Dead/DC overlay (mirror the live-frame status tint: full-cover bg)
     if isDead then
         if f._health then
-            f._health:SetValue(0)
+            -- Emptied under Inverted Fill too (a full missing-health bar), so the
+            -- current-health area the dispel wash covers stays empty, as live.
+            f._health:SetValue(pvInvert and 100 or 0)
             local ft = f._health:GetStatusBarTexture()
             if ft then ft:SetAlpha(0) end
         end
@@ -17677,7 +18072,7 @@ local function ApplyPreviewData(f, index)
         end
     elseif isOffline then
         if f._health then
-            f._health:SetValue(0)
+            f._health:SetValue(pvInvert and 100 or 0)  -- see the dead branch
             local ft = f._health:GetStatusBarTexture()
             if ft then ft:SetAlpha(0) end
         end
@@ -18018,7 +18413,8 @@ local function RefreshPreview()
             ApplyPreviewData(f, frameIdx)
 
             if f._health and previewHealthValues[frameIdx] then
-                f._health:SetValue(previewHealthValues[frameIdx])
+                local barPct = ns.RF_IsInvertedFill(s) and (100 - previewHealthValues[frameIdx]) or previewHealthValues[frameIdx]
+                f._health:SetValue(barPct)
                 f._healthPct = previewHealthValues[frameIdx]
             end
             if f._power and previewPowerValues[frameIdx] then
@@ -18366,6 +18762,11 @@ ns.GetFFD = GetFFD
 ns.previewFrames = previewFrames
 ns.previewHealthValues = previewHealthValues
 ns.previewPowerValues = previewPowerValues
+
+-- Party-aware sibling of PvEffectiveProfile, for the shared options tickers:
+-- party preview reads party-prefixed settings, raid preview reads the live
+-- profile through the real-preview effective overlay.
+ns.PvSettings = PvSettings
 
 -- Active-preview accessors for the options eyeballs (resolve raid vs party at
 -- call time so the health/power animations drive whichever preview is on screen).

@@ -199,6 +199,12 @@ function ns.AB_Forever()
     return ns.AB_Style() == "blizzard"
 end
 
+-- WoW Forever's frame and dividers behind Action Bar 1 (Show Bar Background):
+-- drawn under the variant unless the player hides them (foreverHideBarBg).
+function ns.AB_ForeverBg()
+    return ns.AB_Forever() and EAB.db.profile.foreverHideBarBg ~= true
+end
+
 -- SetAtlas for a stock-look texture: EllesmereUI.StockAtlas (retail art
 -- where the Forever client swaps the name), native under the WoW Forever
 -- look. Plain SetAtlas on retail.
@@ -492,7 +498,6 @@ local defaults = {
         procGlowType = 1,
         procGlowColor = { r = 1, g = 0.776, b = 0.376 },
         procGlowUseClassColor = false,
-        procGlowScale = 1.0,
         procGlowEnabled = false,
         -- Assisted Highlight ring: extra pixels per side beyond the button
         -- footprint. 0 = Blizzard's size (art sits exactly on the button).
@@ -547,6 +552,9 @@ for _, info in ipairs(BAR_CONFIG) do
         housingHideEnabled = false,
         barVisibility = "always",
         dragShow = false,
+        -- Hide Bar When Using Gamepad: on for every bar, inert until a
+        -- controller is connected with gamepad support enabled.
+        gamepadHideBar = true,
         visHideHousing = false,
         visOnlyInstances = false,
         visHideMounted = false,
@@ -775,6 +783,8 @@ local function ShouldQuickKeybindSurfaceBar(s)
     end
 
     -- Surfaces bars hidden by transient runtime rules, but explicit "Never" wins.
+    -- Hide Bar When Using Gamepad is not a Never: its verdict (EAB._padHide) is
+    -- off while this mode is open, so a controller player can bind those bars.
     local vis = s.barVisibility or "always"
     return not s.alwaysHidden and vis ~= "never"
 end
@@ -3592,10 +3602,12 @@ end
 --  -- the exact spike the mouseover fix removed. (On ns: 200-local cap.)
 -------------------------------------------------------------------------------
 ns._eabBarDormant = {}
--- HARD dormancy: bars whose visibility mode is "Never" (or disabled) cannot become
--- visible through ANY runtime condition -- no driver state, no combat edge. The only
--- reveal paths are a settings write or the Toggle Action Bar runtime override; both
--- funnel through RefreshRuntimeVisibility, which recomputes this map. While a bar is in this map EVERY per-event walk skips it,
+-- HARD dormancy: bars whose visibility mode is "Never" (or disabled, or hidden by
+-- Hide Bar When Using Gamepad) cannot become visible through ANY runtime condition --
+-- no driver state, no combat edge. The only reveal paths are a settings write, the
+-- Toggle Action Bar runtime override, a controller disconnect or Quick Keybind mode
+-- opening (out of combat only); all four funnel through RefreshRuntimeVisibility,
+-- which recomputes this map. While a bar is in this map EVERY per-event walk skips it,
 -- content classes included: the reveal reconcile below repaints each button from live
 -- state on the show edge, so correct-on-reveal holds at zero background cost.
 -- Conditional-visibility bars keep content-walk coverage (their reveal edges can fire
@@ -3614,7 +3626,10 @@ ns.IsNeverBar = function(info)
     if info.isStance or info.isPetBar or info.visibilityOnly then return false end
     local bars = EAB.db and EAB.db.profile and EAB.db.profile.bars
     local s = bars and bars[info.key]
-    local never = s and (s.alwaysHidden or s.enabled == false) or false
+    -- Hide Bar When Using Gamepad joins the set while a controller is connected
+    -- (EAB._padHide only turns on out of combat, see EAB._PadSync).
+    local never = s and (s.alwaysHidden or s.enabled == false
+        or (EAB._padHide and s.gamepadHideBar == true)) or false
     -- Toggle override wins both ways: hiding an Always bar hard-disables its UI
     -- work; showing a Never bar wakes it. Action bindings stay live.
     local override = EAB._visOverride and EAB._visOverride[info.key]
@@ -5796,10 +5811,12 @@ end
 
 -------------------------------------------------------------------------------
 --  Action Bar 1's chrome and the 20-segment data bars. WoW Forever: the metal
---  frame round the bar, the dividers between its buttons, the faction end
---  caps and the data bar segments, from Blizzard's own atlases (they draw the
+--  frame round the bar and the dividers between its buttons (Show Bar
+--  Background, on by default), the faction end caps (Show End Caps, on by
+--  default) and the data bar segments, from Blizzard's own atlases (they draw the
 --  Forever art on that client). Blizzard Style and Classic WoW UI: that
---  look's end caps, opt-in (showEndCaps). Built the first time a piece is on
+--  look's end caps, opt-in (showEndCaps); the EllesmereUI style: either
+--  look's caps, opt-in (euiEndCaps). Built the first time a piece is on
 --  (LayoutBar's tail, out of combat, stamp-gated; ApplyDataBarLayout); off,
 --  nothing is built and a built piece hides. All on ns: the main chunk is at
 --  the 200-local cap.
@@ -5867,16 +5884,23 @@ end
 
 -- The look whose end caps Action Bar 1 draws, or nil: WoW Forever's unless
 -- the player hides them (foreverHideEndCaps), Blizzard Style's and Classic
--- WoW UI's only once the player turns them on (showEndCaps; nil = off).
+-- WoW UI's only once the player turns them on (showEndCaps; nil = off), and
+-- under the EllesmereUI style only the art the player picks (euiEndCaps:
+-- "blizzard", "classic", or "forever" -- the Forever client's own art, which
+-- retail does not ship, so it reads as None there; nil = None).
 function ns.AB_CapsLook()
     local p = EAB.db and EAB.db.profile
     if not p then return nil end
     if ns.AB_Forever() then
         return (p.foreverHideEndCaps ~= true) and "forever" or nil
     end
-    if p.showEndCaps ~= true then return nil end
     local style = ns.AB_Style()
-    if style == "eui" then return nil end
+    if style == "eui" then
+        local art = p.euiEndCaps
+        if art == "forever" then return EllesmereUI.IS_FOREVER and "forever" or nil end
+        return (art == "blizzard" or art == "classic") and art or nil
+    end
+    if p.showEndCaps ~= true then return nil end
     return style
 end
 
@@ -5923,8 +5947,12 @@ function ns.AB_SetCapArt(tex, c, name, right)
         tex:SetTexture(name)
         if right then tex:SetTexCoord(1, 0, 0, 1) else tex:SetTexCoord(0, 1, 0, 1) end
     elseif c.stock then
+        -- The art can switch live on the same textures (the EllesmereUI style's
+        -- End Caps choice): clear a previous look's mirror or sheet coords first.
+        tex:SetTexCoord(0, 1, 0, 1)
         EllesmereUI.StockAtlas(tex, name)
     else
+        tex:SetTexCoord(0, 1, 0, 1)
         tex:SetAtlas(name)
     end
 end
@@ -6096,13 +6124,13 @@ function ns.AB_PaintBarChrome(st, owner, ox, oy, w, h, btnW, forever, look, mult
 end
 
 -- Action Bar 1's chrome, from LayoutBar's tail (MainBar only): WoW
--- Forever's frame and dividers, and the look's end caps on a horizontal bar.
--- The faction listener runs only while faction caps show: the pick a
--- neutral character makes, and one loading screen if the faction was not
--- known yet.
+-- Forever's frame and dividers (unless Show Bar Background is off), and the
+-- look's end caps on a horizontal bar. The faction listener runs only while
+-- faction caps show: the pick a neutral character makes, and one loading
+-- screen if the faction was not known yet.
 function ns.AB_ApplyBarChrome(frame, w, h, btnW, vertical, multi, n, step, extra, onePx)
     local st = ns._abChrome
-    local fv = ns.AB_Forever()
+    local fv = ns.AB_ForeverBg()
     local look = not vertical and ns.AB_CapsLook() or nil
     if not (fv or look) then
         if st then
@@ -6282,6 +6310,7 @@ local function LayoutBar(key)
             tostring(showES), tostring(s.mouseoverEnabled),
             ns.AB_Forever() and "forever" or ns.AB_Style(),
             key == "MainBar" and ns.AB_CapsLook() or "-",
+            key == "MainBar" and tostring(ns.AB_ForeverBg()) or "-",
             key == "MainBar" and tostring(p.endCapScale) or "-",
             key == "MainBar" and tostring(p.endCapOffsetX) or "-",
             key == "MainBar" and tostring(p.endCapOffsetY) or "-",
@@ -6774,10 +6803,10 @@ local function LayoutBar(key)
         end
     end
 
-    -- Action Bar 1's chrome: WoW Forever's frame and dividers (dividers only
-    -- on a one-line bar at spacing 2 or less, as Blizzard draws them) and the
-    -- look's end caps.
-    if key == "MainBar" and (ns._abChrome or ns.AB_Forever() or ns.AB_CapsLook()) then
+    -- Action Bar 1's chrome: WoW Forever's frame and dividers unless hidden
+    -- (dividers only on a one-line bar at spacing 2 or less, as Blizzard
+    -- draws them) and the look's end caps.
+    if key == "MainBar" and (ns._abChrome or ns.AB_ForeverBg() or ns.AB_CapsLook()) then
         local oneLine = (isVertical and totalCols or totalRows) == 1 and (s.buttonPadding or 2) <= 2
         ns.AB_ApplyBarChrome(frame, max(frameW, 1), max(frameH, 1), btnW, isVertical, totalRows > 1,
             oneLine and (isVertical and totalRows or totalCols) or 0,
@@ -9596,6 +9625,11 @@ end
 EAB.VIS_EDGES = { softTarget = true }
 
 local function BuildVisibilityString(info, s, visOverride)
+    -- Hide Bar When Using Gamepad compiles to the constant a Never bar gets, so
+    -- every writer that builds a bar's driver here agrees (combat-gated sites,
+    -- regen healers, housing/soft-target/pet rebuilds). An explicit override
+    -- (toggle keybind, drag, spellbook) still wins, as it does over Never.
+    if EAB._padHide and not visOverride and s.gamepadHideBar == true then return "hide" end
     local key = info.key
     local vis = visOverride or s.barVisibility or "always"
     -- An applied Visibility override replaces the whole setting, the shared option
@@ -10189,11 +10223,76 @@ ns._eabBuildSkippedBars = function()
     return built
 end
 
+-------------------------------------------------------------------------------
+--  Hide Bar When Using Gamepad (per bar, s.gamepadHideBar, default on; set
+--  on the Global Settings Gamepad page).
+--  "Using" means CONNECTED (EllesmereUI.PadConnected: gamepad support is on
+--  and a controller is present), never the last-input device, so a touch of
+--  the mouse cannot flicker a bar back. A hidden bar is hidden the way Never
+--  hides it: its driver compiles to "hide" (BuildVisibilityString) and it
+--  joins the Never set (ns.IsNeverBar). Two cached verdicts: EAB._padOn is the
+--  device verdict, EAB._padHide the one every bar reader uses (_padOn, except
+--  while Quick Keybind mode is open, which brings these bars back for binding).
+--  Both only turn ON out of combat: the secure drivers cannot follow in
+--  combat, and a still-visible bar in the Never set would skip its content
+--  walks for the rest of the fight. EAB fields, not locals: 200-local cap.
+-------------------------------------------------------------------------------
+-- Device edges arrive through EllesmereUI.WatchPad, one call per burst; a
+-- repaint only when the verdict flips.
+function EAB._PadFlush(on)
+    if on == EAB._padOn then return end
+    if InCombatLockdown() then
+        -- Keep the old verdict; the PLAYER_REGEN_ENABLED ApplyAll re-reads it.
+        EAB._padStale = true
+        ns._eabApplyDeferred = true
+        return
+    end
+    EAB._padOn = on
+    EAB:RefreshRuntimeVisibility()
+end
+
+-- Watches the device edges while any bar has the toggle on (unwatched they
+-- cost nothing) and re-reads the devices on the watch edge and after an edge
+-- that landed in combat. Runs ahead of the Never map and the drivers, so every
+-- settings path (options, profile swap, spec override) re-arms here, and once
+-- from FinishSetup before its pre-lockdown driver pass. Quick Keybind mode's
+-- open and close edges re-run it through RefreshRuntimeVisibility.
+function EAB._PadSync()
+    local bars = EAB.db.profile.bars
+    local any = false
+    for i = 1, #BAR_CONFIG do
+        local s = bars[BAR_CONFIG[i].key]
+        if s and s.gamepadHideBar == true then any = true break end
+    end
+    if any ~= (EAB._padArmed == true) then
+        EAB._padArmed = any
+        if any then
+            EllesmereUI.WatchPad(EAB, EAB._PadFlush)
+        else
+            EllesmereUI.UnwatchPad(EAB)
+        end
+        EAB._padStale = any or nil
+    end
+    if not any then
+        EAB._padOn = false
+    elseif EAB._padStale and not InCombatLockdown() then
+        EAB._padStale = nil
+        EAB._padOn = EllesmereUI.PadConnected()
+    end
+    -- A Quick Keybind close taken in combat keeps the bars up until its regen
+    -- FinishClose re-runs this.
+    local hide = (EAB._padOn and not _quickKeybindState.open) or false
+    if hide and not EAB._padHide and InCombatLockdown() then return end
+    EAB._padHide = hide
+end
+
 function EAB:RefreshRuntimeVisibility()
     -- Secure driver/mouse writes below are per-site combat-gated; a run
     -- during combat leaves those writes unapplied, and the REGEN_ENABLED
     -- ApplyAll (gated on this flag) is the healer.
     if InCombatLockdown() then ns._eabApplyDeferred = true end
+    -- Controller verdict first: the Never map and every driver below read it.
+    EAB._PadSync()
     -- Every settings path that can change a bar's Never/disabled status runs
     -- through here (this is where drivers re-derive), so this is the single
     -- recompute site for the hard-dormancy map the event walks gate on.
@@ -10337,6 +10436,8 @@ local MYSLOT_VIS_FIELDS = {
     -- The Match Mode scalar is its own store key outside visibilityModes; a
     -- surviving "any" makes the compiler build from the emptied set.
     "visibilityMatch",
+    -- Hide Bar When Using Gamepad would keep the bar hidden like Never.
+    "gamepadHideBar",
 }
 -- The option LANES (target/enemy/mounted macro lanes AND the Lua-only
 -- instance/housing/skyriding/resting/VEHICLE lanes) are enumerated by the
@@ -10409,6 +10510,7 @@ function EAB:SetMyslotForceShow(on)
                     for _, f in ipairs(optKeys) do s[f] = nil end
                 end
                 s.alwaysHidden = false
+                s.gamepadHideBar = false
                 s.mouseoverEnabled = false
                 -- Force FULL opacity, never the bar's real resting value: a
                 -- hidden-until-hover bar rests at mouseoverAlpha 0 (and the
@@ -10504,7 +10606,10 @@ function EAB:ToggleVisKey(key)
             local saved = s.barVisibility or "always"
             if saved == "always" or saved == "never" then
                 participants[#participants + 1] = info.key
-                local eff = (self._visOverride and self._visOverride[info.key]) or saved
+                -- A controller-hidden bar counts as hidden (as Never does), so
+                -- the first press shows it.
+                local eff = (self._visOverride and self._visOverride[info.key])
+                    or ((self._padHide and s.gamepadHideBar == true) and "never") or saved
                 if eff == "always" then anyShown = true end
             end
         end
@@ -11401,18 +11506,9 @@ end
 --  textures/animations with user-selected glow styles.
 -------------------------------------------------------------------------------
 
--- Loop glow types: atlas-based Blizzard FlipBook styles + procedural engines
-local LOOP_GLOW_TYPES = {
-    { name = "Pixel Glow",           procedural = true },
-    { name = "Custom Proc Glow",     buttonGlow = true },
-    { name = "Auto-Cast Shine",      autocast = true },
-    { name = "Shape Glow",           shapeGlow = true },
-    { name = "GCD",                  atlas = "RotationHelper_Ants_Flipbook", texPadding = 1.6 },
-    { name = "Modern WoW Glow",      atlas = "UI-HUD-ActionBar-Proc-Loop-Flipbook", texPadding = 1.4 },
-    { name = "Classic WoW Glow",     texture = "Interface\\SpellActivationOverlay\\IconAlertAnts",
-      rows = 5, columns = 5, frames = 25, duration = 0.3, frameW = 48, frameH = 48, texPadding = 1.25 },
-}
-ns.LOOP_GLOW_TYPES = LOOP_GLOW_TYPES
+-- Loop glow types: the shared glow styles in their shared order (saved procGlowType
+-- values are shared indices).
+local LOOP_GLOW_TYPES = EllesmereUI.Glows.MakeView({ 1, 2, 3, 4, 5, 6, 7 }).list
 
 -- Proc start types: the initial burst animation
 local PROC_START_TYPES = {
@@ -11506,15 +11602,12 @@ local function UpdateFlipbook(btn)
         end
     end
 
-    local cr, cg, cb
-    if p.procGlowUseClassColor then
-        local _, class = UnitClass("player")
-        local cc = RAID_CLASS_COLORS[class]
-        if cc then cr, cg, cb = cc.r, cc.g, cc.b else cr, cg, cb = 1, 1, 1 end
-    else
-        local c = p.procGlowColor or { r = 1, g = 0.776, b = 0.376 }
-        cr, cg, cb = c.r, c.g, c.b
-    end
+    -- Color mode: the class flag alone decides Class (legacy profiles and older
+    -- spec overrides carry only the flag); the mode key tells Default from
+    -- Custom. The options getter reads the same rule.
+    local c = p.procGlowColor or { r = 1, g = 0.776, b = 0.376 }
+    local cr, cg, cb = _G_Glows.ResolveColor(p.procGlowUseClassColor and "class"
+        or (p.procGlowColorMode == "default" and "default" or "custom"), c.r, c.g, c.b)
 
     local loopIdx = p.procGlowType or 1
     if loopIdx < 1 or loopIdx > #LOOP_GLOW_TYPES then loopIdx = 1 end
@@ -11525,6 +11618,12 @@ local function UpdateFlipbook(btn)
         end
     end
     local loopEntry = LOOP_GLOW_TYPES[loopIdx]
+    -- Default mode (nil color): the drawn engines use the suite gold; FlipBooks
+    -- keep the atlas's own untinted look.
+    if cr == nil and (loopEntry.procedural or loopEntry.buttonGlow or loopEntry.autocast or loopEntry.shapeGlow) then
+        local d = _G_Glows.DEFAULT_COLOR
+        cr, cg, cb = d.r, d.g, d.b
+    end
 
     if not fd.glowWrapper then
         local wrapper = CreateFrame("Frame", nil, btn:GetParent() or btn)
@@ -11559,13 +11658,17 @@ local function UpdateFlipbook(btn)
         local bW, bH = _ufBtnW, _ufBtnH
 
         if loopEntry.procedural then
-            local N = 8
-            local th = 2
-            local period = 4
+            local N = p.procGlowLines or 8
+            local th = p.procGlowThickness or 2
+            local period = p.procGlowSpeed or 4
             local lineLen = floor((bW + bH) * (2 / N - 0.1))
             lineLen = min(lineLen, min(bW, bH))
             if lineLen < 1 then lineLen = 1 end
-            _G_Glows.StartProceduralAnts(wrapper, N, th, period, lineLen, cr, cg, cb, bW, bH)
+            -- No fallback table per proc: an unset background color reads as black.
+            local bgOn, bgc = p.procGlowBackground, p.procGlowBackgroundColor
+            _G_Glows.StartProceduralAnts(wrapper, N, th, period, lineLen, cr, cg, cb, bW, bH,
+                bgOn and (bgc and bgc.r or 0) or nil, bgOn and (bgc and bgc.g or 0) or nil,
+                bgOn and (bgc and bgc.b or 0) or nil, bgOn and 1 or nil)
         elseif loopEntry.buttonGlow then
             _G_Glows.StartButtonGlow(wrapper, bW, cr, cg, cb, nil, bH)
         elseif loopEntry.autocast then
@@ -13365,7 +13468,8 @@ function EAB._UpdateSpellbookNeverBars(resync)
         for _, info in ipairs(BAR_CONFIG) do
             local s = EAB.db.profile.bars[info.key]
             if s and s.spellbookShow and s.enabled ~= false
-               and ((s.barVisibility or "always") ~= "always" or s.alwaysHidden)
+               and ((s.barVisibility or "always") ~= "always" or s.alwaysHidden
+                    or (EAB._padHide and s.gamepadHideBar == true))
                and not (EAB._visOverride and EAB._visOverride[info.key]) then
                 EAB._visOverride = EAB._visOverride or {}
                 EAB._visOverride[info.key] = "always"
@@ -13683,7 +13787,7 @@ local function RegisterWithUnlockMode()
                 -- a saved-Always bar toggled off does not.
                 local ov = EAB._visOverride and EAB._visOverride[info.key]
                 if ov then return ov == "never" end
-                return s.alwaysHidden
+                return s.alwaysHidden or (EAB._padHide and s.gamepadHideBar == true)
             end,
             getFrame = function() return barFrames[info.key] end,
             getSize = function()
@@ -14790,7 +14894,8 @@ function EAB:FinishSetup()
                 if not info.isStance and not info.isPetBar then
                     local s = EAB.db.profile.bars[info.key]
                     local frame = barFrames[info.key]
-                    if s and frame and not s.alwaysHidden then
+                    if s and frame and not s.alwaysHidden
+                       and not (EAB._padHide and s.gamepadHideBar == true) then
                         local vis = s.barVisibility or "always"
                         -- Any visibility option at all counts: a bar the player cannot
                         -- see is a bar they cannot drop a spell onto, so surfacing one
@@ -14844,8 +14949,10 @@ function EAB:FinishSetup()
             ns.EABQueueGrid(false)
         elseif event == "CVAR_UPDATE" then
             -- Name-filtered: CVAR_UPDATE fires for every cvar, dozens of times
-            -- at login. Only the lock matters to the drag wrapper.
-            if arg1 == "lockActionBars" then ns.EABSyncBarsLocked() end
+            -- at login. The lock matters to the drag wrapper; Cast Actions on
+            -- Key Down re-applies useOnKeyDown (combat-deferred).
+            if arg1 == "lockActionBars" then ns.EABSyncBarsLocked()
+            elseif arg1 == "ActionButtonUseKeyDown" then ApplyKeyDownCVar() end
         elseif event == "PLAYER_REGEN_ENABLED" then
             -- A lock toggled during combat deferred; pick it up on regen.
             ns.EABSyncBarsLocked()
@@ -14984,13 +15091,6 @@ function EAB:FinishSetup()
     self:RegisterEvent("ACTIONBAR_SHOWGRID", function() ns.EABQueueGrid(true) end)
     -- Pet actions fire their own grid events when dragging pet spells
     self:RegisterEvent("PET_BAR_SHOWGRID", function() ns.EABQueueGrid(true) end)
-
-    -- Re-apply useOnKeyDown when the "Press and Hold Casting" CVar changes.
-    self:RegisterEvent("CVAR_UPDATE", function(_, cvarName)
-        if cvarName == "ActionButtonUseKeyDown" then
-            ApplyKeyDownCVar()
-        end
-    end)
 
     -- Detect bar-to-bar drags (CURSOR_CHANGED) and clear grid state on drop.
     -- Also show mouseover-faded bars while dragging so the player can drop
@@ -15700,7 +15800,14 @@ function EAB:FinishSetup()
             local petInfo = BAR_LOOKUP["PetBar"]
             local petFrame = barFrames["PetBar"]
             local petS = self.db.profile.bars["PetBar"]
-            if petInfo and petFrame and petS and not petS.alwaysHidden then
+            -- Not while a runtime rule owns the driver (a surfacing override from
+            -- the toggle keybind or the spellbook, or Hide Bar When Using
+            -- Gamepad): RefreshRuntimeVisibility registered that string (an
+            -- override keeps the [pet] term), and a plain rebuild here would
+            -- stomp it on the reveal's own reconcile pass.
+            if petInfo and petFrame and petS and not petS.alwaysHidden
+               and not (self._visOverride and self._visOverride.PetBar)
+               and not (self._padHide and petS.gamepadHideBar == true) then
                 RegisterAttributeDriver(petFrame, "state-visibility", BuildVisibilityString(petInfo, petS))
             end
         end
@@ -15843,6 +15950,10 @@ function EAB:FinishSetup()
     -- _eabLastVisStr cache skips unchanged re-registrations, so the later ApplyAll
     -- pass is a no-op for these. Extra bars (built on a later timer) are nil-skipped
     -- here, exactly as on a normal login.
+    -- Controller verdict first (Hide Bar When Using Gamepad): on a combat
+    -- reload this is the last out-of-combat moment, and the first
+    -- RefreshRuntimeVisibility only lands after lockdown is back.
+    self._PadSync()
     self:ApplyCombatVisibility()
     self:UpdateVehicleBarWatch()
 
@@ -16158,6 +16269,9 @@ function ns.XPBarAtMaxLevel()
     return (maxLevel and level >= maxLevel) or false
 end
 
+-- WoW Forever: raw XP under 10,000 is not abbreviated (EllesmereUI_NumberFormat.lua).
+-- On ns, not a local: this chunk is at its 200-local cap.
+ns.AbbreviateLargeNumbers = (EllesmereUI.IS_FOREVER and EllesmereUI.ForeverAbbreviateLargeNumbers) or AbbreviateLargeNumbers
 local function UpdateXPBar()
     local frame, s = EAB_VTABLE.ExtraBars.BeginManagedDataBarUpdate("XPBar")
     if not frame then return end
@@ -16206,7 +16320,7 @@ local function UpdateXPBar()
     end
 
     if showRawValues then
-        strXP = format("%s / %s", AbbreviateLargeNumbers(currentXP), AbbreviateLargeNumbers(maxXP))
+        strXP = format("%s / %s", ns.AbbreviateLargeNumbers(currentXP), ns.AbbreviateLargeNumbers(maxXP))
     else
         local pct = (currentXP / maxXP) * 100
         strXP = format("%.1f%%", pct)
@@ -16214,7 +16328,7 @@ local function UpdateXPBar()
 
     if restedXP > 0 then
         if showRawValues then
-            strRested = format(EllesmereUI.L(" (Rested: %s)"), AbbreviateLargeNumbers(restedXP))
+            strRested = format(EllesmereUI.L(" (Rested: %s)"), ns.AbbreviateLargeNumbers(restedXP))
         else
             local restedPct = (restedXP / maxXP) * 100
             strRested = format(EllesmereUI.L(" (Rested: %.1f%%)"), restedPct)
@@ -16445,9 +16559,10 @@ end
 --  GetCurrentHouseLevelFavor(guid) -> HOUSE_LEVEL_FAVOR_UPDATED (level +
 --  favor payload); GetHouseLevelFavorForLevel(n) is the only sync read.
 -------------------------------------------------------------------------------
--- do-end scoped + ns export: the file-scope local budget is nearly at the
--- Lua 5.1 200 cap.
-do
+-- Block-scoped + ns export: the file-scope local budget is nearly at the
+-- Lua 5.1 200 cap. WoW Forever has no housing: there the block never runs,
+-- so no bar is built, nothing registers and ns._CreateFavorBar stays nil.
+if not EllesmereUI.IS_FOREVER then
 local favorState  -- { level, displayLevel, favor, needed } from the last payload
 local favorEv, favorArmed
 local ArmFavorEvents  -- forward: mutual recursion with UpdateFavorBar
@@ -16588,7 +16703,7 @@ local function CreateFavorBar()
 end
 
 ns._CreateFavorBar = CreateFavorBar
-end
+end -- not IS_FOREVER
 
 -------------------------------------------------------------------------------
 --  Register Data Bars with Unlock Mode: same pattern as action bars and
@@ -16601,7 +16716,9 @@ local function RegisterDataBarsWithUnlockMode()
     local elements = {}
     local orderBase = 300
     for idx, info in ipairs(EXTRA_BARS) do
-        if info.isDataBar then
+        -- Only a bar that was built gets a mover (WoW Forever never builds
+        -- the House Favor bar).
+        if info.isDataBar and dataBarFrames[info.key] then
             local bk = info.key
             elements[#elements + 1] = MK({
                 key   = bk,
@@ -18095,6 +18212,9 @@ local function EAB_UpdateQuickKeybindVisibility(show)
             EAB:ApplyClickThroughForBar(key)
         end
     else
+        -- Pad verdict back first (the open flag is already down), so the
+        -- drivers below compile Hide Bar When Using Gamepad again.
+        EAB._PadSync()
         EAB:ApplyCombatVisibility()
         EAB:RefreshRuntimeVisibility()
         for _, info in ipairs(BAR_CONFIG) do
@@ -18284,6 +18404,10 @@ _quickKeybindState.Open = function()
     if InCombatLockdown() then return end
     _quickKeybindState.closePending = false
     _quickKeybindState.open = true
+    -- Bars hidden by Hide Bar When Using Gamepad come back for binding: the
+    -- open flag drops the pad verdict (EAB._PadSync), so they leave the Never
+    -- set and surface below like any other runtime-hidden bar.
+    if EAB._padHide then EAB:RefreshRuntimeVisibility() end
     _quickKeybindState.InitButtons()
     _quickKeybindState.InitMacroFrame()
     EAB_UpdateQuickKeybindButtons(true)

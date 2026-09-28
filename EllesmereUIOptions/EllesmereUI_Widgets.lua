@@ -358,6 +358,8 @@ local function ResolveDisabledTip(cfg)
     if raw then return EllesmereUI.L(tt) end
     return DisabledTooltip(tt, cfg.requireState)
 end
+-- Shared with hand-placed controls that explain a site's lock the way its widgets do.
+EllesmereUI.ResolveDisabledTip = ResolveDisabledTip
 
 -- Disabled-tooltip overlay on a control frame (slider region, toggle, swatch): shows tooltip centered when hovered while disabled.
 local function AddControlDisabledTooltip(controlAnchor, cfg)
@@ -458,6 +460,10 @@ local function BuildDropdownMenu(ddBtn, menuW, order, values, getValue, setValue
     local _moMaxTextPct = _menuOpts and _menuOpts.maxTextWidthPct
     local _moOnItemHover = _menuOpts and _menuOpts.onItemHover
     local _moOnItemLeave = _menuOpts and _menuOpts.onItemLeave
+    -- Caption font override ({ path, size, flags }) and native atlas icon colours, so a
+    -- menu can match the UI it opens from (e.g. the CDM options' own flyouts).
+    local _moLabelFont = _menuOpts and _menuOpts.labelFont
+    local _moIconNative = _menuOpts and _menuOpts.iconNativeColor
     -- Optional in-menu search box (_menuOpts.searchable): filter field hides non-matching items and repositions the rest. Flat lists only (no subnav, no dividers).
     local _moSearchable = _menuOpts and _menuOpts.searchable
     local SEARCH_H = 26
@@ -493,7 +499,7 @@ local function BuildDropdownMenu(ddBtn, menuW, order, values, getValue, setValue
 
     if _moSearchable then
         -- Options panel is Expressway-locked by design; EllesmereUI.EXPRESSWAY is locale-aware (CJK/Cyrillic get the system glyph font). The user's global font intentionally never restyles the settings UI.
-        local fontPath = EllesmereUI.EXPRESSWAY or "Fonts\\FRIZQT__.TTF"
+        local fontPath = (_moLabelFont and _moLabelFont[1]) or EllesmereUI.EXPRESSWAY or "Fonts\\FRIZQT__.TTF"
         searchEdit = CreateFrame("EditBox", nil, menu)
         searchEdit:SetSize(menuW - 16, SEARCH_H)
         searchEdit:SetPoint("TOP", menu, "TOP", 0, -4)
@@ -739,6 +745,7 @@ local function BuildDropdownMenu(ddBtn, menuW, order, values, getValue, setValue
                 end
             end
             local iLbl = MakeFont(item, 13, nil, TEXT_DIM_R, TEXT_DIM_G, TEXT_DIM_B, TEXT_DIM_A)
+            if _moLabelFont then iLbl:SetFont(_moLabelFont[1], _moLabelFont[2] or 13, _moLabelFont[3] or "") end
             if itemFont then iLbl:SetFont(itemFont, 13, "") end
             iLbl:SetAlpha(1)
             iLbl:SetPoint("LEFT", item, "LEFT", isWide and 12 or 10, 0)
@@ -773,22 +780,25 @@ local function BuildDropdownMenu(ddBtn, menuW, order, values, getValue, setValue
                             iconBtn:SetPushedAtlas(pressedAtlas)
                         end
                         iconBtn:SetHighlightAtlas(_haveAtlas)
-                        -- Atlas icons carry an intrinsic colour; SetVertexColor only scales it, so desaturate first, then tint to #929292.
+                        -- Atlas icons carry an intrinsic colour; SetVertexColor only scales it, so desaturate first, then tint to #929292
+                        -- (skipped when the menu keeps native colours).
                         local _nr, _ng, _nb = 0.573, 0.573, 0.573
                         local nrmTex = iconBtn:GetNormalTexture()
-                        if nrmTex then
+                        if nrmTex and not _moIconNative then
                             if nrmTex.SetDesaturated then nrmTex:SetDesaturated(true) end
                             nrmTex:SetVertexColor(_nr, _ng, _nb, 1)
                         end
                         local psdTex = iconBtn:GetPushedTexture()
-                        if psdTex then
+                        if psdTex and not _moIconNative then
                             if psdTex.SetDesaturated then psdTex:SetDesaturated(true) end
                             psdTex:SetVertexColor(_nr, _ng, _nb, 1)
                         end
                         local hlTex = iconBtn:GetHighlightTexture()
                         if hlTex then
-                            if hlTex.SetDesaturated then hlTex:SetDesaturated(true) end
-                            hlTex:SetVertexColor(_nr, _ng, _nb, 1)
+                            if not _moIconNative then
+                                if hlTex.SetDesaturated then hlTex:SetDesaturated(true) end
+                                hlTex:SetVertexColor(_nr, _ng, _nb, 1)
+                            end
                             hlTex:SetAlpha(0.4)
                         end
                     else
@@ -4833,6 +4843,20 @@ local function BuildCogPopup(opts)
                 lbl:SetText(EllesmereUI.L(row.label))
                 lbl:SetPoint('LEFT', pf, 'TOPLEFT', SIDE_PAD, curY - ROW_H / 2 - 1)
 
+                if row.tooltip then
+                    local hitFrame = CreateFrame("Frame", nil, pf)
+                    hitFrame:SetPoint("TOPLEFT", lbl, "TOPLEFT", -2, 2)
+                    hitFrame:SetPoint("BOTTOMRIGHT", lbl, "BOTTOMRIGHT", 2, -2)
+                    hitFrame:SetFrameLevel(pf:GetFrameLevel() + 3)
+                    hitFrame:EnableMouse(true)
+                    hitFrame:SetScript("OnEnter", function()
+                        EllesmereUI.ShowWidgetTooltip(lbl, row.tooltip)
+                    end)
+                    hitFrame:SetScript("OnLeave", function()
+                        EllesmereUI.HideWidgetTooltip()
+                    end)
+                end
+
                 local cpSwatch, cpUpdate = BuildColorSwatch(pf, pf:GetFrameLevel() + 2,
                     function() return row.get() end,
                     function(r, g, b, a)
@@ -6864,6 +6888,46 @@ local function BuildInlineCog(rgn, opts)
     State()
     if opts.disabled then RegisterWidgetRefresh(State) end
     return btn, show
+end
+
+-- Inline text button on a DualRow half-region, left of its last inline item or
+-- control (or at the half's right edge when it has neither, e.g. a label half).
+-- opts: width (110), height (24), gap (8), chain (default true: becomes
+-- region._lastInline), disabled + disabledTooltip/rawTooltip/requireState (as
+-- ResolveDisabledTip): greyed, click-blocked and explaining itself while
+-- disabled, re-checked with the page's widgets. Returns the button; nil during
+-- the search prebuild.
+function EllesmereUI.BuildInlineButton(rgn, text, onClick, opts)
+    if EllesmereUI._prebuilding then return end
+    opts = opts or {}
+    local btn = CreateFrame("Button", nil, rgn)
+    PP.Size(btn, opts.width or 110, opts.height or 24)
+    local anchor = (opts.chain ~= false and rgn._lastInline) or rgn._control
+    if anchor then
+        PP.Point(btn, "RIGHT", anchor, "LEFT", -(opts.gap or 8), 0)
+    else
+        PP.Point(btn, "RIGHT", rgn, "RIGHT", -20, 0)
+    end
+    if opts.chain ~= false then rgn._lastInline = btn end
+    btn:SetFrameLevel(rgn:GetFrameLevel() + 5)
+    MakeStyledButton(btn, text, 11, WB_COLOURS, onClick)
+    if opts.disabled then
+        local function State()
+            local off = opts.disabled() and true or false
+            btn:SetEnabled(not off)
+            btn:SetAlpha(off and 0.35 or 1)
+        end
+        -- A disabled button still gets hover: show why it is locked.
+        btn:HookScript("OnEnter", function(self)
+            if not opts.disabled() then return end
+            local tip = ResolveDisabledTip(opts)
+            if tip then ShowWidgetTooltip(self, tip) end
+        end)
+        btn:HookScript("OnLeave", function() HideWidgetTooltip() end)
+        State()
+        RegisterWidgetRefresh(State)
+    end
+    return btn
 end
 
 -------------------------------------------------------------------------------
@@ -9258,13 +9322,17 @@ EllesmereUI.VIS_ROW_ITEMS = {
     { key = "in_raid",  label = "In Raid Group", axis = "group", hide = "hide_in_raid" },
     { key = "in_party", label = "In Party",      axis = "group", hide = "hide_in_party" },
     { key = "solo",     label = "Solo",          axis = "group", hide = "hide_solo" },
-    { key = "skyAirborne", label = "Skyriding (Airborne)", axis = "mode",
+    -- `forever`: the value WoW Forever pins this condition to (that client has no
+    -- skyriding and no housing), "never" or "always" true. AttachVisibilityChecklist
+    -- leaves such a row out there unless a lane that still acts on that client is set
+    -- (see ForeverRowHidden).
+    { key = "skyAirborne", label = "Skyriding (Airborne)", axis = "mode", forever = "never",
       show = "show_dragonriding", hide = "hide_dragonriding",
       tooltip = "Only while AIRBORNE on a glide-capable mount or flight form. For the mount itself, ground included, use Skyriding Mount." },
-    { key = "notSkyAirborne", label = "Not Skyriding (Airborne)", axis = "mode",
+    { key = "notSkyAirborne", label = "Not Skyriding (Airborne)", axis = "mode", forever = "always",
       show = "show_not_dragonriding", hide = "hide_not_dragonriding",
       tooltip = "The exact inverse of Skyriding (Airborne): anything that is not airborne on a glide-capable mount or flight form, standing on the ground included." },
-    { key = "skyMount", label = "Skyriding Mount", axis = "opt",
+    { key = "skyMount", label = "Skyriding Mount", axis = "opt", forever = "never",
       show = "visOnlySkyriding", hide = "visHideDragonriding",
       tooltip = "While on a glide-capable mount, ground included, where Blizzard shows its vigor HUD. Skyriding (Airborne) additionally requires you to be flying." },
     { key = "instances", label = "Instances", axis = "opt",
@@ -9273,7 +9341,7 @@ EllesmereUI.VIS_ROW_ITEMS = {
     { key = "dungeons", label = "Dungeons", axis = "opt",
       show = "visOnlyDungeons", hide = "visHideDungeons",
       tooltip = "Five-player dungeons, Mythic+ included. Delves, raids and scenarios do not count." },
-    { key = "housing", label = "Housing", axis = "opt",
+    { key = "housing", label = "Housing", axis = "opt", forever = "never",
       show = "visOnlyHousing", hide = "visHideHousing",
       tooltip = "While you are inside a house or plot." },
     { key = "mounted", label = "Mounted", axis = "opt",
@@ -9351,10 +9419,35 @@ function EllesmereUI.AttachVisibilityChecklist(region, opts)
         return nil
     end
     local function OrphanActive() return OrphanScalar() ~= nil end
+
+    -- WoW Forever: a row flagged `forever` is left out unless this store has a lane on
+    -- that still does something there -- the Show lane of a never-true condition (it
+    -- keeps the element hidden), or either lane of an always-true one. A value that
+    -- arrived with an imported profile therefore stays visible and can be cleared;
+    -- every other lane of such a row is inert on that client.
+    local foreverSel
+    local function ForeverLaneOn(def, k)
+        if def.axis == "opt" then
+            if opts.getOption then return opts.getOption(k) == true end
+            local store = opts.getStore()
+            return (store and store[k]) == true
+        end
+        if foreverSel == nil then
+            local store = opts.getStore()
+            foreverSel = store and EllesmereUI.GetVisibilitySelection(store, legacyKey, true) or false
+        end
+        return foreverSel ~= false and foreverSel[k] == true
+    end
+    local function ForeverRowHidden(def)
+        if ForeverLaneOn(def, def.show) then return false end
+        return not (def.forever == "always" and ForeverLaneOn(def, def.hide))
+    end
+
     for _, def in ipairs(EllesmereUI.VIS_ROW_ITEMS) do
         if def.isHeader then
             items[#items + 1] = def
-        elseif not (def.key == "mouseover" and caps.noMouseover) then
+        elseif not (def.key == "mouseover" and caps.noMouseover)
+            and not (def.forever and EllesmereUI.IS_FOREVER and ForeverRowHidden(def)) then
             local item = { key = def.key, label = def.label, tooltip = def.tooltip,
                            dual = def.axis and true or nil,
                            isModifier = def.modifier }
@@ -10550,8 +10643,12 @@ local MC_CARD_GAP   = 14
 
 -- One expandable module card (adapted from the Window Skins card). opts:
 -- enabled, expanded (session table keyed by tile.key), descW,
--- glyph(hdr, enabled) builds the left glyph, headerDD(hdr) -> dd or nil.
+-- glyph(hdr, enabled) builds the left glyph, headerDD(hdr) -> dd or nil,
+-- searchDesc: what search indexes (and the header's section name carries) in
+-- place of tile.desc, for a card whose description is live (a count).
 -- A disabled module's card is inert: dimmed header, tag and tooltip only.
+-- Sets tile._hdr and tile._descFS (the header and its description line)
+-- before tile.buildContent runs, for content that updates the header.
 function EllesmereUI.BuildModuleCard(parent, y, W, tile, opts)
     local PP = EllesmereUI.PanelPP
     local EG = EllesmereUI.ELLESMERE_GREEN
@@ -10571,15 +10668,17 @@ function EllesmereUI.BuildModuleCard(parent, y, W, tile, opts)
 
     -- The header is its own pseudo-section, so searching the module name
     -- lands on the card; each page's deep-link pre-hook expands cards first.
-    local searchName = tile.display .. " " .. (tile.desc or "")
+    local sDesc = opts.searchDesc
+    if sDesc == nil then sDesc = tile.desc or "" end
+    local searchName = tile.display .. " " .. sDesc
     hdr._isSectionHeader = true
     hdr._sectionName = searchName
-    local searchNameLoc = L(tile.display) .. " " .. L(tile.desc or "")
+    local searchNameLoc = L(tile.display) .. " " .. L(sDesc)
     if searchNameLoc ~= searchName then hdr._sectionNameLoc = searchNameLoc end
     if EllesmereUI._RegisterSearchEntry then
         local titleLoc = L(tile.display)
-        local descSearch = tile.desc or ""
-        local descLoc = L(tile.desc or "")
+        local descSearch = sDesc
+        local descLoc = L(sDesc)
         if descLoc ~= descSearch then descSearch = descSearch .. " " .. descLoc end
         EllesmereUI._RegisterSearchEntry(tile.display,
             titleLoc ~= tile.display and titleLoc or nil,
@@ -10603,6 +10702,7 @@ function EllesmereUI.BuildModuleCard(parent, y, W, tile, opts)
     desc:SetJustifyH("LEFT")
     desc:SetWordWrap(false)
     desc:SetText(L(tile.desc or ""))
+    tile._hdr, tile._descFS = hdr, desc
 
     if not enabled then
         title:SetAlpha(0.4)
@@ -10862,7 +10962,7 @@ function EllesmereUI.BuildManagerTile(parentFrame, y, opts)
         delBtn:SetFrameLevel(tile:GetFrameLevel() + 2)
         local delTex = delBtn:CreateTexture(nil, "OVERLAY")
         delTex:SetAllPoints()
-        delTex:SetAtlas("common-icon-delete")
+        EllesmereUI.SetDeleteIcon(delTex)
         delTex:SetDesaturated(true)
         delTex:SetVertexColor(0.75, 0.75, 0.75)
         delBtn:SetAlpha(0.5)

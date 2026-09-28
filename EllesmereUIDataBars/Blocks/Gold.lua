@@ -116,11 +116,13 @@ local function UpdateGoldEvents()
     end
 end
 
+-- General-purpose bags only (family 0), like the Bags block: a quiver, soul
+-- bag or profession bag cannot take ordinary loot.
 local function GetFreeBagSlots()
     local free = 0
     for i = 0, 4 do
-        local n = C_Container and C_Container.GetContainerNumFreeSlots(i)
-        if n then free = free + n end
+        local n, family = C_Container.GetContainerNumFreeSlots(i)
+        if n and (not family or family == 0) then free = free + n end
     end
     return free
 end
