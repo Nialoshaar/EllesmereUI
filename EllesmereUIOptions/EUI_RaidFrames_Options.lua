@@ -5595,6 +5595,10 @@ initFrame:SetScript("OnEvent", function(self)
                       tooltip="Collapse subgroups that have no members so the remaining groups close ranks. For example, if only groups 1, 2, 3 and 6 have players, they show with no gaps instead of leaving empty space where groups 4 and 5 would be. Real raid frames only.",
                       get=function() return SVal("hideEmptyGroups", true) end,
                       set=function(v) SSet("hideEmptyGroups", v) end },
+                    { type="toggle", label="Hide Groups 5-8 in Mythic Raid",
+                      tooltip="Mythic raids allow only 20 players (groups 1-4), so hide groups 5-8 while inside one. Groups 1-4 still follow Show Groups, and Show Groups applies as normal everywhere else.",
+                      get=function() return SVal("mythicRaidHideGroups", false) end,
+                      set=function(v) SSet("mythicRaidHideGroups", v) end },
                     { type="toggle", label="Exclude Hidden from Size",
                       tooltip="When using custom raid sizes, don't count members in hidden groups toward the raid-size breakpoint. For example, if you hide groups 7 and 8, a full 40-man raid is sized as if it were 24-man instead of jumping to the 30-man frame size. Has no effect unless you have custom raid sizes set up.",
                       get=function() return SVal("excludeHiddenGroupsFromSize", true) end,
@@ -6791,6 +6795,8 @@ initFrame:SetScript("OnEvent", function(self)
                 local mode = db.profile.previewMode or "overlay"
                 if mode ~= "none" and ns.ShowPartyPreview then ns.ShowPartyPreview() end
             elseif page == PAGE_BUFFS then
+                -- Panel opening on Buffs counts as entering it (WoW Forever: All Specs).
+                ns.BM_EnterAllSpecs()
                 if not ns._bmRoot then
                     C_Timer.After(0, function()
                         if EllesmereUI:GetActiveModule() == "EllesmereUIRaidFrames" then
@@ -6891,6 +6897,8 @@ initFrame:SetScript("OnEvent", function(self)
         local origSelectPage = EllesmereUI.SelectPage
         EllesmereUI.SelectPage = function(self, pageName, ...)
             _partyCtx = (pageName == PAGE_PARTY)
+            -- Entering Buffs from another page (not a rebuild while on it): WoW Forever opens it on All Specs.
+            if pageName == PAGE_BUFFS and EllesmereUI:GetActivePage() ~= PAGE_BUFFS then ns.BM_EnterAllSpecs() end
             -- Party tab excludes synced sections from inline search; cleared on every other page (any module) so the hook can never leak.
             EllesmereUI._searchExcludeSection = (pageName == PAGE_PARTY) and ns._PartySearchExclude or nil
             EllesmereUI._onInlineSearch = (pageName == PAGE_PARTY) and ns._PartySearchOverlaySync or nil

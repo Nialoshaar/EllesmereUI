@@ -2452,22 +2452,9 @@ end
 -- own SetSize/ClearAllPoints/SetPoint ADDON_ACTION_BLOCKED in combat (a protected
 -- anchor-dependent poisons its anchor ancestor's geometry) -- while the cinematic/
 -- faction/vehicle recovery lane legitimately re-drives config mid-combat. Keyed and
--- coalesced; the event is registered only while something is queued, so idle cost is
--- zero.
-local pabRegenApplies = {}
-local pabRegenFrame
+-- coalesced through the addon's shared ns.CombatQueue.
 local function QueuePABRegenApply(key, fn)
-    pabRegenApplies[key] = fn
-    if not pabRegenFrame then
-        pabRegenFrame = CreateFrame("Frame")
-        pabRegenFrame:SetScript("OnEvent", function(self)
-            self:UnregisterEvent("PLAYER_REGEN_ENABLED")
-            local pending = pabRegenApplies
-            pabRegenApplies = {}
-            for _, apply in pairs(pending) do apply() end
-        end)
-    end
-    pabRegenFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
+    ns.CombatQueue.Defer("PAB:" .. key, fn)
 end
 
 -- Combat-safe Show/Hide for a bar PARENT. The engine aura container is a
