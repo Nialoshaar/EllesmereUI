@@ -1576,6 +1576,10 @@ function ns.BM_BuildSimplePreview(parent, s, fontPath, PP, centerX, topY, opts)
 
     local rawPowerH = (s.powerShowForHealer or s.powerShowForTank or s.powerShowForDPS) and (s.powerHeight or 4) or 0
     local rawTopBarH = s.topNameBarEnabled and (s.topNameBarHeight or 20) or 0
+    -- Show on Bottom: the bar takes the bottom edge, health starts at the top and
+    -- the power bar sits on the bar (as the live LayoutTopNameBar lays it out).
+    local rawBottomY = (s.topNameBarEnabled and s.topNameBarBottom == true) and rawTopBarH or 0
+    local healthTopY = (rawBottomY > 0) and 0 or -rawTopBarH
     local healthH = rawH - rawPowerH - rawTopBarH
 
     -- Health bar (matches the custom preview build exactly)
@@ -1584,8 +1588,8 @@ function ns.BM_BuildSimplePreview(parent, s, fontPath, PP, centerX, topY, opts)
         or "Interface\\Buttons\\WHITE8X8"
     local health = CreateFrame("StatusBar", nil, pvFrame)
     health:SetFrameLevel(pvFrame:GetFrameLevel() + 2)
-    health:SetPoint("TOPLEFT", pvFrame, "TOPLEFT", 0, -rawTopBarH)
-    health:SetPoint("TOPRIGHT", pvFrame, "TOPRIGHT", 0, -rawTopBarH)
+    health:SetPoint("TOPLEFT", pvFrame, "TOPLEFT", 0, healthTopY)
+    health:SetPoint("TOPRIGHT", pvFrame, "TOPRIGHT", 0, healthTopY)
     health:SetHeight(healthH)
     health:SetStatusBarTexture(texPath)
     health:GetStatusBarTexture():SetHorizTile(false)
@@ -1597,7 +1601,7 @@ function ns.BM_BuildSimplePreview(parent, s, fontPath, PP, centerX, topY, opts)
         local pvUniformRef = CreateFrame("Frame", nil, pvFrame)
         pvUniformRef:SetFrameLevel(health:GetFrameLevel())
         pvUniformRef:SetPoint("TOPLEFT", health, "TOPLEFT", 0, 0)
-        pvUniformRef:SetPoint("BOTTOMRIGHT", pvFrame, "BOTTOMRIGHT", 0, 0)
+        pvUniformRef:SetPoint("BOTTOMRIGHT", pvFrame, "BOTTOMRIGHT", 0, rawBottomY)
         health._euiUniformRef = pvUniformRef
         pvUniformRef._euiHealth = health
     end
@@ -1648,8 +1652,8 @@ function ns.BM_BuildSimplePreview(parent, s, fontPath, PP, centerX, topY, opts)
     if rawPowerH > 0 then
         local power = CreateFrame("StatusBar", nil, pvFrame)
         power:SetFrameLevel(pvFrame:GetFrameLevel() + 3)
-        power:SetPoint("BOTTOMLEFT", pvFrame, "BOTTOMLEFT", 0, 0)
-        power:SetPoint("BOTTOMRIGHT", pvFrame, "BOTTOMRIGHT", 0, 0)
+        power:SetPoint("BOTTOMLEFT", pvFrame, "BOTTOMLEFT", 0, rawBottomY)
+        power:SetPoint("BOTTOMRIGHT", pvFrame, "BOTTOMRIGHT", 0, rawBottomY)
         power:SetHeight(rawPowerH)
         power:SetStatusBarTexture(texPath)
         power:GetStatusBarTexture():SetHorizTile(false)
@@ -1734,7 +1738,15 @@ function ns.BM_BuildSimplePreview(parent, s, fontPath, PP, centerX, topY, opts)
     end
     local playerName = UnitName("player") or "Player"
     if Ambiguate then playerName = Ambiguate(playerName, "short") end
-    nameFS:SetText(playerName)
+    if ns.RF_FormatName then playerName = ns.RF_FormatName(playerName, s) end
+    -- Level Position "Attach to Name" (either format): the level in front of the name.
+    local lvlPos = s.levelTextPosition or ns.RF_LEVEL_DEFAULT
+    local lvlAttach = ns.RF_LEVEL_ATTACH[lvlPos]
+    if lvlAttach then
+        nameFS:SetFormattedText(lvlAttach[1], ns._RFPreviewLevel(), playerName)
+    else
+        nameFS:SetText(playerName)
+    end
     local nameMode = s.nameColorMode or "class"
     if nameMode == "accent" then
         local ar, ag, ab = EllesmereUI.ResolveActiveAccent()
@@ -1750,8 +1762,13 @@ function ns.BM_BuildSimplePreview(parent, s, fontPath, PP, centerX, topY, opts)
     if s.topNameBarEnabled then
         local tnb = CreateFrame("Frame", nil, pvFrame)
         tnb:SetFrameLevel(pvFrame:GetFrameLevel() + 4)
-        tnb:SetPoint("TOPLEFT", pvFrame, "TOPLEFT", 0, 0)
-        tnb:SetPoint("TOPRIGHT", pvFrame, "TOPRIGHT", 0, 0)
+        if rawBottomY > 0 then
+            tnb:SetPoint("BOTTOMLEFT", pvFrame, "BOTTOMLEFT", 0, 0)
+            tnb:SetPoint("BOTTOMRIGHT", pvFrame, "BOTTOMRIGHT", 0, 0)
+        else
+            tnb:SetPoint("TOPLEFT", pvFrame, "TOPLEFT", 0, 0)
+            tnb:SetPoint("TOPRIGHT", pvFrame, "TOPRIGHT", 0, 0)
+        end
         tnb:SetHeight(rawTopBarH)
         local tnbBg = tnb:CreateTexture(nil, "BACKGROUND")
         tnbBg:SetAllPoints()
@@ -1760,7 +1777,11 @@ function ns.BM_BuildSimplePreview(parent, s, fontPath, PP, centerX, topY, opts)
         local tnbText = tnb:CreateFontString(nil, "OVERLAY")
         tnbText:SetFont(fontPath, s.topNameBarTextSize or 11, outline)
         tnbText:SetWordWrap(false)
-        tnbText:SetText(playerName)
+        if lvlAttach then
+            tnbText:SetFormattedText(lvlAttach[1], ns._RFPreviewLevel(), playerName)
+        else
+            tnbText:SetText(playerName)
+        end
         local talign = s.topNameBarTextAlign or "center"
         local tox = s.topNameBarTextOffsetX or 0
         local toy = s.topNameBarTextOffsetY or 0
@@ -1825,6 +1846,18 @@ function ns.BM_BuildSimplePreview(parent, s, fontPath, PP, centerX, topY, opts)
         local pr, pg, pb = ns.RF_PreviewTextColor(s.powerTextColorMode or "custom",
             s.powerTextCustomColor, previewClass, 1, 1, 1, "MANA")
         ptFS:SetTextColor(pr, pg, pb, 0.9)
+    end
+
+    -- Level text on its own spot, in the name's colour, like the live frames.
+    if lvlPos ~= "none" and not lvlAttach then
+        local lvFS = nameCarrier:CreateFontString(nil, "OVERLAY")
+        EllesmereUI.PrimeFontShadow(lvFS, outline == "" and EllesmereUI.GetFontUseShadow("raidFrames"))
+        lvFS:SetFont(fontPath, s.levelTextSize or 10, outline)
+        lvFS:SetWordWrap(false)
+        ns.AnchorRFText(lvFS, health, lvlPos, s.levelTextOffsetX or 0, s.levelTextOffsetY or 0)
+        lvFS:SetFormattedText("%d", ns._RFPreviewLevel())
+        lvFS:SetTextColor(ns.RF_PreviewTextColor(s.nameColorMode or "class",
+            s.nameCustomColor, previewClass, 1, 1, 1))
     end
 
     pvFrame._health = health
@@ -2027,6 +2060,7 @@ function ns.BM_BuildPage(pageName, parent, yOffset)
                     local POPUP_W, POPUP_PAD, ROW_H, LABEL_H = 260, 10, 30, 14
                     local LBL_GAP, DD_GAP = 4, 11
                     local popup = CreateFrame("Frame", nil, ov)
+                    popup:Hide()  -- start hidden so Show() triggers OnShow
                     popup:SetFrameStrata("DIALOG")
                     popup:SetFrameLevel(ov:GetFrameLevel() + 20)
                     popup:SetSize(POPUP_W, POPUP_PAD + LABEL_H + LBL_GAP + ROW_H + DD_GAP + ROW_H + POPUP_PAD)
@@ -2404,6 +2438,7 @@ function ns.BM_BuildPage(pageName, parent, yOffset)
                 local GAP = 6
 
                 popup = CreateFrame("Frame", nil, UIParent)
+                popup:Hide()  -- start hidden so Show() triggers OnShow
                 popup:SetFrameStrata("DIALOG")
                 popup:SetFrameLevel(200)
                 local LBL_GAP = 4   -- label to dropdown

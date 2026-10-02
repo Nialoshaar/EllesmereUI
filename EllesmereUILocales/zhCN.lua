@@ -1173,7 +1173,7 @@ L["The dark counterpart to Lazar's Dawn. A moody, high-contrast layout that keep
 L["This profile string does not carry any override data."] = "此配置字符串不包含任何覆盖数据。"
 L["This profile was made at %1$d%% UI scale; yours is %2$d%%. Change your UI scale to match the imported profile? This will show all profiles at this scale as UI Scale is not a per-profile setting, but can be changed at any time back to your original value."] = "此配置是在 %1$d%% UI 缩放比例下制作的；你的是 %2$d%%。是否更改 UI 缩放以匹配导入的配置？这会使所有配置都显示为此缩放比例，因为 UI 缩放不是按配置单独设置的，但你可以随时改回原始值。"
 L["UI Scale Mismatch"] = "UI 缩放不匹配"
-L["|cffff6060[EllesmereUI]|r A preset named \"%1$s\" already exists."] = "|cffff6060[EllesmereUI]|r 名为“%1$s”的预设已存在。"
+L["A preset named \"%1$s\" already exists."] = "名为“%1$s”的预设已存在。"
 L["Previewing Override: %1$s"] = "预览覆盖：%1$s"
 L["Previewing Overrides: %1$s, %2$s"] = "预览覆盖：%1$s, %2$s"
 L["\"%1$s\" was saved but cannot be loaded because this spec has an assigned profile."] = "“%1$s”已保存，但由于此专精已分配配置，无法加载。"

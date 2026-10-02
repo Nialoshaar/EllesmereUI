@@ -2251,6 +2251,49 @@ initFrame:SetScript("OnEvent", function(self)
             })
         end
 
+        local bonusRollRow
+        local function bonusRollConflict()
+            return C_AddOns.IsAddOnLoaded("BonusRollConfirm")
+        end
+        bonusRollRow, h = W:DualRow(parent, y,
+            { type="toggle", text=EllesmereUI.L("Bonus Roll Confirmation"),
+              tooltip=EllesmereUI.L("Asks before spending a bonus roll and shows your loot specialization. Use the cog to also confirm Pass."),
+              disabled=bonusRollConflict,
+              disabledTooltip=EllesmereUI.L("BonusRollConfirm is loaded and handles confirmation. Disable that addon and reload to use this feature."),
+              getValue=function()
+                  return EllesmereUIDB and EllesmereUIDB.bonusRollConfirmation == true
+              end,
+              setValue=function(v)
+                  if not EllesmereUIDB then EllesmereUIDB = {} end
+                  EllesmereUIDB.bonusRollConfirmation = v
+                  if EllesmereUI._applyBonusRollConfirmation then EllesmereUI._applyBonusRollConfirmation() end
+                  EllesmereUI:RefreshPage()
+              end },
+            { type="label", text="" }
+        );  y = y - h
+        if not EllesmereUI._prebuilding then
+            EllesmereUI.BuildInlineCog(bonusRollRow._leftRegion, {
+                title = EllesmereUI.L("Bonus Roll Settings"),
+                rows = {
+                    { type="toggle", label=EllesmereUI.L("Only Confirm Roll"),
+                      tooltip=EllesmereUI.L("Pass immediately without confirmation. Turn off to confirm both Roll and Pass."),
+                      get=function()
+                          return not EllesmereUIDB or EllesmereUIDB.bonusRollOnly ~= false
+                      end,
+                      set=function(v)
+                          if not EllesmereUIDB then EllesmereUIDB = {} end
+                          EllesmereUIDB.bonusRollOnly = v
+                          if EllesmereUI._applyBonusRollConfirmation then EllesmereUI._applyBonusRollConfirmation() end
+                      end },
+                },
+                gap = 9,
+                disabled = function()
+                    return bonusRollConflict() or not (EllesmereUIDB and EllesmereUIDB.bonusRollConfirmation)
+                end,
+                disabledTooltip = EllesmereUI.L("Bonus Roll Confirmation"),
+            })
+        end
+
         -- Keys, Logs & Brez sections live at the bottom of this page (the
         -- separate tab was retired to keep the tab bar at five pages).
         if _G._EUI_BuildAutoLoggingPage then
@@ -2337,6 +2380,8 @@ initFrame:SetScript("OnEvent", function(self)
                 EllesmereUIDB.trainAllButton = false
                 EllesmereUIDB.autoUnwrapCollections = false
                 EllesmereUIDB.autoOpenContainers = false
+                EllesmereUIDB.bonusRollConfirmation = false
+                EllesmereUIDB.bonusRollOnly = true
                 EllesmereUIDB.autoOpenContainersExcludeWarbound = true
                 EllesmereUIDB.autoOpenContainersHoldCappedArtisanPayouts = false
                 EllesmereUIDB.autoRepairGuild = false
@@ -2380,6 +2425,7 @@ initFrame:SetScript("OnEvent", function(self)
             if _G._EUI_ResetUpgradeCalc then _G._EUI_ResetUpgradeCalc() end
             if _G._EBS_ResetCursor then _G._EBS_ResetCursor() end
             EllesmereUI._applyHideBlizzardPartyFrame()
+            if EllesmereUI._applyBonusRollConfirmation then EllesmereUI._applyBonusRollConfirmation() end
             if EllesmereUI._applyHideErrorMessages then EllesmereUI._applyHideErrorMessages() end
             if EllesmereUI._applyAnnounceGroupDeaths then EllesmereUI._applyAnnounceGroupDeaths() end
             if EllesmereUI._applyCombatAlert then EllesmereUI._applyCombatAlert() end

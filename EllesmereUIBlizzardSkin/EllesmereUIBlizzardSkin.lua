@@ -19,10 +19,11 @@ local function GetFFD(frame)
 end
 
 -------------------------------------------------------------------------------
---  Per-window skin style ("eui"|"modern"|"off"). Enable keys are the on/off
---  source of truth (key false = "off"); blizzWindowSkinStyles only records
---  WHICH style an enabled window uses (nil = "eui"). "modern" currently
---  renders identically to "eui" (reserved for a future skin set).
+--  Per-window skin style ("eui"|"modern"|"blizzard"|"off"). Enable keys are
+--  the on/off source of truth (key false = "off"); blizzWindowSkinStyles only
+--  records WHICH style an enabled window uses (nil = "eui"). "blizzard" is the
+--  Character Sheet's Blizz Default: Blizzard's own sheet with the EllesmereUI
+--  stats, slot text and socket panel. Its "off" leaves the sheet untouched.
 -------------------------------------------------------------------------------
 local WINDOW_ENABLE_KEYS = {
     charsheet       = "themedCharacterSheet",
@@ -72,6 +73,11 @@ local WINDOW_ENABLE_KEYS = {
     playerchoice    = "reskinPlayerChoice",
     trade           = "reskinTrade",
 }
+-- WoW Forever's own windows: the bag bar and Progress Legacy skins exist only there.
+if EllesmereUI.IS_FOREVER then
+    WINDOW_ENABLE_KEYS.bagbar       = "reskinBagBar"
+    WINDOW_ENABLE_KEYS.legacysystem = "reskinLegacySystem"
+end
 --- Master PER-PROFILE kill switch for ALL Blizzard window skinning: window engine
 --- + every pack, plus CharacterSheet/Inspect, SocketPanel, LFG skins. Lives at
 --- profiles[name].disableWindowSkins, resolved live (follows profile switches,
@@ -107,6 +113,14 @@ do
     -- friends skin since that file shipped, so those accounts stay as set.
     if not EllesmereUI.IS_FOREVER then
         BATCHES[#BATCHES + 1] = { marker = "socialLegacySkinSeeded", keys = { "socialui" } }
+    else
+        -- WoW Forever: the shipment where the LFG Menu card began skinning
+        -- that client's Looking For Group window.
+        BATCHES[#BATCHES + 1] = { marker = "foreverLfgSkinSeeded", keys = { "lfg" } }
+        -- WoW Forever: the micro menu and the bag bar began skinning there.
+        BATCHES[#BATCHES + 1] = { marker = "foreverMicroBagSkinSeeded", keys = { "micromenu", "bagbar" } }
+        -- WoW Forever: the Progress Legacy window began skinning there.
+        BATCHES[#BATCHES + 1] = { marker = "foreverLegacySkinSeeded", keys = { "legacysystem" } }
     end
     local function SeedBatch(marker, newKeys)
         if EllesmereUIDB[marker] then return end
@@ -117,7 +131,8 @@ do
         local off, modern, eui = 0, 0, 0
         for winKey, ek in pairs(WINDOW_ENABLE_KEYS) do
             if not isNew[winKey] then
-                if EllesmereUIDB[ek] == false then
+                -- A Blizz Default character sheet keeps Blizzard's look.
+                if EllesmereUIDB[ek] == false or (styles and styles[winKey] == "blizzard") then
                     off = off + 1
                 elseif styles and styles[winKey] == "modern" then
                     modern = modern + 1
@@ -155,37 +170,6 @@ do
         return nil
     end
 
-    -- The Character Sheet style lives on each profile's root. Style flags
-    -- found on the ACCOUNT root (older builds kept them there, and an older
-    -- export string's Window Skins bundle can still write them) are handed
-    -- to every profile whose whole-UI look (the font look record, written
-    -- by the same switch) is that style -- the switch that set it -- or, when
-    -- no profile matches (the row was set on its own), to the active
-    -- profile; the root flags are then cleared.
-    local function AdoptLegacyCharSheetStyle(db)
-        if db.charSheetUseClassicStyle == nil and db.charSheetUseBlizzardStyle == nil then return end
-        local legacy = (db.charSheetUseClassicStyle and "classic")
-            or (db.charSheetUseBlizzardStyle and "blizzard") or nil
-        db.charSheetUseClassicStyle, db.charSheetUseBlizzardStyle = nil, nil
-        local profiles = db.profiles
-        if not legacy or type(profiles) ~= "table" then return end
-        local function Give(p)
-            p.charSheetUseBlizzardStyle = (legacy == "blizzard") or nil
-            p.charSheetUseClassicStyle  = (legacy == "classic") or nil
-        end
-        local matched = false
-        for name, p in pairs(profiles) do
-            if type(p) == "table" and FontLookOf(db, name, p) == legacy then
-                Give(p)
-                matched = true
-            end
-        end
-        if not matched then
-            local p = profiles[db.activeProfile or "Default"]
-            if type(p) == "table" then Give(p) end
-        end
-    end
-
     -- Once per account: windows on a stock look with NO profile recording a
     -- look (no windowSkinLook, no font look record -- a glyph-fallback locale
     -- never writes the latter) -- the active profile adopts the look its
@@ -203,31 +187,40 @@ do
         if type(p) == "table" then p.windowSkinLook = live end
     end
 
-    -- WoW Forever, once per account: a profile the whole-UI switch put on a
-    -- stock look before the Character Sheet row existed there takes that
-    -- look for the sheet (the WoW Forever variant when a module wears it).
-    -- A row choice already made is kept.
-    local function AdoptForeverCharSheetStyle(db)
-        if not EllesmereUI.IS_FOREVER or db.foreverCharSheetStyleAdopted then return end
-        db.foreverCharSheetStyleAdopted = true
-        if type(db.profiles) ~= "table" then return end
-        for name, p in pairs(db.profiles) do
-            if type(p) == "table" and p.charSheetUseBlizzardStyle == nil and p.charSheetUseClassicStyle == nil then
-                local look = p.windowSkinLook or FontLookOf(db, name, p)
-                if look == "blizzard" or look == "classic" then
-                    p.charSheetUseBlizzardStyle = (look == "blizzard")
-                    p.charSheetUseClassicStyle  = (look == "classic")
-                    if look == "blizzard" and type(p.addons) == "table" then
-                        for _, t in pairs(p.addons) do
-                            if type(t) == "table" and t.useForeverStyle then
-                                p.charSheetUseForeverStyle = true
-                                break
-                            end
-                        end
-                    end
-                end
-            end
+    -- Once per account: the Character Sheet's Blizz Default used to be the
+    -- Style page's Character Sheet row (profile-root flags; copies an older
+    -- build left on the account root count too). The profile the live
+    -- windows belong to hands its choice to the sheet's card, and the look
+    -- slots give every other look its own default. A WoW Forever profile
+    -- from before that row existed there follows its stock look, as the
+    -- row's own adoption did. When the live look is a stock one, the skin the
+    -- sheet wore before (EllesmereUI or Modern) is kept for the EllesmereUI
+    -- look.
+    local function AdoptCharSheetCardStyle(db)
+        if db.charSheetCardStyleAdopted then return end
+        db.charSheetCardStyleAdopted = true
+        local name = db.activeProfile or "Default"
+        local p = type(db.profiles) == "table" and db.profiles[name]
+        if type(p) ~= "table" then p = nil end
+        local stock = db.charSheetUseBlizzardStyle or db.charSheetUseClassicStyle
+            or (p and (p.charSheetUseBlizzardStyle or p.charSheetUseClassicStyle))
+        if not stock and p and EllesmereUI.IS_FOREVER and not db.foreverCharSheetStyleAdopted
+           and p.charSheetUseBlizzardStyle == nil and p.charSheetUseClassicStyle == nil then
+            local look = p.windowSkinLook or FontLookOf(db, name, p)
+            stock = look == "blizzard" or look == "classic"
         end
+        if not stock then return end
+        local styles = db.blizzWindowSkinStyles
+        if type(styles) ~= "table" then
+            styles = {}
+            db.blizzWindowSkinStyles = styles
+        end
+        local slots = db.windowSkinStyleSlots
+        if type(slots) == "table" and slots.active and slots.active ~= "eui"
+           and type(slots.eui) == "table" and slots.eui.charsheetStyle == nil then
+            slots.eui.charsheetStyle = styles.charsheet or "eui"
+        end
+        styles.charsheet = "blizzard"
     end
 
     local seedFrame = CreateFrame("Frame")
@@ -246,9 +239,8 @@ do
         self:UnregisterEvent("ADDON_LOADED")
         if not EllesmereUIDB then EllesmereUIDB = {} end
         for _, batch in ipairs(BATCHES) do SeedBatch(batch.marker, batch.keys) end
-        AdoptLegacyCharSheetStyle(EllesmereUIDB)
         AdoptLegacyWindowLook(EllesmereUIDB)
-        AdoptForeverCharSheetStyle(EllesmereUIDB)
+        AdoptCharSheetCardStyle(EllesmereUIDB)
         EllesmereUI.ReconcileWindowSkinLook()
     end)
 end
@@ -263,7 +255,8 @@ function EllesmereUI.GetBlizzWindowStyle(winKey)
     local ek = WINDOW_ENABLE_KEYS[winKey]
     if ek and EllesmereUIDB and EllesmereUIDB[ek] == false then return "off" end
     local styles = EllesmereUIDB and EllesmereUIDB.blizzWindowSkinStyles
-    if styles and styles[winKey] == "modern" then return "modern" end
+    local s = styles and styles[winKey]
+    if s == "modern" or s == "blizzard" then return s end
     return "eui"
 end
 
@@ -286,6 +279,9 @@ function EllesmereUI.GetThirdPartySkinStyle()
         -- The inspect sheet renders in the character sheet's style: one vote.
         if winKey ~= "inspect" then
             local s = EllesmereUI.GetBlizzWindowStyle(winKey)
+            -- A Blizz Default character sheet wears no skin: it votes like
+            -- a window that is off.
+            if s == "blizzard" then s = "off" end
             if s == "off" and not killed and euiSlot and euiSlot[ek] ~= false then
                 s = (styles and styles[winKey] == "modern") and "modern" or "eui"
             end
@@ -313,14 +309,16 @@ end
 -- back as it was left, per-window picks included. First visit: a stock look
 -- (Blizzard Style, Classic WoW UI) keeps Blizzard's own windows, every one at
 -- Blizz Default; the EllesmereUI look puts every one back to its default
--- (on). The character sheet (and the inspect sheet riding its card) stays out
--- of the slots: its Style row owns it. The Friends List window rides them
--- whatever the Friends module's state (its pack stands down by itself under a
--- stock Friends style), so a key saved in one swap is always loaded back in
--- the next. A slot holds on/off booleans; a window a slot never recorded (one
--- added later) takes the look's first-visit value. Styles
--- (blizzWindowSkinStyles) are never touched, so a window turned back on keeps
--- its skin. A one-way seed record from before the slots
+-- (on). The Friends List window rides them whatever the Friends module's
+-- state (its pack stands down by itself under a stock Friends style), so a
+-- key saved in one swap is always loaded back in the next. A slot holds
+-- on/off booleans; a window a slot never recorded (one added later) takes the
+-- look's first-visit value. Styles (blizzWindowSkinStyles) are never touched,
+-- so a window turned back on keeps its skin -- except the character sheet's,
+-- which the slots carry as `charsheetStyle`: Blizz Default is a style there
+-- (the stock looks' first visit), and its Off (with the inspect sheet riding
+-- its card) stays out of the slots, so a sheet turned off stays off in every
+-- look. A one-way seed record from before the slots
 -- (windowSkinsStockSeeded) converts on the first swap: its windows were on
 -- under the EllesmereUI look, and legacyStock names the look it belongs to.
 -- dryRun: only report whether the whole UI's window look would change.
@@ -350,10 +348,13 @@ function EllesmereUI.SwapWindowSkinStyle(to, dryRun, legacyStock)
         EllesmereUIDB.windowSkinStyleSlots = slots
     end
     EllesmereUIDB.windowSkinsStockSeeded = nil
+    local styles = EllesmereUIDB.blizzWindowSkinStyles
+    if type(styles) ~= "table" then styles = nil end
     local out = {}
     for winKey, ek in pairs(WINDOW_ENABLE_KEYS) do
         if WindowInSlots(winKey) then out[ek] = EllesmereUIDB[ek] ~= false end
     end
+    out.charsheetStyle = (styles and styles.charsheet) or "eui"
     slots[from] = out
     local saved = slots[to]
     if type(saved) ~= "table" then saved = nil end
@@ -365,6 +366,27 @@ function EllesmereUI.SwapWindowSkinStyle(to, dryRun, legacyStock)
             -- branch: `x and false or nil` can only ever yield nil.
             if v then EllesmereUIDB[ek] = nil else EllesmereUIDB[ek] = false end
         end
+    end
+    -- The character sheet's style. A look's first visit (or a slot saved
+    -- before the sheet rode them): Blizz Default on a stock look; on the
+    -- EllesmereUI look a Blizz Default goes back to the EllesmereUI skin and
+    -- any other pick stays.
+    local cs = saved and saved.charsheetStyle
+    if cs == nil then
+        if to ~= "eui" then
+            cs = "blizzard"
+        elseif styles and styles.charsheet == "blizzard" then
+            cs = "eui"
+        end
+    end
+    if cs == "eui" then
+        if styles then styles.charsheet = nil end
+    elseif cs then
+        if not styles then
+            styles = {}
+            EllesmereUIDB.blizzWindowSkinStyles = styles
+        end
+        styles.charsheet = cs
     end
     slots.active = to
     return true
@@ -529,6 +551,9 @@ end
         local _, _, _, _, legacySize = EllesmereUI.GetTooltipBorder()
         _applyConfiguredBorder(tt, "tooltip", legacySize)
     end
+    -- The same look for Blizzard's tooltip-like frames that are not GameTooltips
+    -- (their window packs call it on show).
+    EllesmereUI._skinBlizzardTooltipFrame = _ttSkin
 
     local function _ttFonts(tt, startFrom)
         if not tt or tt:IsForbidden() or not _enabled() then return end
@@ -1167,13 +1192,13 @@ end
             end)
         end
         if GameTooltipStatusBar then
-            GameTooltipStatusBar:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
             local sbBg = GameTooltipStatusBar:CreateTexture(nil, "BACKGROUND")
             sbBg:SetAllPoints(); sbBg:SetColorTexture(0, 0, 0, 0.5)
             GameTooltipStatusBar:ClearAllPoints()
             GameTooltipStatusBar:SetPoint("BOTTOMLEFT", _GameTooltip, "BOTTOMLEFT", 1, 1)
             GameTooltipStatusBar:SetPoint("BOTTOMRIGHT", _GameTooltip, "BOTTOMRIGHT", -1, 1)
-            GameTooltipStatusBar:SetHeight(3)
+            -- Texture + height (the Show Health Strip cog); unset keeps UI-StatusBar at 3px.
+            EllesmereUI._applyTooltipHealthStripStyle(true)
         end
     end
 
@@ -2927,17 +2952,11 @@ do
                 end,
                 getSize  = function() return FIXED_W, FIXED_H end,
                 savePos = function(_, _point, _relPoint, x, y)
+                    -- Unlock mode hands over CENTER/CENTER coords; on Cancel the frame
+                    -- still sits at the dragged spot, so never read the live position.
                     local prof = ActiveProfile()
                     if not prof then return end
-                    local af = EnsureFixedFrame()
-                    if af:GetLeft() then
-                        local fw, fh = af:GetSize()
-                        local cx = af:GetLeft() + fw / 2 - UIParent:GetWidth() / 2
-                        local cy = af:GetBottom() + fh / 2 - UIParent:GetHeight() / 2
-                        prof.tooltipFixedPos = { centerX = cx, centerY = cy }
-                    else
-                        prof.tooltipFixedPos = { centerX = x, centerY = y }
-                    end
+                    prof.tooltipFixedPos = { centerX = x, centerY = y }
                 end,
                 loadPos = function()
                     EnsureSeeded()
@@ -3545,6 +3564,24 @@ do
     EllesmereUI._applyTooltipHealthStrip = function()
         if not GameTooltipStatusBar then return end
         GameTooltipStatusBar:SetAlpha(_healthStripHidden() and 0 or 1)
+    end
+
+    -- Texture + height of the reskinned strip. Only the tooltip reskin restyles
+    -- the bar, so this is a no-op until _ttInitVisual has called it with
+    -- init=true; the options setters then re-apply live.
+    local styled, texLookup
+    EllesmereUI._applyTooltipHealthStripStyle = function(init)
+        if init then styled = true end
+        if not styled or not GameTooltipStatusBar then return end
+        local db = EllesmereUIDB
+        local key = db and db.tooltipHealthStripTexture
+        local path = "Interface\\TargetingFrame\\UI-StatusBar"
+        if key and key ~= "blizzard" then
+            if not texLookup then texLookup = EllesmereUI.BuildBarTextureTables() end
+            path = EllesmereUI.ResolveTexturePath(texLookup, key, "Interface\\Buttons\\WHITE8X8")
+        end
+        GameTooltipStatusBar:SetStatusBarTexture(path)
+        GameTooltipStatusBar:SetHeight(db and db.tooltipHealthStripHeight or 3)
     end
 
     if GameTooltipStatusBar then

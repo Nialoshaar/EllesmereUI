@@ -4079,15 +4079,21 @@ end
 --- True for module folders excluded wholesale from the override systems (drives
 --- the sidebar lock during an editing session). Includes the management
 --- surfaces (Profiles & Presets, Patch Notes, Global Settings): they lock like
---- every other excluded module.
+--- every other excluded module. Plugin pages ("plugin:" keys) are never part of
+--- the override systems, so they are always excluded.
+local function IsPluginModule(folder)
+    return type(folder) == "string" and folder:sub(1, 7) == "plugin:"
+end
+
 function EllesmereUI.SpecOverrides_ModuleExcluded(folder)
     return (type(folder) == "string" and EXCLUDED_CONTEXTS[folder] == true)
-        or false
+        or IsPluginModule(folder)
 end
 
 --- True when a module page is excluded (page-scoped entry, or the whole
 --- module). Drives the page-tab lock while a session is active.
 function EllesmereUI.SpecOverrides_PageExcluded(module, page)
+    if IsPluginModule(module) then return true end
     local ex = module and EXCLUDED_CONTEXTS[module]
     if ex == true then return true end
     if type(ex) == "table" and page then return ex[page] == true end

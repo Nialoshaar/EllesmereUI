@@ -556,7 +556,8 @@ end
 
 -- Checkbox -> dark block + accent tick. opts.stockCheck leaves the checkmark
 -- color to Blizzard (windows where check tint carries meaning, e.g. the
--- addon list's enabled states).
+-- addon list's enabled states). opts.hover: a white hover wash of that alpha
+-- over the box (the highlight texture is cleared).
 function WSkin.Checkbox(cb, opts)
     if not cb or cb:IsForbidden() then return end
     local d = GetFFD(cb)
@@ -583,6 +584,12 @@ function WSkin.Checkbox(cb, opts)
     fill:SetPoint("TOPLEFT", 4, -4)
     fill:SetPoint("BOTTOMRIGHT", -4, 4)
     d.bg = fill
+    if opts and opts.hover then
+        local hover = SolidTex(cb, "HIGHLIGHT", 1, 1, 1, opts.hover)
+        hover:SetPoint("TOPLEFT", 4, -4)
+        hover:SetPoint("BOTTOMRIGHT", -4, 4)
+        d.hover = hover
+    end
     -- Border rides the checkbox frame by default; when the frame is larger
     -- than its visible box (opts.borderInset), put the border on an inset
     -- child so it hugs the actual box instead of sitting proud of it.
@@ -1666,6 +1673,26 @@ function WSkin.HookShow(frame, fn)
     if d.showHook then return end
     d.showHook = true
     frame:HookScript("OnShow", fn)
+end
+
+-- A common-sidetab side tab (the WoW Forever Looking For Group and Progress
+-- Legacy windows): the gold frame and glow go, the icon stays. A black copy of
+-- the hover art is the idle border; hover (gold) and active (soft white) draw over it.
+function WSkin.SideTab(tab)
+    if not tab then return end
+    if tab.Background then tab.Background:SetAlpha(0) end
+    if tab.TabGlow then tab.TabGlow:SetAlpha(0) end
+    local st = tab.SelectedTexture
+    if not st then return end
+    local d = GetFFD(tab)
+    if not d.tabBorder then
+        local b = tab:CreateTexture(nil, "OVERLAY", nil, -1)
+        b:SetAtlas("common-sidetab-hover")
+        b:SetAllPoints(st)
+        b:SetVertexColor(0, 0, 0)
+        d.tabBorder = b
+    end
+    st:SetVertexColor(0.90, 0.90, 0.92)
 end
 
 -- Debounce: collapse many hook fires in one frame into a single pass.

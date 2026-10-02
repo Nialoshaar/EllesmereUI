@@ -8554,7 +8554,7 @@ L["In-game countdown unavailable in combat; the boss mod pull timer still starte
 L["Raid Tools cannot be toggled by slash command in combat -- use the keybind."] = "전투 중에는 명령어로 공격대 도구를 전환할 수 없습니다. 단축키를 사용하세요."
 L["Raid Tools is disabled in the EllesmereUI options."] = "공격대 도구가 EllesmereUI 설정에서 비활성화되어 있습니다."
 L["%d junk item(s) could not be sold."] = "잡동사니 %d개를 판매하지 못했습니다."
-L["|cffff6060[EllesmereUI]|r A preset named \"%1$s\" already exists."] = "|cffff6060[EllesmereUI]|r \"%1$s\" 이름의 프리셋이 이미 있습니다."
+L["A preset named \"%1$s\" already exists."] = "\"%1$s\" 이름의 프리셋이 이미 있습니다."
 L["|cffff6060[EllesmereUI]|r A profile named \"%1$s\" already exists."] = "|cffff6060[EllesmereUI]|r \"%1$s\" 이름의 프로필이 이미 있습니다."
 L["|cff00ff98EllesmereUI:|r Managers intro reset. The announcement popup fires on your next /reload."] = "|cff00ff98EllesmereUI:|r 관리자 소개를 초기화했습니다. 안내 팝업이 다음 /reload 때 다시 표시됩니다."
 L["|cff00ff98EllesmereUI:|r Overrides intro reset. The announcement popup fires on your next /reload; the video guide fires on your next click of the overrides glyph."] = "|cff00ff98EllesmereUI:|r 재정의 소개를 초기화했습니다. 안내 팝업은 다음 /reload 때, 영상 가이드는 재정의 문양을 다음에 누를 때 다시 표시됩니다."
