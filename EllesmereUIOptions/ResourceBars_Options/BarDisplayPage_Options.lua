@@ -396,7 +396,7 @@ function ns.ERB_BuildBarDisplayPage(pageName, parent, yOffset)
               p.general.frameStrata = v; SmoothRefresh()
           end }
     );
-    -- Texture cog: per-bar textures, and the Blizzard atlas fill for the class resource bar.
+    -- Texture cog: per-bar textures, Blizzard atlas fill, and continuous pip textures.
     -- cogShow is declared BEFORE the build so the per-bar toggle's set closure captures it
     -- (same as the Background cog); the lazily built popup is reached via cogShow._popupFrame.
     local cogShow
@@ -449,6 +449,16 @@ function ns.ERB_BuildBarDisplayPage(pageName, parent, yOffset)
                           confirmText = "Okay",
                       })
                   end
+              end },
+            { type = "toggle", label = "Continuous Texture for Pip Resources",
+              tooltip = "Pip-style class resources (Runes, Holy Power, Arcane Charges, etc.) use one continuous texture across the full resource bar instead of restarting the texture on every pip. This is useful for gradient textures.",
+              get = function()
+                  local p = DB(); return (p and p.secondary.useContinuousTexture) or false
+              end,
+              set = function(v)
+                  local p = DB(); if not p then return end
+                  p.secondary.useContinuousTexture = v
+                  RebuildClass()
               end },
         },
     }))
