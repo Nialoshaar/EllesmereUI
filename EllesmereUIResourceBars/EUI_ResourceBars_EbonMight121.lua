@@ -203,6 +203,17 @@ local function EnsureBuilt()
     end, "erb:emb121-shell")
 end
 
+-- True once the engine overlay's countdown text is confirmed live: false
+-- while the (async, one-shot) build is still queued, and false if the build
+-- ran but its FontString creation hit the pcall guard in Build() (armored
+-- because an uncaught error there kills the whole slot). Callers use this to
+-- fall back to the legacy numeric text instead of leaving the bar
+-- permanently blank for the rest of the session (S.built never gets a second
+-- attempt once set -- only a /reload resets it).
+function ns.EMB121_TextOk()
+    return S.built and not S.fsErr
+end
+
 -- Called from UpdatePrimaryBar whenever the primary power type resolves:
 -- parks the overlay the moment the bar stops being Ebon Might (spec swap).
 function ns.EMB121_Gate(isEbon)
@@ -236,8 +247,10 @@ function ns.EMB121_Sync(bar, pp, pc)
     -- the power type was Ebon Might. Push the border back on top, clearing the
     -- engine fill with a level of margin (the subtree is denied to us
     -- afterward, so its exact levels can't be read back). The countdown text
-    -- sits at fill+5, still above the border, as on the legacy path.
+    -- sits at fill+5, still above the border, as on the legacy path. Draw Above
+    -- GCD Bar stamps its own cover on the bar (_erbGcdCover): the higher wins, so
+    -- a power tick never lowers that lift.
     if bar.RaiseBorderAbove then
-        bar:RaiseBorderAbove(lvl + 3, pp and pp.borderBehind)
+        bar:RaiseBorderAbove(math.max(lvl + 3, bar._erbGcdCover or 0), pp and pp.borderBehind)
     end
 end

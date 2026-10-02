@@ -28,22 +28,6 @@ initFrame:SetScript("OnEvent", function(self)
     local function Cfg(k)    return DB()[k]  end
     local function Set(k, v) DB()[k] = v     end
 
-    local function MakeCogBtn(rgn, showFn)
-        local cogBtn = CreateFrame("Button", nil, rgn)
-        cogBtn:SetSize(26, 26)
-        cogBtn:SetPoint("RIGHT", rgn._lastInline or rgn._control, "LEFT", -8, 0)
-        rgn._lastInline = cogBtn
-        cogBtn:SetFrameLevel(rgn:GetFrameLevel() + 5)
-        cogBtn:SetAlpha(0.4)
-        local cogTex = cogBtn:CreateTexture(nil, "OVERLAY")
-        cogTex:SetAllPoints()
-        cogTex:SetTexture(EllesmereUI.COGS_ICON)
-        cogBtn:SetScript("OnEnter", function(s) s:SetAlpha(0.7) end)
-        cogBtn:SetScript("OnLeave", function(s) s:SetAlpha(0.4) end)
-        cogBtn:SetScript("OnClick", function(s) showFn(s) end)
-        return cogBtn
-    end
-
     local function RefreshAll()
         if EQT.RefreshStateDriver then EQT.RefreshStateDriver() end
         if EQT.UpdateVisibility   then EQT.UpdateVisibility()   end
@@ -64,7 +48,7 @@ initFrame:SetScript("OnEvent", function(self)
         -- Drag instructions (centered, above settings). Wrapped in a Frame so the
         -- search system collects it as an orphan and auto-hides it during search.
         do
-            local fontPath = EllesmereUI.GetFontPath and EllesmereUI.GetFontPath() or STANDARD_TEXT_FONT
+            local fontPath = EllesmereUI.GetFontPath() or STANDARD_TEXT_FONT
             local infoFrame = CreateFrame("Frame", nil, parent)
             infoFrame:SetSize(parent:GetWidth() or 400, 20)
             infoFrame:SetPoint("TOP", parent, "TOP", 0, y - 20)
@@ -107,47 +91,46 @@ initFrame:SetScript("OnEvent", function(self)
             y = y - 68
         end
 
+        -- Stock styles (Blizzard Style / Classic WoW UI) keep Blizzard's own
+        -- tracker art, text and quest icons: the background, font and colour
+        -- rows only apply to the EllesmereUI look.
+        local BS = EllesmereUI.BlizzStyle
+        local STOCK = BS and BS.Get("questtracker")
+
         -- -- DISPLAY ---------------------------------------------------------
         _, h = W:SectionHeader(parent, "DISPLAY", y); y = y - h
+        if BS then y = BS.Note(parent, y, "questtracker") end
 
-        -- Row 1: Visibility | Visibility Options
-        local visRow
-        visRow, h = EllesmereUI.BuildVisibilityModeRow(W, parent, y,
+        -- Row 1: Visibility | Hide When In Raid. The raid-hide dropdown moved up from
+        -- the Background Opacity row into the slot the old Visibility Options dropdown
+        -- left behind: it answers the same question the Visibility control does.
+        _, h = EllesmereUI.BuildVisibilityRow(W, parent, y,
             { getStore = DB, legacyKey = "visibility",
               caps = { partyIncludesRaid = false, luaDragonriding = true },
-              onChanged = function() RefreshAll() end },
-            { type="dropdown", text="Visibility Options",
-              values={ __placeholder = "..." }, order={ "__placeholder" },
-              getValue=function() return "__placeholder" end,
-              setValue=function() end })
-        if not EllesmereUI._prebuilding then
-            local rightRgn = visRow._rightRegion
-            if rightRgn._control then rightRgn._control:Hide() end
-            local cbDD, cbDDRefresh = EllesmereUI.BuildVisOptsCBDropdown(
-                rightRgn, 210, rightRgn:GetFrameLevel() + 2,
-                EllesmereUI.VIS_OPT_ITEMS,
-                function(k) return Cfg(k) or false end,
-                function(k, v) Set(k, v); RefreshAll() end)
-            PP.Point(cbDD, "RIGHT", rightRgn, "RIGHT", -20, 0)
-            rightRgn._control = cbDD
-            rightRgn._lastInline = nil
-            EllesmereUI.RegisterWidgetRefresh(cbDDRefresh)
-        end
-        y = y - h
-
-        -- Row 2: Background Opacity (slider + inline color swatch) | Hide when in Raid
-        local bgRow
-        bgRow, h = W:DualRow(parent, y,
-            { type="slider", text="Background Opacity",
-              min = 0, max = 1, step = 0.05,
-              getValue=function() return Cfg("bgAlpha") or 0.5 end,
-              setValue=function(v) Set("bgAlpha", v); if EQT.ApplyBackground then EQT.ApplyBackground() end end },
+              onChanged = function() RefreshAll() end,
+              onOptionChanged = function() RefreshAll() end },
             { type="dropdown", text="Hide When In Raid",
               tooltip="Always: hide the tracker the whole time you are in a raid.\nBoss Combat: keep it visible and only hide during boss encounters.",
               values = { always = "Always", boss = "Boss Combat" },
               order  = { "always", "boss" },
               getValue=function() return Cfg("hideInRaidMode") or "boss" end,
               setValue=function(v) Set("hideInRaidMode", v); if EQT.UpdateVisibility then EQT.UpdateVisibility() end end })
+        y = y - h
+
+        if not STOCK then
+        -- Row 2: Background Opacity (slider + inline color swatch) | Show Top Line.
+        -- Show Top Line moved up from the old trailing half-row to close the gap left
+        -- by Hide When In Raid; both settings describe the tracker's background chrome.
+        local bgRow
+        bgRow, h = W:DualRow(parent, y,
+            { type="slider", text="Background Opacity",
+              min = 0, max = 1, step = 0.05,
+              getValue=function() return Cfg("bgAlpha") or 0.5 end,
+              setValue=function(v) Set("bgAlpha", v); if EQT.ApplyBackground then EQT.ApplyBackground() end end },
+            { type="toggle", text="Show Top Line",
+              tooltip="Draws a 1px accent line above the background at the top of the tracker.",
+              getValue=function() return Cfg("showTopLine") ~= false end,
+              setValue=function(v) Set("showTopLine", v); if EQT.ApplyBackground then EQT.ApplyBackground() end end })
         if not EllesmereUI._prebuilding then
             local rgn = bgRow._leftRegion
             local ctrl = rgn._control
@@ -197,15 +180,16 @@ initFrame:SetScript("OnEvent", function(self)
                           message     = "Font changed. A UI reload is needed to apply the new font.",
                           confirmText = "Reload Now",
                           cancelText  = "Later",
-                          onConfirm   = function() ReloadUI() end,
+                          reload      = true,
                       })
                   end })
         end
         y = y - h
+        end -- not STOCK
 
-        -- Row 4: Show Quest Icons | Hide All Objectives
-        _, h = W:DualRow(parent, y,
-            { type="toggle", text="Show Quest Icons",
+        -- Row 4: Show Quest Icons | Hide All Objectives. Both stock styles show
+        -- Blizzard's native icons, so the toggle is gated there.
+        local questIconsCfg = { type="toggle", text="Show Quest Icons",
               tooltip="Show Blizzard's native quest type icons/buttons on the right instead of EllesmereUI's custom icons. Requires a UI reload.",
               getValue=function() return Cfg("showQuestIcons") or false end,
               setValue=function(v)
@@ -215,12 +199,22 @@ initFrame:SetScript("OnEvent", function(self)
                       message     = "Changing quest icons requires a UI reload to apply.",
                       confirmText = "Reload Now",
                       cancelText  = "Later",
-                      onConfirm   = function() ReloadUI() end,
+                      reload      = true,
                   })
-              end },
+              end }
+        if BS then BS.Gate("questtracker", questIconsCfg) end
+        _, h = W:DualRow(parent, y,
+            questIconsCfg,
             { type="toggle", text="Hide All Objectives",
-              tooltip="Hides the master header and its minimize button at the top of the tracker. When shown, it's skinned to match the section headers below it (Quests, Achievements, ...).",
-              getValue=function() return Cfg("hideAllObjectivesHeader") ~= false end,
+              tooltip = STOCK
+                  and "Hides the master header and its minimize button at the top of the tracker."
+                  or "Hides the master header and its minimize button at the top of the tracker. When shown, it's skinned to match the section headers below it (Quests, Achievements, ...).",
+              -- The module's own rule, so the per-style default (hidden under
+              -- the EllesmereUI look, shown under the stock styles) reads true.
+              getValue=function()
+                  if EQT.ShouldHideMasterHeader then return EQT.ShouldHideMasterHeader() end
+                  return Cfg("hideAllObjectivesHeader") ~= false
+              end,
               setValue=function(v)
                   Set("hideAllObjectivesHeader", v)
                   if EQT.ApplyMasterHeaderVisibility then EQT.ApplyMasterHeaderVisibility() end
@@ -228,15 +222,7 @@ initFrame:SetScript("OnEvent", function(self)
               end })
         y = y - h
 
-        -- Row 5: Show Top Line| spacer
-        _, h = W:DualRow(parent, y,
-            { type="toggle", text="Show Top Line",
-              tooltip="Draws a 1px accent line above the background at the top of the tracker.",
-              getValue=function() return Cfg("showTopLine") ~= false end,
-              setValue=function(v) Set("showTopLine", v); if EQT.ApplyBackground then EQT.ApplyBackground() end end },
-            { type="spacer" })
-        y = y - h
-
+        if not STOCK then
         -- -- COLORS ----------------------------------------------------------
         _, h = W:SectionHeader(parent, "COLORS", y); y = y - h
 
@@ -372,6 +358,7 @@ initFrame:SetScript("OnEvent", function(self)
         y = y - h
 
         y = y - 10
+        end -- not STOCK
 
         -- -- EXTRAS ----------------------------------------------------------
         _, h = W:SectionHeader(parent, "EXTRAS", y); y = y - h
@@ -383,32 +370,26 @@ initFrame:SetScript("OnEvent", function(self)
             { type="toggle", text="Auto Turn In Quests",
               getValue=function() return Cfg("autoTurnIn") or false end,
               setValue=function(v) Set("autoTurnIn", v) end })
-        if not EllesmereUI._prebuilding then
-            local lrgn = row._leftRegion
-            local _, cogShowL = EllesmereUI.BuildCogPopup({
-                title = "Auto Accept Settings",
-                rows = {
-                    { type="toggle", label="Prevent Multi Quest Accept",
-                      get=function() return Cfg("autoAcceptPreventMulti") ~= false end,
-                      set=function(v) Set("autoAcceptPreventMulti", v) end },
-                    { type="toggle", label="Hold Shift to Skip",
-                      get=function() return Cfg("autoAcceptShiftSkip") ~= false end,
-                      set=function(v) Set("autoAcceptShiftSkip", v) end },
-                },
-            })
-            MakeCogBtn(lrgn, cogShowL)
+        EllesmereUI.BuildInlineCog(row._leftRegion, {
+            title = "Auto Accept Settings",
+            rows = {
+                { type="toggle", label="Prevent Multi Quest Accept",
+                  get=function() return Cfg("autoAcceptPreventMulti") ~= false end,
+                  set=function(v) Set("autoAcceptPreventMulti", v) end },
+                { type="toggle", label="Hold Shift to Skip",
+                  get=function() return Cfg("autoAcceptShiftSkip") ~= false end,
+                  set=function(v) Set("autoAcceptShiftSkip", v) end },
+            },
+        })
 
-            local rrgn = row._rightRegion
-            local _, cogShowR = EllesmereUI.BuildCogPopup({
-                title = "Auto Turn In Settings",
-                rows = {
-                    { type="toggle", label="Hold Shift to Skip",
-                      get=function() return Cfg("autoTurnInShiftSkip") ~= false end,
-                      set=function(v) Set("autoTurnInShiftSkip", v) end },
-                },
-            })
-            MakeCogBtn(rrgn, cogShowR)
-        end
+        EllesmereUI.BuildInlineCog(row._rightRegion, {
+            title = "Auto Turn In Settings",
+            rows = {
+                { type="toggle", label="Hold Shift to Skip",
+                  get=function() return Cfg("autoTurnInShiftSkip") ~= false end,
+                  set=function(v) Set("autoTurnInShiftSkip", v) end },
+            },
+        })
         y = y - h
 
         -- Quest Item Hotkey row
@@ -419,128 +400,22 @@ initFrame:SetScript("OnEvent", function(self)
         if not EllesmereUI._prebuilding then
             local rgn = kbRow._leftRegion
             local SIDE_PAD = 20
-            local KB_W, KB_H = 120, 26
 
             local label = EllesmereUI.MakeFont(rgn, 14, nil,
                 EllesmereUI.TEXT_WHITE_R, EllesmereUI.TEXT_WHITE_G, EllesmereUI.TEXT_WHITE_B)
             PP.Point(label, "LEFT", rgn, "LEFT", SIDE_PAD, 0)
             label:SetText(EllesmereUI.L("Quest Item Hotkey"))
 
-            local kbBtn = CreateFrame("Button", nil, rgn)
-            PP.Size(kbBtn, KB_W, KB_H)
-            PP.Point(kbBtn, "RIGHT", rgn, "RIGHT", -SIDE_PAD, 0)
-            kbBtn:SetFrameLevel(rgn:GetFrameLevel() + 5)
-            kbBtn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-            local kbBg = EllesmereUI.SolidTex(kbBtn, "BACKGROUND",
-                EllesmereUI.DD_BG_R, EllesmereUI.DD_BG_G, EllesmereUI.DD_BG_B, EllesmereUI.DD_BG_A)
-            kbBg:SetAllPoints()
-            kbBtn._border = EllesmereUI.MakeBorder(kbBtn, 1, 1, 1, EllesmereUI.DD_BRD_A, EllesmereUI.PanelPP)
-            local kbLbl = EllesmereUI.MakeFont(kbBtn, 12, nil, 1, 1, 1)
-            kbLbl:SetAlpha(EllesmereUI.DD_TXT_A)
-            kbLbl:SetPoint("CENTER")
-
-            local function FormatKey(key)
-                if not key or key == "" then return EllesmereUI.L("Not Bound") end
-                local parts = {}
-                for mod in key:gmatch("(%u+)%-") do
-                    parts[#parts + 1] = mod:sub(1, 1) .. mod:sub(2):lower()
-                end
-                local actualKey = key:match("[^%-]+$") or key
-                parts[#parts + 1] = actualKey
-                return table.concat(parts, " + ")
-            end
-            local function RefreshLabel() kbLbl:SetText(FormatKey(Cfg("questItemHotkey"))) end
-            RefreshLabel()
-
-            local listening = false
-            kbBtn:SetScript("OnClick", function(self, button)
-                if button == "RightButton" then
-                    if listening then listening = false; self:EnableKeyboard(false) end
-                    Set("questItemHotkey", nil)
+            local kbBtn, refresh = EllesmereUI.BuildKeybindButton(rgn, {
+                w = 120, h = 26, pp = PP, level = 5,
+                get = function() return Cfg("questItemHotkey") end,
+                set = function(v)
+                    Set("questItemHotkey", v)
                     if EQT.ApplyQuestItemHotkey then EQT.ApplyQuestItemHotkey() end
-                    RefreshLabel()
-                    return
-                end
-                if listening then return end
-                listening = true
-                kbLbl:SetText(EllesmereUI.L("Press a key..."))
-                kbBtn:EnableKeyboard(true)
-            end)
-            kbBtn:SetScript("OnKeyDown", function(self, key)
-                if not listening then self:SetPropagateKeyboardInput(true); return end
-                -- Blizzard's own test, which also covers LMETA/RMETA and
-                -- UNKNOWN. The hardcoded list missed the Windows/Command key,
-                -- so pressing it stored a modifier-only chord (or an empty
-                -- string) and closed the listener as if a key had been chosen.
-                local ignore
-                if IsKeyPressIgnoredForBinding then
-                    ignore = IsKeyPressIgnoredForBinding(key)
-                else
-                    ignore = (key == "LSHIFT" or key == "RSHIFT"
-                        or key == "LCTRL" or key == "RCTRL"
-                        or key == "LALT" or key == "RALT"
-                        or key == "LMETA" or key == "RMETA"
-                        or key == "UNKNOWN")
-                end
-                if ignore then
-                    self:SetPropagateKeyboardInput(true); return
-                end
-                self:SetPropagateKeyboardInput(false)
-                if key == "ESCAPE" then
-                    listening = false; self:EnableKeyboard(false); RefreshLabel(); return
-                end
-                -- Blizzard's canonical chord order is ALT-CTRL-SHIFT-KEY, and
-                -- CreateKeyChordStringUsingMetaKeyState is what produces it.
-                -- Hand-rolling the modifiers built SHIFT-CTRL-ALT-KEY, a chord
-                -- string the engine never generates, so any bind using more
-                -- than one modifier was stored in a form nothing could match.
-                -- Single-modifier binds happen to agree, which is why this
-                -- survived.
-                local fullKey
-                if CreateKeyChordStringUsingMetaKeyState then
-                    fullKey = CreateKeyChordStringUsingMetaKeyState(key)
-                else
-                    -- Mirror the helper's order exactly, META included.
-                    -- Dropping META would store CMD+F as plain "F" and then
-                    -- priority-override the bare key.
-                    local mods = ""
-                    if IsAltKeyDown() then mods = mods .. "ALT-" end
-                    if IsControlKeyDown() then mods = mods .. "CTRL-" end
-                    if IsShiftKeyDown() then mods = mods .. "SHIFT-" end
-                    if IsMetaKeyDown and IsMetaKeyDown() then
-                        mods = mods .. "META-"
-                    end
-                    fullKey = mods .. key
-                end
-                Set("questItemHotkey", fullKey)
-                if EQT.ApplyQuestItemHotkey then EQT.ApplyQuestItemHotkey() end
-                listening = false
-                self:EnableKeyboard(false)
-                RefreshLabel()
-            end)
-            kbBtn:SetScript("OnEnter", function(self)
-                kbBg:SetColorTexture(EllesmereUI.DD_BG_R, EllesmereUI.DD_BG_G, EllesmereUI.DD_BG_B, EllesmereUI.DD_BG_HA)
-                if kbBtn._border and kbBtn._border.SetColor then
-                    kbBtn._border:SetColor(1, 1, 1, 0.3)
-                end
-                EllesmereUI.ShowWidgetTooltip(self, "Left-click to set a keybind.\nRight-click to unbind.")
-            end)
-            kbBtn:SetScript("OnLeave", function()
-                if listening then return end
-                kbBg:SetColorTexture(EllesmereUI.DD_BG_R, EllesmereUI.DD_BG_G, EllesmereUI.DD_BG_B, EllesmereUI.DD_BG_A)
-                if kbBtn._border and kbBtn._border.SetColor then
-                    kbBtn._border:SetColor(1, 1, 1, EllesmereUI.DD_BRD_A)
-                end
-                EllesmereUI.HideWidgetTooltip()
-            end)
-            EllesmereUI.RegisterWidgetRefresh(RefreshLabel)
-            rgn:SetScript("OnHide", function()
-                if listening then
-                    listening = false
-                    kbBtn:EnableKeyboard(false)
-                    RefreshLabel()
-                end
-            end)
+                end,
+            })
+            PP.Point(kbBtn, "RIGHT", rgn, "RIGHT", -SIDE_PAD, 0)
+            EllesmereUI.RegisterWidgetRefresh(refresh)
         end
         y = y - h
 

@@ -48,9 +48,6 @@ local STYLE = {
     },
     alpha = {
         selectedGlow = 0.08,
-        selectedBorder = 0.75,
-        activityUnlockedBorder = 0.45,
-        activityLockedBorder = 0.15,
         overlayText = 0.9,
         warningText = 0.85,
         progressRewardFill = 0.95,
@@ -85,7 +82,7 @@ local function BuildThemeContext()
     return {
         accent = { r = r, g = g, b = b },
         borderAPI = EllesmereUI.PP or EllesmereUI.PanelPP,
-        fontPath = EllesmereUI.GetFontPath and EllesmereUI.GetFontPath("blizzardSkin") or STANDARD_TEXT_FONT,
+        fontPath = EllesmereUI.GetFontPath("blizzardSkin") or STANDARD_TEXT_FONT,
         reskin = EllesmereUI.RESKIN or DEFAULT_RESKIN,
     }
 end
@@ -100,7 +97,7 @@ end
 
 local function SetBorderColor(frame, theme, color, alpha)
     local pp = theme and theme.borderAPI
-    if pp and pp.SetBorderColor and frame and frame._ppBorders and color then
+    if pp and pp.SetBorderColor and frame and color then
         pp.SetBorderColor(frame, color.r or 1, color.g or 1, color.b or 1, alpha or color.a or 1)
     end
 end
@@ -131,7 +128,7 @@ end
 local function ApplyFont(fontString, theme, size, r, g, b, a, flags)
     if not fontString then return end
 
-    if EllesmereUI and EllesmereUI.PrimeFontShadow then EllesmereUI.PrimeFontShadow(fontString, true) end
+    EllesmereUI.PrimeFontShadow(fontString, true)
     fontString:SetFont((theme and theme.fontPath) or STANDARD_TEXT_FONT, size, flags or "")
     fontString:SetTextColor(r or 1, g or 1, b or 1, a or 1)
 end
@@ -264,18 +261,15 @@ local function EnsureLockIcon(frame, anchorFrame)
 end
 
 local function ResolveWeeklyRewardItemLink(activityFrame, itemFrame)
-    if itemFrame then
-        if itemFrame.itemLink then
-            return itemFrame.itemLink
-        end
-        if itemFrame.itemHyperlink then
-            return itemFrame.itemHyperlink
-        end
-        if itemFrame.itemDBID and C_WeeklyRewards and C_WeeklyRewards.GetItemHyperlink then
-            local itemLink = C_WeeklyRewards.GetItemHyperlink(itemFrame.itemDBID)
-            if itemLink then
-                return itemLink
-            end
+    -- displayedItemDBID is the reward Blizzard actually shows (best quality,
+    -- keystones skipped); it is set asynchronously by SetDisplayedItem.
+    local getLink = C_WeeklyRewards and C_WeeklyRewards.GetItemHyperlink
+    if not getLink then return nil end
+
+    if itemFrame and itemFrame.displayedItemDBID then
+        local itemLink = getLink(itemFrame.displayedItemDBID)
+        if itemLink and itemLink ~= "" then
+            return itemLink
         end
     end
 
@@ -286,9 +280,9 @@ local function ResolveWeeklyRewardItemLink(activityFrame, itemFrame)
     end
 
     for _, reward in ipairs(rewards) do
-        if reward and reward.itemDBID and C_WeeklyRewards and C_WeeklyRewards.GetItemHyperlink then
-            local itemLink = C_WeeklyRewards.GetItemHyperlink(reward.itemDBID)
-            if itemLink then
+        if reward and reward.itemDBID then
+            local itemLink = getLink(reward.itemDBID)
+            if itemLink and itemLink ~= "" then
                 return itemLink
             end
         end
@@ -302,13 +296,10 @@ local function ResolveItemBorderColor(itemLink)
         return STYLE.colors.itemDefaultBorder
     end
 
-    local quality
-    if C_Item and C_Item.GetItemQualityByID then
+    -- C_Item.GetItemInfo reads the link (bonus-modified quality); ByID reads the base item.
+    local _, _, quality = C_Item.GetItemInfo(itemLink)
+    if not quality and C_Item and C_Item.GetItemQualityByID then
         quality = C_Item.GetItemQualityByID(itemLink)
-    end
-    if not quality then
-        local _, _, itemQuality = GetItemInfo(itemLink)
-        quality = itemQuality
     end
 
     if quality then
@@ -384,8 +375,9 @@ local function SuppressItemButtonChrome(itemFrame)
         SuppressTexture(itemFrame:GetHighlightTexture())
     end
 
-    for i = 1, select("#", itemFrame:GetRegions()) do
-        local region = select(i, itemFrame:GetRegions())
+    local regions = { itemFrame:GetRegions() }
+    for i = 1, #regions do
+        local region = regions[i]
         if region and region:IsObjectType("Texture") and region ~= itemFrame.Icon and not region._euiOwned then
             SuppressTexture(region)
         end
@@ -479,6 +471,20 @@ local function RefreshActivityItemState(itemFrame, activityFrame, theme)
     local borderColor = ResolveItemBorderColor(itemLink)
     EnsureIconChrome(itemFrame, theme, borderColor)
 
+    -- Blizzard resolves the displayed reward asynchronously (ContinueOnLoad ->
+    -- SetDisplayedItem), often after our refresh pass; recolor on that edge.
+    local d = GetFFD(itemFrame)
+    if not d.displayHooked and itemFrame.SetDisplayedItem then
+        d.displayHooked = true
+        hooksecurefunc(itemFrame, "SetDisplayedItem", function(self)
+            if not IsGreatVaultSkinEnabled() then return end
+            local host = GetFFD(self).iconBorder
+            if not host then return end
+            local link = ResolveWeeklyRewardItemLink(self:GetParent(), self)
+            SetBorderColor(host, BuildThemeContext(), ResolveItemBorderColor(link), 1)
+        end)
+    end
+
     if itemFrame.Name then
         ApplyFont(itemFrame.Name, theme, STYLE.sizes.itemName, 1, 1, 1, STYLE.alpha.itemName)
     end
@@ -536,11 +542,8 @@ local function RefreshSelectableCardState(theme, skinFrame, glow, state)
 
     if not skinFrame then return end
 
-    if state.isSelected then
-        SetBorderColor(skinFrame, theme, theme.accent, STYLE.alpha.selectedBorder)
-    else
-        SetBorderColor(skinFrame, theme, state.borderColor or STYLE.colors.white, state.borderAlpha)
-    end
+    -- Cards keep the faint inset edge; rarity color lives on the icon border only.
+    SetBorderColor(skinFrame, theme, STYLE.colors.white, theme.reskin.BRD_ALPHA)
 end
 
 local function RefreshActivityVisualState(frame, selectedActivity, theme)
@@ -585,19 +588,8 @@ local function RefreshActivityVisualState(frame, selectedActivity, theme)
     local activityState = GetActivityState(frame, selectedActivity)
     local complete = STYLE.colors.complete
 
-    local borderColor, borderAlpha
-    if activityState.isComplete then
-        borderColor = complete
-        borderAlpha = STYLE.alpha.selectedBorder
-    else
-        borderColor = STYLE.colors.locked
-        borderAlpha = STYLE.alpha.activityLockedBorder
-    end
-
     RefreshSelectableCardState(theme, skinFrame, glow, {
         isSelected = activityState.isSelected,
-        borderColor = borderColor,
-        borderAlpha = borderAlpha,
     })
 
     -- Tile background: bottom half for completed, top half for incomplete
@@ -720,8 +712,6 @@ local function RefreshConcessionVisualState(frame, selectedActivity, theme)
 
     RefreshSelectableCardState(theme, skinFrame, glow, {
         isSelected = selectedActivity and selectedActivity == frame or false,
-        borderColor = STYLE.colors.white,
-        borderAlpha = STYLE.alpha.activityLockedBorder,
     })
 
     if frame.RewardsFrame then

@@ -1,4 +1,5 @@
 if EUI_CLIENT_BLOCKED then return end -- pre-12.1 client failsafe (EllesmereUI_ClientGate.lua)
+if EllesmereUI and EllesmereUI.IS_FOREVER then return end -- no item upgrade system on WoW Forever: no frame, no DB, no equipment listener; the QoL Upgrader tab is not registered there (every reader of EUIUpgCalc / EUIUpgCalcFrame nil-guards)
 -------------------------------------------------------------------------------
 --  EUI_UpgradeCalc.lua  (part of EllesmereUIQoL)
 --  Gear upgrade planner: data tables, game logic, and calculator UI.
@@ -14,7 +15,7 @@ local EUI  = EllesmereUI
 local PP   = EUI.PP
 
 local function IsLocked()
-    return InCombatLockdown() or (EUI.InProtectedInstance and EUI.InProtectedInstance())
+    return InCombatLockdown() or (EUI.InProtectedInstance())
 end
 
 -------------------------------------------------------------------------------
@@ -340,16 +341,6 @@ function Calc:IsVoidforged(link)
     return r and r.isVoidforged or false
 end
 
--- Returns the ilvl gain from the next upgrade step, or nil if already at max.
--- (Reserved for future use; not currently called by PopulateGear.)
-function Calc:GetNextUpgradeGain(item)
-    local track, rank, maxRank = self:GetItemTrackAndRank(item.link)
-    if not track or not rank then return nil end
-    local td = Data.tracks[track]
-    if not td or rank >= TrackMaxRank(td, maxRank) then return nil end
-    return (td.ranks[rank + 1] or 0) - (td.ranks[rank] or 0)
-end
-
 -- Returns a table mapping crestName -> { quantity, cap, earned } for each track.
 function Calc:GetPlayerCrests()
     local owned = {}
@@ -569,23 +560,15 @@ end
 
 local function SolidTex(p,l,r,g,b,a) return EUI.SolidTex(p,l,r,g,b,a) end
 
-local function GetCalcFont()
-    return (EUI.GetFontPath and EUI.GetFontPath("extras")) or "Fonts\\FRIZQT__.TTF"
-end
-local function GetCalcOutline()
-    return (EUI.GetFontOutlineFlag and EUI.GetFontOutlineFlag("extras")) or ""
-end
 local function MFont(p, s, _, r, g, b, a)
     local fs = p:CreateFontString(nil, "OVERLAY")
-    local flags = GetCalcOutline()
-    if EllesmereUI and EllesmereUI.PrimeFontShadow then EllesmereUI.PrimeFontShadow(fs, flags == "") end
-    fs:SetFont(GetCalcFont(), s, flags)
+    EllesmereUI.ApplyModuleFont(fs, nil, s, "extras")
     if r then fs:SetTextColor(r, g or 1, b or 1, a or 1) end
     return fs
 end
 
 local G    = EUI.ELLESMERE_GREEN
-local ROW_H, HDR_H, FRAME_W, FRAME_H = 20, 20, 860, 730
+local ROW_H, FRAME_W, FRAME_H = 20, 860, 730
 
 -- Tile layout constants
 local TILE_W    = 183
@@ -614,7 +597,70 @@ f:SetFrameStrata("DIALOG")
 f:SetMovable(true)
 f:EnableMouse(true)
 f:RegisterForDrag("LeftButton")
-f:SetScript("OnDragStart", function(self) self:StartMoving() end)
+
+-- Session snap: dock beside CharacterFrame on each open until the user drags.
+local _sessionUnpinned = false
+local _cfSnapHooked = false
+
+local function ShouldSnapToCharacterFrame()
+    if _sessionUnpinned then return false end
+    local cf = _G.CharacterFrame
+    return cf ~= nil and cf:IsShown()
+end
+
+local function DockToCharacterFrame()
+    local cf = _G.CharacterFrame
+    if not cf or not cf:IsShown() then return end
+    local margin = 4
+    local cs = cf:GetEffectiveScale() or 1
+    local es = f:GetEffectiveScale() or 1
+    local ues = UIParent:GetEffectiveScale() or 1
+    local wAbs = (f:GetWidth() or 0) * es
+    local leftRoom = (cf:GetLeft() or 0) * cs
+    local rightRoom = (GetScreenWidth() or 0) * ues - (cf:GetRight() or 0) * cs
+    local minRoom = wAbs + margin * es
+    local leftFits = leftRoom >= minRoom
+    local rightFits = rightRoom >= minRoom
+    local dockLeft
+    if rightFits then
+        dockLeft = false
+    elseif leftFits then
+        dockLeft = true
+    else
+        dockLeft = leftRoom >= rightRoom
+    end
+    f:ClearAllPoints()
+    if dockLeft then
+        f:SetPoint("TOPRIGHT", cf, "TOPLEFT", -margin, 0)
+    else
+        f:SetPoint("TOPLEFT", cf, "TOPRIGHT", margin, 0)
+    end
+end
+
+local function TrySnapToCharacterFrame()
+    if f:IsShown() and ShouldSnapToCharacterFrame() then
+        DockToCharacterFrame()
+    end
+end
+
+local function InstallCharacterFrameSnapHooks()
+    if _cfSnapHooked then return end
+    local cf = _G.CharacterFrame
+    if not cf then return end
+    _cfSnapHooked = true
+    cf:HookScript("OnShow", TrySnapToCharacterFrame)
+    hooksecurefunc(cf, "SetPoint", function()
+        TrySnapToCharacterFrame()
+    end)
+    hooksecurefunc(cf, "SetScale", function()
+        TrySnapToCharacterFrame()
+    end)
+end
+
+f:SetScript("OnDragStart", function(self)
+    _sessionUnpinned = true
+    self:StartMoving()
+end)
 f:SetScript("OnDragStop",  function(self) self:StopMovingOrSizing() end)
 f:Hide()
 
@@ -670,20 +716,6 @@ local tabY = -36
 -- Top divider removed for cleaner look
 
 -- Row helpers
-local function MakeTableHeader(parent, cols, yOffset)
-    local hdrBg = SolidTex(parent, "BACKGROUND", 0, 0, 0, 0.35)
-    PP.Point(hdrBg, "TOPLEFT",  parent, "TOPLEFT",  0, yOffset)
-    PP.Point(hdrBg, "TOPRIGHT", parent, "TOPRIGHT", 0, yOffset)
-    PP.Height(hdrBg, HDR_H)
-    for _, col in ipairs(cols) do
-        local lbl = MFont(parent, 11, "OUTLINE", G.r, G.g, G.b, 1)
-        PP.Point(lbl, "TOPLEFT", parent, "TOPLEFT", col.x + 4, yOffset - 2)
-        PP.Width(lbl, col.w)
-        lbl:SetJustifyH(col.align)
-        lbl:SetText(EUI.L(col.label))
-    end
-end
-
 local function MakeRow(parent, cols, yOffset, isAlt)
     local row = {}
     if isAlt then
@@ -839,7 +871,7 @@ for i = 1, 18 do
                 end
             elseif (e.crestCost or 0) > 0 then
                 lines[#lines + 1] = "~" .. e.crestCost .. "x  " .. EUI.L(td and td.crestName or "Crest")
-                lines[#lines + 1] = "|cff888888" .. EUI.L("Scan at Upgrader for exact costs") .. "|r"
+                lines[#lines + 1] = EllesmereUI.COLOR_CODES.DIM .. EUI.L("Scan at Upgrader for exact costs") .. "|r"
             end
         end
         if #lines > 0 then
@@ -856,7 +888,7 @@ for i = 1, 18 do
         else
             self.bg:SetColorTexture(0.5, 0.35, 0.05, 0.2)
         end
-        if EUI.HideWidgetTooltip then EUI.HideWidgetTooltip() end
+        EUI.HideWidgetTooltip()
     end)
 
     tileFrames[i] = btn
@@ -889,10 +921,10 @@ qSortBtn:SetWidth(qSortTxt:GetStringWidth() + 4)
 PP.Point(qSortBtn, "RIGHT", queuePane, "RIGHT", 0, 0)
 qSortBtn:SetPoint("TOP", queuePane, "TOP", 0, 0)
 qSortBtn:SetScript("OnEnter", function(self)
-    if EUI.ShowWidgetTooltip then EUI.ShowWidgetTooltip(self, EUI.L("Sort queue by crest type (cheapest first)")) end
+    EUI.ShowWidgetTooltip(self, EUI.L("Sort queue by crest type (cheapest first)"))
 end)
 qSortBtn:SetScript("OnLeave", function()
-    if EUI.HideWidgetTooltip then EUI.HideWidgetTooltip() end
+    EUI.HideWidgetTooltip()
 end)
 qSortBtn:Hide()  -- shown only when queue has items
 
@@ -1156,7 +1188,7 @@ for ri, trackName in ipairs(Data.trackOrder) do
         lbl:SetText("-")
         return lbl
     end
-    local hexColor = td and td.hexColor or "|cffffffff"
+    local hexColor = td and td.hexColor or EllesmereUI.COLOR_CODES.WHITE
     local nameLbl  = MFont(row, 11, nil, 0.85, 0.85, 0.85, 1)
     PP.Point(nameLbl, "TOPLEFT", row, "TOPLEFT", CC_NAME_X + 4, -3)
     PP.Width(nameLbl, CC_NAME_W - 8)
@@ -1386,7 +1418,7 @@ PopulateGear = function()
         if trackW <= 0 then trackW = 1 end
         tlFill:SetWidth(math.max(1, math.floor(capFrac * trackW)))
     end)
-    local acHex = string.format("|cff%02x%02x%02x", G.r * 255, G.g * 255, G.b * 255)
+    local acHex = EllesmereUI.HexColor(G.r, G.g, G.b)
     ilvlStatLbl:SetText(EUI.Lf(
         "Current iLvl: %s%.1f|r     Max Possible: %s%.1f|r",
         acHex, curAvg, acHex, maxAvg))
@@ -1401,7 +1433,7 @@ PopulateGear = function()
     if needsCount > 0 then
         sHdrNeeds:ClearAllPoints()
         PP.Point(sHdrNeeds, "TOPLEFT", cc, "TOPLEFT", 0, -10)
-        local acH = string.format("|cff%02x%02x%02x", G.r * 255, G.g * 255, G.b * 255)
+        local acH = EllesmereUI.HexColor(G.r, G.g, G.b)
         sHdrNeeds:SetText(EUI.Lf("Upgradable Items (%s%d|r)", acH, needsCount))
         sHdrNeeds:Show()
     else
@@ -1498,7 +1530,7 @@ PopulateGear = function()
     PP.Width(crestSection, TILE_ROW_W)
 
     -- Summary text: Total Missing Upgrades + Total Crests Needed
-    local acHex2 = string.format("|cff%02x%02x%02x", G.r * 255, G.g * 255, G.b * 255)
+    local acHex2 = EllesmereUI.HexColor(G.r, G.g, G.b)
     missingLbl:SetText(EUI.Lf("Total Missing Upgrades: %s%d|r", acHex2, totalMissing))
 
     local crestParts = {}
@@ -1509,7 +1541,7 @@ PopulateGear = function()
         local ckey = td and td.crestName or trackName
         local amt  = crestNeeds[ckey] or 0
         if amt > 0 then
-            local hexColor = (td and td.hexColor) or "|cffffffff"
+            local hexColor = (td and td.hexColor) or EllesmereUI.COLOR_CODES.WHITE
             local formattedPart = EUI.Lf("%d " .. trackName, amt)
             crestParts[#crestParts + 1] = hexColor .. formattedPart .. "|r"
         end
@@ -1596,15 +1628,13 @@ end
 refreshBtn:SetScript("OnClick", PopulateGear)
 Calc.PopulateGear = PopulateGear  -- exposed for options page live-refresh
 refreshBtn:HookScript("OnEnter", function(self)
-    if EUI.ShowWidgetTooltip then
-        EUI.ShowWidgetTooltip(self, EUI.L(
-            "Refresh using tooltip scan data.\n"
-            .. "For exact costs, use |cffffffff'Update at Upgrader'|r\n"
-            .. "while at an Item Upgrade NPC."))
-    end
+    EUI.ShowWidgetTooltip(self, EUI.L(
+        "Refresh using tooltip scan data.\n"
+        .. "For exact costs, use |cffffffff'Update at Upgrader'|r\n"
+        .. "while at an Item Upgrade NPC."))
 end)
 refreshBtn:HookScript("OnLeave", function()
-    if EUI.HideWidgetTooltip then EUI.HideWidgetTooltip() end
+    EUI.HideWidgetTooltip()
 end)
 
 scanBtn:HookScript("OnEnter", function(self)
@@ -1619,7 +1649,7 @@ scanBtn:HookScript("OnEnter", function(self)
     end
 end)
 scanBtn:HookScript("OnLeave", function()
-    if EUI.HideWidgetTooltip then EUI.HideWidgetTooltip() end
+    EUI.HideWidgetTooltip()
 end)
 
 scanBtn:SetScript("OnClick", function()
@@ -1689,6 +1719,8 @@ f:SetScript("OnShow", function()
     if IsLocked() then f:Hide(); return end
     Calc.ApplyBgOpacity()
     Calc.ApplyScale()
+    InstallCharacterFrameSnapHooks()
+    TrySnapToCharacterFrame()
     -- Reload persisted crest manual-add offsets each time the frame opens,
     -- so that values the user set before logging out are visible immediately.
     local dbAdds = DB().crestManualAdds
@@ -1701,6 +1733,7 @@ f:SetScript("OnShow", function()
 end)
 f:SetScript("OnHide", function()
     equipListener:UnregisterAllEvents()
+    _sessionUnpinned = false
     -- Cancel any pending equipment-change debounce.
     if _equipDebounce then _equipDebounce:Cancel(); _equipDebounce = nil end
     -- If hidden mid-scan (e.g. combat, /reload), unblock future scans.

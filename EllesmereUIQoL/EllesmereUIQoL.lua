@@ -14,8 +14,10 @@ if EUI_CLIENT_BLOCKED then return end -- pre-12.1 client failsafe (EllesmereUI_C
 --  shared with Cursor/BattleRes/Bloodlust: each NewDB merges its own defaults
 --  into the SAME profile table, repointed by the profile system on swap.
 -------------------------------------------------------------------------------
-if not (EllesmereUI and EllesmereUI._ModuleNS) then EUI_CLIENT_BLOCKED = true; return end -- stale-parent guard: a partially updated install (old parent, new child) goes dormant via the line-1 failsafe instead of erroring
-EllesmereUI._ModuleNS["EllesmereUIQoL"] = select(2, ...)  -- LOD options files read this module ns via the registry
+if not (EllesmereUI and EllesmereUI._ModuleNS and EllesmereUI.NewCombatQueue) then EUI_CLIENT_BLOCKED = true; return end -- stale-parent guard: a partially updated install (old parent, new child) goes dormant via the line-1 failsafe instead of erroring
+local ns = select(2, ...)
+EllesmereUI._ModuleNS["EllesmereUIQoL"] = ns  -- LOD options files read this module ns via the registry
+ns.CombatQueue = EllesmereUI.NewCombatQueue(CreateFrame("Frame"))
 
 local _qolExtrasDB
 local function QoLExtrasProfile()
@@ -48,6 +50,173 @@ local qolFrame = CreateFrame("Frame")
 qolFrame:RegisterEvent("PLAYER_LOGIN")
 qolFrame:SetScript("OnEvent", function(self)
     self:UnregisterEvent("PLAYER_LOGIN")
+
+    ---------------------------------------------------------------------------
+    -- Bonus roll confirmation. Addon-owned overlays intercept Roll/Pass clicks;
+    -- the journal link and other children retain their original behavior.
+    ---------------------------------------------------------------------------
+    do
+        local active, lifecycleHooked, eventFrame
+        local rollButton, passButton, rollOverlay, passOverlay
+        local pending
+
+        local function Enabled()
+            return EllesmereUIDB and EllesmereUIDB.bonusRollConfirmation == true
+                and not C_AddOns.IsAddOnLoaded("BonusRollConfirm")
+        end
+
+        local function Invalidate()
+            local old = pending
+            pending = nil
+            -- The house popup is shared: never dismiss another feature's dialog.
+            if old and EUIConfirmPopup and EUIConfirmPopup._onCancel == old.cancel then
+                EUIConfirmPopup._dimmer:Hide()
+            end
+        end
+
+        local function LootSpec()
+            local id = GetLootSpecialization()
+            if id == 0 then
+                local index = C_SpecializationInfo.GetSpecialization()
+                if index then id = C_SpecializationInfo.GetSpecializationInfo(index) end
+            end
+            local name = id and select(2, GetSpecializationInfoByID(id))
+            return id, name or UNKNOWN
+        end
+
+        local function IsCurrent(request)
+            local frame = BonusRollFrame
+            return active and Enabled() and frame and frame:IsShown() and frame.state == "prompt"
+                and frame.spellID == request.spellID and frame.endTime == request.endTime
+                and (frame.remaining or 0) > 0
+                and request.button:IsShown() and request.button:IsEnabled()
+                and not request.button:IsProtected()
+                and request.button:GetScript("OnClick") == request.handler
+                and (not request.isRoll or request.specID == LootSpec())
+        end
+
+        local function Click(isRoll, button, mouseButton, down)
+            if not active or not Enabled() then return end
+            Invalidate()
+            local frame = BonusRollFrame
+            if not frame then return end
+            local specID, specName = LootSpec()
+            local request = {
+                spellID = frame.spellID, endTime = frame.endTime,
+                specID = specID, isRoll = isRoll, button = button,
+                handler = button:GetScript("OnClick"),
+            }
+            if not IsCurrent(request) then return end
+            request.cancel = function()
+                if pending == request then pending = nil end
+            end
+            pending = request
+            EllesmereUI:ShowConfirmPopup({
+                title = EllesmereUI.L("Bonus Roll Confirmation"),
+                message = isRoll and EllesmereUI.L("Use a bonus roll?")
+                    or EllesmereUI.L("Pass on this bonus roll?"),
+                disclaimer = isRoll and EllesmereUI.Lf("Loot specialization: %s", specName) or nil,
+                confirmText = isRoll and ROLL or PASS,
+                cancelText = CANCEL,
+                onCancel = request.cancel,
+                onConfirm = function()
+                    if pending ~= request then return end
+                    local valid = EUIConfirmPopup and EUIConfirmPopup._onCancel == request.cancel
+                        and IsCurrent(request)
+                    Invalidate()
+                    if valid then button:Click(mouseButton, down) end
+                end,
+            })
+        end
+
+        local function SyncOverlays()
+            if not rollOverlay then return end
+            local frame = BonusRollFrame
+            local show = active and Enabled() and frame and frame:IsShown() and frame.state == "prompt"
+            rollOverlay:SetShown(show and true or false)
+            passOverlay:SetShown(show and EllesmereUIDB.bonusRollOnly == false or false)
+        end
+
+        local function MakeOverlay(button, isRoll)
+            local overlay = CreateFrame("Button", nil, button)
+            overlay:SetAllPoints(button)
+            overlay:SetFrameLevel(button:GetFrameLevel() + 1)
+            overlay:RegisterForClicks("LeftButtonUp")
+            overlay:SetScript("OnClick", function(_, mouseButton, down)
+                Click(isRoll, button, mouseButton, down)
+            end)
+            overlay:SetScript("OnEnter", function()
+                local handler = button:GetScript("OnEnter")
+                if handler then handler(button) end
+            end)
+            overlay:SetScript("OnLeave", function()
+                local handler = button:GetScript("OnLeave")
+                if handler then handler(button) end
+            end)
+            overlay:Hide()
+            return overlay
+        end
+
+        local function Install()
+            if rollButton then
+                SyncOverlays()
+                return
+            end
+            local frame = BonusRollFrame
+            local prompt = frame and frame.PromptFrame
+            local roll, pass = prompt and prompt.RollButton, prompt and prompt.PassButton
+            if not roll or not pass or roll:IsProtected() or pass:IsProtected() then return end
+            if roll._brcHooked or pass._brcHooked then return end
+            if not roll:GetScript("OnClick") or not pass:GetScript("OnClick") then return end
+            rollButton, passButton = roll, pass
+            rollOverlay = MakeOverlay(roll, true)
+            passOverlay = MakeOverlay(pass, false)
+            if not lifecycleHooked then
+                lifecycleHooked = true
+                local function Changed()
+                    if active then Invalidate(); SyncOverlays() end
+                end
+                hooksecurefunc("BonusRollFrame_StartBonusRoll", Changed)
+                hooksecurefunc("BonusRollFrame_CloseBonusRoll", Changed)
+                frame:HookScript("OnHide", Changed)
+                frame:HookScript("OnShow", Changed)
+            end
+            SyncOverlays()
+        end
+
+        local function Apply()
+            Invalidate()
+            active = Enabled()
+            if not active then
+                SyncOverlays()
+                if eventFrame then eventFrame:UnregisterAllEvents() end
+                return
+            end
+            if not eventFrame then
+                eventFrame = CreateFrame("Frame")
+                eventFrame:SetScript("OnEvent", function(_, event, addonName)
+                    if event == "ADDON_LOADED" then
+                        if addonName == "BonusRollConfirm" or not rollButton then
+                            EllesmereUI._applyBonusRollConfirmation()
+                        end
+                    else
+                        Invalidate()
+                        SyncOverlays()
+                    end
+                end)
+            end
+            eventFrame:RegisterEvent("ADDON_LOADED")
+            eventFrame:RegisterEvent("BONUS_ROLL_STARTED")
+            eventFrame:RegisterEvent("BONUS_ROLL_FAILED")
+            eventFrame:RegisterEvent("BONUS_ROLL_RESULT")
+            eventFrame:RegisterEvent("BONUS_ROLL_DEACTIVATE")
+            eventFrame:RegisterEvent("PLAYER_LOOT_SPEC_UPDATED")
+            eventFrame:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
+            Install()
+        end
+        EllesmereUI._applyBonusRollConfirmation = Apply
+        Apply()
+    end
 
     ---------------------------------------------------------------------------
     --  Auto Unwrap Collections (Mounts / Pets / Toys)
@@ -224,12 +393,19 @@ qolFrame:SetScript("OnEvent", function(self)
             return (MerchantFrame and MerchantFrame:IsShown()) and true or false
         end
         -- Same reasoning as MerchantOpen: opening while the mailbox is up compounds
-        -- the strand-a-slot race with mail's own item delivery. Pause while shown; resume once it closes.
+        -- the strand-a-slot race with mail's own item delivery. Interaction state,
+        -- not frame visibility: third-party mail/bank UIs hide the stock frames,
+        -- but the server-tracked interaction is true at the mailbox/banker
+        -- regardless of what draws the window.
         local function MailOpen()
-            return (MailFrame and MailFrame:IsShown()) and true or false
+            return (C_PlayerInteractionManager and C_PlayerInteractionManager.IsInteractingWithNpcOfType
+                and C_PlayerInteractionManager.IsInteractingWithNpcOfType(Enum.PlayerInteractionType.MailInfo)) and true or false
         end
         local function BankOpen()
-            return (BankFrame and BankFrame:IsShown()) and true or false
+            if not (C_PlayerInteractionManager and C_PlayerInteractionManager.IsInteractingWithNpcOfType) then return false end
+            -- Both bank types: character banker and the warband (account) bank.
+            return (C_PlayerInteractionManager.IsInteractingWithNpcOfType(Enum.PlayerInteractionType.Banker)
+                or C_PlayerInteractionManager.IsInteractingWithNpcOfType(Enum.PlayerInteractionType.AccountBanker)) and true or false
         end
         -- "Exclude Warbound Containers": checks the item's own bind type
         -- instead of asking the bank if it would accept a deposit right now --
@@ -252,7 +428,19 @@ qolFrame:SetScript("OnEvent", function(self)
             -- re-checks once the data lands) so a warbound container is never
             -- opened just because its bind type was not known yet.
             if not bindType then return true end
-            return WARBOUND_BIND_TYPES[bindType] == true
+            if WARBOUND_BIND_TYPES[bindType] == true then return true end
+            -- Warbound Until Equipped containers report bindType == OnEquip, same as
+            -- an ordinary BoE item (no dedicated GetItemInfo enum value -- see
+            -- EUI_Bags.SetBindTypeText's "WuE items report bindType == OnEquip"), so
+            -- ToBnetAccountUntilEquipped above never actually matches one. The item's
+            -- own bound-until-equip flag is the only reliable signal.
+            if bindType == Enum.ItemBind.OnEquip and ItemLocation and C_Item.IsBoundToAccountUntilEquip then
+                local loc = ItemLocation:CreateFromBagAndSlot(bag, slot)
+                if loc and C_Item.DoesItemExist(loc) then
+                    return C_Item.IsBoundToAccountUntilEquip(loc) == true
+                end
+            end
+            return false
         end
         local SLOTS_PER_FRAME = 3  -- check 3 slots per OnUpdate tick
 
@@ -745,7 +933,6 @@ qolFrame:SetScript("OnEvent", function(self)
         local function ApplyTrainAllButton()
             if EllesmereUIDB and EllesmereUIDB.trainAllButton then
                 EventUtil.ContinueOnAddOnLoaded("Blizzard_TrainerUI", SpawnButton)
-                if IsAddOnLoaded and IsAddOnLoaded("Blizzard_TrainerUI") then SpawnButton() end
             elseif trainBtn then
                 trainBtn:Hide()
             end
@@ -768,9 +955,10 @@ qolFrame:SetScript("OnEvent", function(self)
     end
 
     ---------------------------------------------------------------------------
-    --  AH Current Expansion Only
+    --  AH Current Expansion Only (not on WoW Forever: the block, its event and
+    --  its options row do not exist there)
     ---------------------------------------------------------------------------
-    do
+    if not EllesmereUI.IS_FOREVER then
         local ahFrame = CreateFrame("Frame")
         ahFrame:RegisterEvent("AUCTION_HOUSE_SHOW")
         ahFrame:SetScript("OnEvent", function()
@@ -778,10 +966,21 @@ qolFrame:SetScript("OnEvent", function(self)
             if not AuctionHouseFrame or not AuctionHouseFrame.SearchBar then return end
             C_Timer.After(0, function()
                 local fb = AuctionHouseFrame.SearchBar.FilterButton
-                if not fb or not fb.filters then return end
+                if not fb or not fb.GetFilters or not fb.ToggleFilter then return end
                 if not (Enum and Enum.AuctionHouseFilter and Enum.AuctionHouseFilter.CurrentExpansionOnly) then return end
-                fb.filters[Enum.AuctionHouseFilter.CurrentExpansionOnly] = true
-                AuctionHouseFrame.SearchBar:UpdateClearFiltersButton()
+                local filterEnum = Enum.AuctionHouseFilter.CurrentExpansionOnly
+                local filters = fb:GetFilters()
+                -- The filter state is Blizzard's per-character saved table,
+                -- reached only through the button's accessors (the button
+                -- carries no filters field of its own). ToggleFilter flips the
+                -- entry for the next query; toggling an already-set filter
+                -- would switch it off, hence the read first.
+                if not (filters and filters[filterEnum]) then
+                    fb:ToggleFilter(filterEnum)
+                end
+                if AuctionHouseFrame.SearchBar.UpdateClearFiltersButton then
+                    AuctionHouseFrame.SearchBar:UpdateClearFiltersButton()
+                end
             end)
         end)
     end
@@ -1249,9 +1448,10 @@ qolFrame:SetScript("OnEvent", function(self)
     end
 
     ---------------------------------------------------------------------------
-    --  Auto Insert Keystone
+    --  Auto Insert Keystone (no keystones on WoW Forever: the block, its events
+    --  and its options row do not exist there)
     ---------------------------------------------------------------------------
-    do
+    if not EllesmereUI.IS_FOREVER then
         local function InsertKeystone()
             if EllesmereUIDB and EllesmereUIDB.autoInsertKeystone == false then return end
             if C_ChallengeMode.GetSlottedKeystoneInfo() then return end
@@ -1284,7 +1484,7 @@ qolFrame:SetScript("OnEvent", function(self)
             end
         end)
 
-        if IsAddOnLoaded and IsAddOnLoaded("Blizzard_ChallengesUI") then
+        if C_AddOns.IsAddOnLoaded("Blizzard_ChallengesUI") then
             if ChallengesKeystoneFrame then
                 ChallengesKeystoneFrame:HookScript("OnShow", InsertKeystone)
             end
@@ -1292,9 +1492,11 @@ qolFrame:SetScript("OnEvent", function(self)
     end
 
     ---------------------------------------------------------------------------
-    --  Quick Signup (double-click to sign up)
+    --  Quick Signup (double-click to sign up; not on WoW Forever: Blizzard's
+    --  premade-group list does not load there, so the block and its options
+    --  row do not exist)
     ---------------------------------------------------------------------------
-    do
+    if not EllesmereUI.IS_FOREVER then
         local lastClickTime  = 0
         local lastClickEntry = nil
         local DOUBLE_CLICK_THRESHOLD = 0.4
@@ -1380,11 +1582,151 @@ qolFrame:SetScript("OnEvent", function(self)
     end
 
     ---------------------------------------------------------------------------
-    --  Persistent LFG Signup Note
+    --  Persistent LFG Signup Note (not on WoW Forever: no premade Sign Up dialog
+    --  there, so the block and its options row do not exist)
     ---------------------------------------------------------------------------
-    do
+    if not EllesmereUI.IS_FOREVER then
         local vanilla = LFGListApplicationDialog_Show
         local patched = false
+        local copyHooked = false
+        local copyHelper
+        local hidingCopyField = false
+
+        local function LimitNote(text)
+            if type(text) ~= "string" then return "" end
+            text = text:gsub("[\r\n]+", " ")
+            local bytes, position, count, last = #text, 1, 0, 0
+            while position <= bytes and count < 63 do
+                local byte = text:byte(position)
+                local width = byte < 128 and 1 or byte < 224 and 2 or byte < 240 and 3 or 4
+                if position + width - 1 > bytes then break end
+                last = position + width - 1
+                position = last + 1
+                count = count + 1
+            end
+            return text:sub(1, last)
+        end
+
+        local function SavedNote()
+            return LimitNote(EllesmereUIDB and EllesmereUIDB.signupNote)
+        end
+
+        local function Enabled()
+            return EllesmereUIDB and EllesmereUIDB.persistSignupNote
+        end
+
+        local function HideCopyField(focusTarget)
+            if not copyHelper then return end
+            copyHelper.buttonText:SetText(EllesmereUI.L("Copy"))
+            if copyHelper.copyBox:IsShown() then
+                hidingCopyField = true
+                copyHelper.copyBox:Hide()
+                copyHelper.copyBox:ClearFocus()
+                hidingCopyField = false
+            end
+            if focusTarget and copyHelper.targetEditBox then
+                copyHelper.targetEditBox:SetFocus()
+            end
+        end
+
+        local function RefreshCopyHelper(dialog)
+            if not Enabled() or not dialog or not dialog:IsShown() then return end
+            local description = dialog and dialog.Description
+            local editBox = description and description.EditBox
+            if not editBox then return end
+            if SavedNote() == "" then
+                if copyHelper then copyHelper:Hide() end
+                return
+            end
+
+            if not copyHelper then
+                local EG = EllesmereUI.ELLESMERE_GREEN or { r = 0.05, g = 0.82, b = 0.62 }
+                local FONT = EllesmereUI.GetFontPath("main")
+                    or EllesmereUI.EXPRESSWAY or "Fonts\\FRIZQT__.TTF"
+                local PP = EllesmereUI.PP
+
+                local helper = CreateFrame("Frame", nil, dialog)
+                helper:SetAllPoints(dialog)
+                helper:EnableMouse(false)
+
+                local button = CreateFrame("Button", nil, helper)
+                button:SetSize(42, 20)
+                button:SetPoint("LEFT", description, "RIGHT", 4, 0)
+                button:EnableMouse(true)
+
+                local buttonBg = button:CreateTexture(nil, "BACKGROUND")
+                buttonBg:SetAllPoints()
+                buttonBg:SetColorTexture(0.02, 0.03, 0.04, 0.92)
+                local buttonBorder = EllesmereUI.MakeBorder(button, EG.r, EG.g, EG.b, 0.72, PP)
+
+                local buttonText = button:CreateFontString(nil, "OVERLAY")
+                buttonText:SetFont(FONT, 9, "")
+                buttonText:SetPoint("CENTER", 0, 0)
+                buttonText:SetText(EllesmereUI.L("Copy"))
+                buttonText:SetTextColor(EG.r, EG.g, EG.b, 0.92)
+
+                local copyBox = CreateFrame("EditBox", nil, helper)
+                copyBox:SetPoint("TOPLEFT", description, "TOPLEFT", 0, 0)
+                copyBox:SetPoint("BOTTOMRIGHT", description, "BOTTOMRIGHT", 0, 0)
+                copyBox:SetAutoFocus(false)
+                copyBox:SetFont(FONT, 11, "")
+                copyBox:SetTextColor(1, 1, 1, 0.96)
+                copyBox:SetTextInsets(5, 5, 0, 0)
+                copyBox:SetJustifyH("LEFT")
+                copyBox:SetHighlightColor(EG.r, EG.g, EG.b, 0.45)
+                copyBox:EnableMouse(true)
+                local copyBg = copyBox:CreateTexture(nil, "BACKGROUND")
+                copyBg:SetAllPoints()
+                copyBg:SetColorTexture(0.02, 0.03, 0.04, 1)
+                EllesmereUI.MakeBorder(copyBox, EG.r, EG.g, EG.b, 0.9, PP)
+                copyBox:Hide()
+
+                copyBox:SetScript("OnEditFocusLost", function()
+                    if not hidingCopyField and not button:IsMouseOver() then
+                        HideCopyField(false)
+                    end
+                end)
+                copyBox:SetScript("OnKeyUp", function(_, key)
+                    if key == "C" and IsControlKeyDown() then
+                        HideCopyField(true)
+                    end
+                end)
+
+                button:SetScript("OnEnter", function()
+                    buttonBorder:SetColor(EG.r, EG.g, EG.b, 1)
+                    buttonText:SetTextColor(EG.r, EG.g, EG.b, 1)
+                end)
+                button:SetScript("OnLeave", function()
+                    buttonBorder:SetColor(EG.r, EG.g, EG.b, 0.72)
+                    buttonText:SetTextColor(EG.r, EG.g, EG.b, 0.92)
+                end)
+                button:SetScript("OnClick", function()
+                    if copyBox:IsShown() then
+                        HideCopyField(false)
+                        return
+                    end
+                    local note = SavedNote()
+                    if note == "" then return end
+                    copyBox:SetText(note)
+                    copyBox:Show()
+                    copyBox:SetFocus()
+                    copyBox:HighlightText()
+                    buttonText:SetText("Ctrl+C")
+                end)
+
+                helper.button = button
+                helper.buttonText = buttonText
+                helper.copyBox = copyBox
+                copyHelper = helper
+            end
+
+            copyHelper.targetEditBox = editBox
+            copyHelper:SetFrameLevel(dialog:GetFrameLevel() + 20)
+            copyHelper.button:SetFrameLevel(copyHelper:GetFrameLevel() + 1)
+            copyHelper.copyBox:SetFrameLevel(copyHelper:GetFrameLevel() + 2)
+            HideCopyField()
+            copyHelper:Show()
+        end
 
         local function PatchedShow(self, resultID)
             if resultID then
@@ -1409,18 +1751,37 @@ qolFrame:SetScript("OnEvent", function(self)
             StaticPopupSpecial_Show(self)
         end
 
+        EllesmereUI.GetPersistentSignupNote = function()
+            return SavedNote()
+        end
+
         local function SyncPatch()
-            if EllesmereUIDB and EllesmereUIDB.persistSignupNote then
+            if Enabled() then
                 if not patched then
                     LFGListApplicationDialog_Show = PatchedShow
                     patched = true
                 end
+                -- PGF can replace the show function after login; the dialog hook survives it.
+                if LFGListApplicationDialog and not copyHooked then
+                    LFGListApplicationDialog:HookScript("OnShow", RefreshCopyHelper)
+                    copyHooked = true
+                end
+                RefreshCopyHelper(LFGListApplicationDialog)
             else
                 if patched then
-                    LFGListApplicationDialog_Show = vanilla
+                    if LFGListApplicationDialog_Show == PatchedShow then
+                        LFGListApplicationDialog_Show = vanilla
+                    end
                     patched = false
                 end
+                if copyHelper then copyHelper:Hide() end
             end
+        end
+
+        EllesmereUI.SetPersistentSignupNote = function(note)
+            if not EllesmereUIDB then EllesmereUIDB = {} end
+            EllesmereUIDB.signupNote = LimitNote(note)
+            SyncPatch()
         end
 
         EllesmereUI._applyPersistSignupNote = SyncPatch
@@ -1434,9 +1795,10 @@ qolFrame:SetScript("OnEvent", function(self)
     ---------------------------------------------------------------------------
 
     ---------------------------------------------------------------------------
-    --  Hide Talking Head Frame (the NPC dialogue rectangle during quests/dungeons)
+    --  Hide Talking Head Frame (the NPC dialogue rectangle during quests/dungeons;
+    --  not on WoW Forever: the block, its hook and its options row do not exist there)
     ---------------------------------------------------------------------------
-    do
+    if not EllesmereUI.IS_FOREVER then
         local function HookTalkingHead()
             local thf = _G.TalkingHeadFrame
             if not thf or EllesmereUI._GetFFD(thf).hooked then return end
@@ -1617,6 +1979,10 @@ qolFrame:SetScript("OnEvent", function(self)
 
         local resetAnnounceFrame = CreateFrame("Frame")
         resetAnnounceFrame:SetScript("OnEvent", function(self, event, msg)
+            -- CHAT_MSG_SYSTEM fires for every system message all session (this frame
+            -- stays registered while the toggle is on, not just around /reset), and some
+            -- carry secret text in protected content. Bail before touching msg at all.
+            if issecretvalue and issecretvalue(msg) then return end
             if not (EllesmereUIDB and EllesmereUIDB.instanceResetAnnounce) then return end
 
             -- Instance group only: LE_PARTY_CATEGORY_INSTANCE covers party/raid; IsInGroup() is the older-API fallback.
@@ -1626,8 +1992,13 @@ qolFrame:SetScript("OnEvent", function(self)
 
             if not inInstanceGroup then return end
 
+            -- A reset cannot fail in a party: there a "players still inside" line
+            -- still means the instance reset, so it announces success.
+            local success = MatchesAny(msg, RESET_PATTERNS)
+                or (not IsInRaid() and MatchesAny(msg, FAIL_PATTERNS))
+
             -- Small delay so Blizzard's own system message renders first.
-            if MatchesAny(msg, RESET_PATTERNS) then
+            if success then
                 if resetAnnouncePending then return end
                 resetAnnouncePending = true
                 C_Timer.After(0.3, function()
@@ -1821,6 +2192,11 @@ do
         crit = true, haste = true, mastery = true, vers = true,
         leech = true, avoidance = true, speed = true,
     }
+    -- WoW Forever has no Mastery or Versatility.
+    if EllesmereUI.IS_FOREVER then
+        DEFAULT_STAT_ORDER = { "crit", "haste", "leech", "avoidance", "speed" }
+        VALID_STAT.mastery, VALID_STAT.vers = nil, nil
+    end
 
     local function SecondaryStatsOrder()
         local saved = EllesmereUI.QoLExtrasGet("secondaryStatsOrder")
@@ -1964,8 +2340,14 @@ do
             customHex = statsFrame._classHex or "ffffff"
         end
 
-        local crit = GetCritChance("player")
-        local haste = UnitSpellHaste("player")
+        local crit, critCR, haste, hasteCR
+        if EllesmereUI.IS_FOREVER then
+            crit, critCR = EllesmereUI.ForeverCritChance()
+            haste, hasteCR = EllesmereUI.ForeverHaste()
+        else
+            crit, critCR = EllesmereUI.PlayerCritChance()
+            haste, hasteCR = UnitSpellHaste("player"), CR_HASTE_MELEE
+        end
         local mastery = GetMasteryEffect()
         -- Versatility is the only row built by ADDING two getters, and addition
         -- is what a secret refuses -- so under restriction the real total is
@@ -1988,8 +2370,8 @@ do
         local showRawValues = showRawOnly or showBoth
         local critRaw, hasteRaw, masteryRaw, versRaw
         if showRawValues then
-            critRaw = GetCombatRating(CR_CRIT_MELEE)
-            hasteRaw = GetCombatRating(CR_HASTE_MELEE)
+            critRaw = GetCombatRating(critCR)
+            hasteRaw = GetCombatRating(hasteCR)
             masteryRaw = GetCombatRating(CR_MASTERY)
             versRaw = GetCombatRating(CR_VERSATILITY_DAMAGE_DONE)
         end
@@ -2205,7 +2587,7 @@ do
         end
         if statsText then
             local font = EllesmereUI.ResolveFontName(EllesmereUI.GetFontsDB().global)
-            if EllesmereUI and EllesmereUI.PrimeFontShadow then EllesmereUI.PrimeFontShadow(statsText, EllesmereUI.GetFontUseShadow("extras")) end
+            EllesmereUI.PrimeFontShadow(statsText, EllesmereUI.GetFontUseShadow("extras"))
             statsText:SetFont(font, 12, EllesmereUI.GetFontOutlineFlag("extras"))
             statsText:SetSpacing(ROW_GAP)
         end
@@ -2215,7 +2597,7 @@ do
         if statsText then
             local font = EllesmereUI.ResolveFontName(EllesmereUI.GetFontsDB().global)
             local fontSize = math.floor(12 * scale + 0.5)
-            if EllesmereUI and EllesmereUI.PrimeFontShadow then EllesmereUI.PrimeFontShadow(statsText, EllesmereUI.GetFontUseShadow("extras")) end
+            EllesmereUI.PrimeFontShadow(statsText, EllesmereUI.GetFontUseShadow("extras"))
             statsText:SetFont(font, fontSize, EllesmereUI.GetFontOutlineFlag("extras"))
             -- Row gap scales with the font so the block keeps its rhythm.
             statsText:SetSpacing(math.floor(ROW_GAP * scale + 0.5))
@@ -2226,6 +2608,11 @@ do
             "UNIT_SPELL_HASTE",
         }) do
             statsFrame:RegisterUnitEvent(ev, "player")
+        end
+        -- Forever can show melee or ranged haste, which change without UNIT_SPELL_HASTE.
+        if EllesmereUI.IS_FOREVER then
+            statsFrame:RegisterUnitEvent("UNIT_ATTACK_SPEED", "player")
+            statsFrame:RegisterUnitEvent("UNIT_RANGEDDAMAGE", "player")
         end
         for _, ev in ipairs({
             "COMBAT_RATING_UPDATE", "PLAYER_EQUIPMENT_CHANGED",
@@ -2265,11 +2652,9 @@ do
 
     -- The frame is sized from the text on every update, but only while it is
     -- shown. Catch it up when unlock mode opens so the mover box matches.
-    if EllesmereUI.RegisterUnlockModeListener then
-        EllesmereUI:RegisterUnlockModeListener("EUI_SecondaryStats", function(opening)
-            if opening then UpdateSecondaryStats() end
-        end)
-    end
+    EllesmereUI:RegisterUnlockModeListener("EUI_SecondaryStats", function(opening)
+        if opening then UpdateSecondaryStats() end
+    end)
 
     EllesmereUI._getSecondaryStatsFrame = function()
         if not statsFrame then
@@ -2327,7 +2712,7 @@ do
 
         local function MakeFS(size)
             local f = fpsFrame:CreateFontString(nil, "OVERLAY")
-            if EllesmereUI and EllesmereUI.PrimeFontShadow then EllesmereUI.PrimeFontShadow(f, EllesmereUI.GetFontUseShadow("extras")) end
+            EllesmereUI.PrimeFontShadow(f, EllesmereUI.GetFontUseShadow("extras"))
             f:SetFont(FONT, size, EllesmereUI.GetFontOutlineFlag("extras"))
             f:SetTextColor(1, 1, 1, 1)
             return f
@@ -2487,24 +2872,34 @@ do
         end
     end
 
+    local RegisterFPSUnlockElement  -- forward: defined below
+
     -- A settings change can move the readout between its two owners, so every
     -- FPS option writes through here rather than calling one side directly.
     EllesmereUI._applyFPSDisplay = function()
         if EllesmereUI._applyFPSCounter then EllesmereUI._applyFPSCounter() end
         if EllesmereUI._applySecondaryStats then EllesmereUI._applySecondaryStats() end
+        -- Re-registering is how an open unlock session gains or loses a mover,
+        -- so a showFPS flip (options toggle or the keybind, both of which land
+        -- here) takes effect without leaving and re-entering.
+        if EllesmereUI._unlockActive then RegisterFPSUnlockElement() end
     end
 
-    C_Timer.After(2, function()
+    RegisterFPSUnlockElement = function()
         local MK = EllesmereUI.MakeUnlockElement
+        if not MK then return end
         EllesmereUI:RegisterUnlockElements({
             MK({
                 key = "EUI_FPS",
                 label = "FPS Counter",
                 group = "General",
                 order = 700,
-                -- Dragged by the Secondary Stats element while attached. Read
-                -- live, so detaching restores the mover without re-registering.
-                isHidden = IsAttached,
+                -- Off, or dragged by the Secondary Stats element while
+                -- attached. Read live, so detaching restores the mover without
+                -- re-registering.
+                isHidden = function()
+                    return not EllesmereUI.QoLExtrasGet("showFPS") or IsAttached()
+                end,
                 getFrame = function()
                     if not fpsFrame then CreateFPSCounter() end
                     return fpsFrame
@@ -2538,7 +2933,8 @@ do
                 end,
             }),
         })
-    end)
+    end
+    C_Timer.After(2, RegisterFPSUnlockElement)
 
     C_Timer.After(2.5, function()
         local MK = EllesmereUI.MakeUnlockElement
@@ -2616,12 +3012,7 @@ do
             end
         end
         if InCombatLockdown() then
-            local w = CreateFrame("Frame")
-            w:RegisterEvent("PLAYER_REGEN_ENABLED")
-            w:SetScript("OnEvent", function(self)
-                self:UnregisterAllEvents()
-                ApplyFPSBind()
-            end)
+            ns.CombatQueue.Defer("FPSBind", ApplyFPSBind)
         else
             ApplyFPSBind()
         end
@@ -2743,12 +3134,22 @@ do
         end
     end
 
+    -- Durability + alert events land together per damaged slot; one check
+    -- after the frame settles (the check itself returns in combat, so a flush
+    -- landing after PLAYER_REGEN_DISABLED cannot re-show the warning).
+    local durCheckPending = false
+    local function FlushDurabilityCheck()
+        durCheckPending = false
+        CheckDurabilityAndShow()
+    end
     repairWarnFrame:SetScript("OnEvent", function(_, event)
         if event == "PLAYER_REGEN_DISABLED" then
             if durWarnOverlay then durWarnOverlay:Hide() end
             return
         end
-        CheckDurabilityAndShow()
+        if durCheckPending then return end
+        durCheckPending = true
+        C_Timer.After(0, FlushDurabilityCheck)
     end)
 
     -- Events registered only while enabled; toggle re-syncs live, and one immediate check on enable surfaces an already-low item.
@@ -2761,6 +3162,8 @@ do
             repairWarnFrame:RegisterEvent("PLAYER_REGEN_DISABLED")
             repairWarnFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
             repairWarnFrame:RegisterEvent("UPDATE_INVENTORY_DURABILITY")
+            -- Self-repair items recalculate alerts without the durability event.
+            repairWarnFrame:RegisterEvent("UPDATE_INVENTORY_ALERTS")
             CheckDurabilityAndShow()
         end
     end
@@ -2798,50 +3201,174 @@ end
 --  Disable Right Click Targeting
 -------------------------------------------------------------------------------
 do
+    -- Safety net for a mouselook we started: the BUTTON2 override can vanish
+    -- between the down and the up click (combat edge, or the engine dropping
+    -- the mouseover while the button is held), and the up would then never
+    -- reach this button, leaving mouselook on until a /reload. The registration
+    -- itself is the "we own this mouselook" flag, so it can only undo our own
+    -- start, never a toggle-mouselook addon's, and costs nothing when idle.
+    local mlookGuard = CreateFrame("Frame")
+    mlookGuard:SetScript("OnEvent", function(self)
+        if IsMouseButtonDown("RightButton") then return end
+        self:UnregisterEvent("GLOBAL_MOUSE_UP")
+        if IsMouselooking() then MouselookStop() end
+    end)
+
     local mlookBtn = CreateFrame("Button", "EUI_MouseLookBtn", UIParent)
     mlookBtn:RegisterForClicks("AnyDown", "AnyUp")
     mlookBtn:SetScript("OnClick", function(_, _, down)
-        if down then MouselookStart() else MouselookStop() end
+        if down then
+            mlookGuard:RegisterEvent("GLOBAL_MOUSE_UP")
+            MouselookStart()
+        else
+            mlookGuard:UnregisterEvent("GLOBAL_MOUSE_UP")
+            MouselookStop()
+        end
     end)
 
     local stateFrame = CreateFrame("Frame", "EUI_NoRightClickState", UIParent, "SecureHandlerStateTemplate")
 
+    -- The binding is the OR of two states with separate writers:
+    --   "mov" -- the secure state driver (engine-evaluated), BOTH arms [combat]:
+    --            out of combat the driver's cached value sits at 0 and never
+    --            re-pushes, so it can't stomp the Lua lane below.
+    --   "rc"  -- Lua-pushed OOC enemy arm. [harm] matches capturable wild pets
+    --            (no macro token excludes them), so the OOC verdict is computed
+    --            in Lua where UnitIsWildBattlePet can veto -- the pet-capture
+    --            right-click fix. In combat this lane is suspended; pets are
+    --            not capturable there.
+    -- Each snippet's clear defers to the other state, so the writers compose.
+    -- "combatclear" zeroes rc from a SECURE snippet at combat entry: Lua cannot
+    -- SetAttribute on this protected frame in lockdown, and a stale rc=1
+    -- (pulled while hovering an enemy) would otherwise pin the bind on allies
+    -- for the whole fight.
+    -- "rcclear" zeroes rc the same way when the engine reports no harmful
+    -- mouseover at all. UPDATE_MOUSEOVER_UNIT fires when a mouseover STARTS but
+    -- never when it clears, so the Lua lane alone stays pinned at 1 after the
+    -- last enemy hover and keeps BUTTON2 bound over quest objects and terrain
+    -- until something else is hovered or the UI is reloaded. This rides
+    -- SecureStateDriverManager's existing 0.2s sweep (it re-resolves every
+    -- driver on a timer, not only on its registered events), so the clear costs
+    -- no Lua per frame and needs no ticker of our own.
+    local ONSTATE_MOV = [[
+        if newstate == 1 then
+            self:SetBindingClick(1, "BUTTON2", "EUI_MouseLookBtn")
+        elseif (self:GetAttribute("state-rc") or 0) ~= 1 then
+            self:ClearBindings()
+        end
+    ]]
+    local ONSTATE_RC = [[
+        if newstate == 1 then
+            self:SetBindingClick(1, "BUTTON2", "EUI_MouseLookBtn")
+        elseif (self:GetAttribute("state-mov") or 0) ~= 1 then
+            self:ClearBindings()
+        end
+    ]]
+    local ONSTATE_COMBATCLEAR = [[
+        if newstate == 1 then
+            self:SetAttribute("state-rc", 0)
+        end
+    ]]
+    local ONSTATE_RCCLEAR = [[
+        if newstate ~= 1 then
+            self:SetAttribute("state-rc", 0)
+        end
+    ]]
+
+    -- OOC enemy-arm verdict, edge-memoed: one attribute push per verdict CHANGE,
+    -- not per hover. The memo reads the live attribute rather than a Lua cache,
+    -- because the two secure snippets above also write it -- a private cache
+    -- would go stale against them and swallow the next arming push. All reads
+    -- are clean out of combat.
+    local function PushRCState()
+        local match = (UnitExists("mouseover")
+            and not UnitIsDeadOrGhost("mouseover")
+            and UnitCanAttack("player", "mouseover")
+            and not UnitIsWildBattlePet("mouseover")
+            and not UnitIsBattlePetCompanion("mouseover")) and 1 or 0
+        if match == (stateFrame:GetAttribute("state-rc") or 0) then return end
+        stateFrame:SetAttribute("state-rc", match)
+    end
+
+    -- Registered only while the enemy toggle is on (feature-off users pay
+    -- nothing); the mouseover event additionally drops during combat.
+    local rcHoverFrame = CreateFrame("Frame")
+    rcHoverFrame:SetScript("OnEvent", function(self, event)
+        if event == "UPDATE_MOUSEOVER_UNIT" then
+            PushRCState()
+        elseif event == "PLAYER_REGEN_DISABLED" then
+            self:UnregisterEvent("UPDATE_MOUSEOVER_UNIT")
+        elseif event == "PLAYER_REGEN_ENABLED" then
+            self:RegisterEvent("UPDATE_MOUSEOVER_UNIT")
+            PushRCState()
+        end
+    end)
+
     local function ApplyRightClickTarget()
         if InCombatLockdown() then
-            local deferFrame = CreateFrame("Frame")
-            deferFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
-            deferFrame:SetScript("OnEvent", function(self)
-                self:UnregisterAllEvents()
-                ApplyRightClickTarget()
-            end)
+            ns.CombatQueue.Defer("RightClickTarget", ApplyRightClickTarget)
             return
         end
         local db = EllesmereUIDB
         local enemy = db and db.disableRightClickTarget
         local allyCombat = db and db.disableRightClickTargetAllyCombat
         if enemy or allyCombat then
-            -- Mouseover condition from the two independent toggles: enemies fire
-            -- everywhere, allies only while in combat ([combat]), so right-clicking vendors/questgivers still works out of combat.
+            -- Capturable pets exist only in the outdoor world, so the Lua rc
+            -- lane (and its mouseover listener) runs ONLY there. In instanced
+            -- content the driver owns the enemy arm unconditionally -- pure
+            -- engine evaluation, zero Lua per hover, and the OOC-between-pulls
+            -- suppression still works. Re-applied on PLAYER_ENTERING_WORLD so
+            -- the mode follows zone transitions.
+            local inInstance = IsInInstance()
+            local ruleLaneOn = enemy and not inInstance
             local macro = ""
-            if enemy then macro = macro .. "[@mouseover,harm,nodead]1;" end
-            if allyCombat then macro = macro .. "[@mouseover,help,nodead,combat]1;" end
+            if enemy then
+                macro = macro .. (inInstance and "[@mouseover,harm,nodead]1;"
+                    or "[@mouseover,harm,nodead,combat]1;")
+            end
+            -- Ally arm = party/raid MEMBERS only. Plain [help] also matches any
+            -- friendly-classified world object (a Warlock's Demonic Gateway),
+            -- which captured the right-click that would have used it. The
+            -- UNIT-relative conditionals [party]/[raid] test the @mouseover unit
+            -- itself; [group] would test whether the PLAYER is grouped (the
+            -- visibility-driver sense) and would neither free the gateway in a
+            -- group nor guard anything solo. Both clauses so a 5-man and a raid
+            -- read the same. Accepted: non-grouped friendlies are not guarded.
+            if allyCombat then
+                macro = macro .. "[@mouseover,help,party,nodead,combat]1;[@mouseover,help,raid,nodead,combat]1;"
+            end
             macro = macro .. "0"
             SecureStateDriverManager:RegisterEvent("UPDATE_MOUSEOVER_UNIT")
-            -- [combat] needs regen events so state re-evaluates on combat enter/exit even when the mouseover unit hasn't changed.
-            if allyCombat then
-                SecureStateDriverManager:RegisterEvent("PLAYER_REGEN_DISABLED")
-                SecureStateDriverManager:RegisterEvent("PLAYER_REGEN_ENABLED")
-            end
+            -- [combat] arms re-evaluate on combat edges even when the mouseover
+            -- unit hasn't changed.
+            SecureStateDriverManager:RegisterEvent("PLAYER_REGEN_DISABLED")
+            SecureStateDriverManager:RegisterEvent("PLAYER_REGEN_ENABLED")
+            -- Handlers before drivers so the initial evaluation lands on them.
+            stateFrame:SetAttribute("_onstate-mov", ONSTATE_MOV)
+            stateFrame:SetAttribute("_onstate-rc", ONSTATE_RC)
+            stateFrame:SetAttribute("_onstate-combatclear", ONSTATE_COMBATCLEAR)
+            stateFrame:SetAttribute("_onstate-rcclear", ONSTATE_RCCLEAR)
             RegisterStateDriver(stateFrame, "mov", macro)
-            stateFrame:SetAttribute("_onstate-mov", [[
-                if newstate == 1 then
-                    self:SetBindingClick(1, "BUTTON2", "EUI_MouseLookBtn")
-                else
-                    self:ClearBindings()
-                end
-            ]])
+            RegisterStateDriver(stateFrame, "combatclear", "[combat]1;0")
+            if ruleLaneOn then
+                rcHoverFrame:RegisterEvent("UPDATE_MOUSEOVER_UNIT")
+                rcHoverFrame:RegisterEvent("PLAYER_REGEN_DISABLED")
+                rcHoverFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
+                -- Registered with the lane it clears, so the extra driver only
+                -- exists where the Lua lane does.
+                RegisterStateDriver(stateFrame, "rcclear", "[@mouseover,harm,nodead]1;0")
+                PushRCState()
+            else
+                rcHoverFrame:UnregisterAllEvents()
+                UnregisterStateDriver(stateFrame, "rcclear")
+                stateFrame:SetAttribute("state-rc", 0)
+            end
         else
             UnregisterStateDriver(stateFrame, "mov")
+            UnregisterStateDriver(stateFrame, "combatclear")
+            UnregisterStateDriver(stateFrame, "rcclear")
+            rcHoverFrame:UnregisterAllEvents()
+            stateFrame:SetAttribute("state-rc", 0)
             ClearOverrideBindings(stateFrame)
         end
     end
@@ -2849,9 +3376,11 @@ do
     EllesmereUI._applyRightClickTarget = ApplyRightClickTarget
 
     local rcInitFrame = CreateFrame("Frame")
+    -- Persistent (not one-shot): the instanced-vs-outdoor mode split above is
+    -- re-derived on every zone transition. Feature off = one cheap idempotent
+    -- call per loading screen.
     rcInitFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
-    rcInitFrame:SetScript("OnEvent", function(self)
-        self:UnregisterEvent("PLAYER_ENTERING_WORLD")
+    rcInitFrame:SetScript("OnEvent", function()
         ApplyRightClickTarget()
     end)
 end
@@ -3014,6 +3543,14 @@ do
 
         CreateCrosshair()
 
+        -- Strata (cog dropdown); MEDIUM = the original hardcoded value.
+        -- Change-guarded: SetFrameStrata re-sorts the frame tree.
+        local strata = G("crosshairStrata") or "MEDIUM"
+        if crosshairFrame._strata ~= strata then
+            crosshairFrame._strata = strata
+            crosshairFrame:SetFrameStrata(strata)
+        end
+
         local c = G("crosshairColor")
         local cr = c and c.r or 1
         local cg = c and c.g or 1
@@ -3119,14 +3656,14 @@ do
             local useShadow = EllesmereUI.GetFontUseShadow("extras")
 
             local cursorFS = coordFrame:CreateFontString(nil, "OVERLAY")
-            if EllesmereUI and EllesmereUI.PrimeFontShadow then EllesmereUI.PrimeFontShadow(cursorFS, useShadow) end
+            EllesmereUI.PrimeFontShadow(cursorFS, useShadow)
             cursorFS:SetFont(fp, sz, outF)
             cursorFS:SetTextColor(1, 1, 1, 0.9)
             cursorFS:SetJustifyH("RIGHT")
             cursorFS:SetPoint("RIGHT", divider, "LEFT", -10, 0)
 
             local playerFS = coordFrame:CreateFontString(nil, "OVERLAY")
-            if EllesmereUI and EllesmereUI.PrimeFontShadow then EllesmereUI.PrimeFontShadow(playerFS, useShadow) end
+            EllesmereUI.PrimeFontShadow(playerFS, useShadow)
             playerFS:SetFont(fp, sz, outF)
             playerFS:SetTextColor(1, 1, 1, 0.9)
             playerFS:SetJustifyH("LEFT")
@@ -3197,9 +3734,9 @@ do
                     local outF = EllesmereUI.GetFontOutlineFlag("extras")
                     local useShadow = EllesmereUI.GetFontUseShadow("extras")
                     local sz = (EllesmereUIDB and EllesmereUIDB.mapCoordsTextSize) or 12
-                    if EllesmereUI and EllesmereUI.PrimeFontShadow then EllesmereUI.PrimeFontShadow(coordText.cursor, useShadow) end
+                    EllesmereUI.PrimeFontShadow(coordText.cursor, useShadow)
                     coordText.cursor:SetFont(fp, sz, outF)
-                    if EllesmereUI and EllesmereUI.PrimeFontShadow then EllesmereUI.PrimeFontShadow(coordText.player, useShadow) end
+                    EllesmereUI.PrimeFontShadow(coordText.player, useShadow)
                     coordText.player:SetFont(fp, sz, outF)
                     PP.Size(coordText.divider, 2, sz)
                     coordFrame:Show()
@@ -3363,17 +3900,6 @@ do
         if root.GetChildren then pcall(ScanFrame, root) end
     end
 
-    -- One-time full walk (no allocation, no timer) to catch panels already open when the feature is switched on.
-    local function SweepAll()
-        local fp = GetFingerprint()
-        if not fp then return end
-        local frame = EnumerateFrames()
-        while frame do
-            if frame.ShowTooltip == fp then HideButton(frame) end
-            frame = EnumerateFrames(frame)
-        end
-    end
-
     local function RestoreButtons()
         for btn in pairs(hiddenByUs) do
             btn:SetAlpha(1)
@@ -3426,7 +3952,8 @@ do
             pcall(SetCVar, "hideHelptips", "1")
             pcall(SetCVar, "showTutorials", "0")
             weSetCVar = true
-            SweepAll()
+            -- No global EnumerateFrames walk here (runs inside PLAYER_LOGIN): already-open
+            -- panels pick up their "i" buttons on the next ShowUIPanel.
             HideOpenTips()
         else
             if weSetCVar then
@@ -3472,10 +3999,10 @@ do
     -- Configured font size + saved position (default center-top).
     local function ApplyOverlaySettings()
         if not alertOverlay then return end
-        local fontPath = (EllesmereUI.GetFontPath and EllesmereUI.GetFontPath("extras"))
+        local fontPath = (EllesmereUI.GetFontPath("extras"))
             or EllesmereUI.EXPRESSWAY or "Fonts\\FRIZQT__.TTF"
         -- Always keep an outline so the alert stays readable over any background.
-        local outline = (EllesmereUI.GetFontOutlineFlag and EllesmereUI.GetFontOutlineFlag("extras")) or ""
+        local outline = (EllesmereUI.GetFontOutlineFlag("extras")) or ""
         if not outline:find("OUTLINE") then
             outline = (outline == "") and "OUTLINE" or (outline .. ", OUTLINE")
         end
@@ -3735,10 +4262,8 @@ do
         -- Append now, at login, once other addons have registered theirs (same
         -- timing as Chat's whisper-sound dropdown). Idempotent: skips keys
         -- already present; the tables are the same ones options and PlayDeathSound read.
-        if EllesmereUI.AppendSharedMediaSounds then
-            EllesmereUI.AppendSharedMediaSounds(
-                GROUP_DEATH_SOUND_PATHS, GROUP_DEATH_SOUND_NAMES, GROUP_DEATH_SOUND_ORDER)
-        end
+        EllesmereUI.AppendSharedMediaSounds(
+            GROUP_DEATH_SOUND_PATHS, GROUP_DEATH_SOUND_NAMES, GROUP_DEATH_SOUND_ORDER)
         if EllesmereUIDB and EllesmereUIDB.announceGroupDeaths then
             ApplyAnnounceGroupDeaths()
         end
@@ -3789,10 +4314,10 @@ do
     -- Applies configured font size and saved position (or default dead-center placement) to the overlay.
     local function ApplyOverlaySettings()
         if not alertFrame then return end
-        local fontPath = (EllesmereUI.GetFontPath and EllesmereUI.GetFontPath("extras"))
+        local fontPath = (EllesmereUI.GetFontPath("extras"))
             or EllesmereUI.EXPRESSWAY or "Fonts\\FRIZQT__.TTF"
         -- Always keep an outline so the alert stays readable over any background.
-        local outline = (EllesmereUI.GetFontOutlineFlag and EllesmereUI.GetFontOutlineFlag("extras")) or ""
+        local outline = (EllesmereUI.GetFontOutlineFlag("extras")) or ""
         if not outline:find("OUTLINE") then
             outline = (outline == "" ) and "OUTLINE" or (outline .. ", OUTLINE")
         end
@@ -4004,6 +4529,9 @@ do
     end
 
     local function FormatDistance(fmt, minY, maxY)
+        -- Ladder rungs carry the spell's raw range (a float for some spells); the text shows whole yards.
+        if minY then minY = math.floor(minY) end
+        if maxY then maxY = math.floor(maxY) end
         if fmt == "plus" then
             if not minY or minY <= 0 then return nil end
             return minY .. "+"
@@ -4049,18 +4577,22 @@ do
 
     local function ApplyFrameSettings()
         if not distFrame then return end
-        local fontPath = (EllesmereUI.GetFontPath and EllesmereUI.GetFontPath("extras"))
+        local fontPath = (EllesmereUI.GetFontPath("extras"))
             or EllesmereUI.EXPRESSWAY or "Fonts\\FRIZQT__.TTF"
-        local outline = (EllesmereUI.GetFontOutlineFlag and EllesmereUI.GetFontOutlineFlag("extras")) or ""
+        local outline = (EllesmereUI.GetFontOutlineFlag("extras")) or ""
         if not outline:find("OUTLINE") then
             outline = (outline == "") and "OUTLINE" or (outline .. ", OUTLINE")
         end
         local size = (EllesmereUIDB and EllesmereUIDB.targetDistanceTextSize) or DEFAULT_TEXT_SIZE
+        -- HIGH = the pre-setting strata, so existing installs keep their look; the
+        -- setting is the opt-in to sit lower (e.g. under the bank window).
+        local strata = (EllesmereUIDB and EllesmereUIDB.targetDistanceStrata) or "HIGH"
         local align = GetAlign()
         distFrame._text:SetFont(fontPath, size, outline)
         distFrame._text:SetJustifyH(align)
         distFrame._text:ClearAllPoints()
         distFrame._text:SetPoint(align, distFrame, align, 0, 0)
+        distFrame:SetFrameStrata(strata)
         distFrame:SetSize(size * 5, size + 10)
 
         -- Unlock Mode owns anchors while dragging, or when Anchor-to is linked.
@@ -4082,7 +4614,6 @@ do
         if distFrame then return end
         distFrame = CreateFrame("Frame", nil, UIParent)
         distFrame:SetSize(100, 28)
-        distFrame:SetFrameStrata("HIGH")
         distFrame:SetFrameLevel(55)
         distFrame:EnableMouse(false)
         distFrame:SetMouseClickEnabled(false)
@@ -4459,7 +4990,7 @@ end
 --  Equipment Flyout item levels -- Blizzard's gear flyout (hover a character-
 --  sheet slot -> popup of same-slot bag/equipped items) only shows icons; when
 --  enabled, overlays each button with the item's level, coloured by quality. Hooks
---  EquipmentFlyout_DisplayButton (fires per button on populate) and reads EllesmereUIDB
+--  EquipmentFlyout_UpdateItems (after every flyout shape is populated) and reads EllesmereUIDB
 --  live, so the toggle applies to the next flyout with no reload. Toggle: EllesmereUIDB.flyoutItemLevels (Quality of Life -> UI).
 -------------------------------------------------------------------------------
 do
@@ -4482,7 +5013,13 @@ do
             end
             return
         end
-        -- Equipped / bank inventory slot.
+        -- Equipped inventory slot.
+        if ItemLocation then
+            local loc = ItemLocation:CreateFromEquipmentSlot(slot)
+            if loc and loc:IsValid() and C_Item.DoesItemExist(loc) then
+                return C_Item.GetCurrentItemLevel(loc), C_Item.GetItemQuality(loc), C_Item.GetItemLink(loc)
+            end
+        end
         local link = GetInventoryItemLink("player", slot)
         if link then
             local quality = GetInventoryItemQuality and GetInventoryItemQuality("player", slot)
@@ -4493,8 +5030,8 @@ do
     -- Item level + quality + link for a flyout button. Handles all three flyout
     -- shapes: modern buttons storing an ItemLocation object; retail packed location
     -- via EquipmentManager_GetLocationData; older clients via EquipmentManager_UnpackLocation.
-    local function ButtonItemInfo(button)
-        if button.GetItemLocation then
+    local function ButtonItemInfo(button, useItemLocation)
+        if useItemLocation and button.GetItemLocation then
             local ok, loc = pcall(button.GetItemLocation, button)
             if ok and loc and loc.IsValid and loc:IsValid() and C_Item.DoesItemExist(loc) then
                 return C_Item.GetCurrentItemLevel(loc), C_Item.GetItemQuality(loc), C_Item.GetItemLink(loc)
@@ -4530,7 +5067,7 @@ do
         if not fs then
             local font = EllesmereUI._font
                 or "Interface\\AddOns\\EllesmereUI\\media\\fonts\\Expressway.ttf"
-            local flag = (EllesmereUI.SlugFlag and EllesmereUI.SlugFlag("OUTLINE, SLUG"))
+            local flag = (EllesmereUI.SlugFlag("OUTLINE, SLUG"))
                 or "OUTLINE, SLUG"
             fs = button:CreateFontString(nil, "OVERLAY", nil, 7)
             fs:SetFont(font, 12, flag)
@@ -4541,35 +5078,54 @@ do
         return fs
     end
 
-    local function InstallHook()
-        if not EquipmentFlyout_DisplayButton then return end
-        hooksecurefunc("EquipmentFlyout_DisplayButton", function(button)
-            local fs = _flyoutFS[button]
-            if not FlyoutEnabled() then
-                if fs then fs:SetText("") end
-                return
-            end
+    local function PaintButton(button, useItemLocation)
+        local fs = _flyoutFS[button]
+        if not FlyoutEnabled() or not button:IsShown() then
+            if fs then fs:SetText("") end
+            return
+        end
 
-            local ilvl, quality, link = ButtonItemInfo(button)
-            fs = EnsureText(button)
-            if ilvl and ilvl > 0 then
-                fs:SetText(ilvl)
-                -- Match the character sheet: custom color > upgrade track > rarity.
-                local c
-                if EllesmereUI.GetItemLevelColor then
-                    c = EllesmereUI.GetItemLevelColor(link, quality)
-                elseif quality and ITEM_QUALITY_COLORS then
-                    c = ITEM_QUALITY_COLORS[quality]
-                end
-                if c then
-                    fs:SetTextColor(c.r, c.g, c.b, 1)
-                else
-                    fs:SetTextColor(1, 1, 1, 1)
-                end
-            else
-                fs:SetText("")
+        local ilvl, quality, link = ButtonItemInfo(button, useItemLocation)
+        fs = EnsureText(button)
+        if ilvl and ilvl > 0 then
+            fs:SetText(ilvl)
+            -- Match the character sheet: custom color > upgrade/crafted track > rarity.
+            local c
+            if EllesmereUI.GetItemLevelColor then
+                c = EllesmereUI.GetItemLevelColor(link, quality)
+            elseif quality and ITEM_QUALITY_COLORS then
+                c = ITEM_QUALITY_COLORS[quality]
             end
-        end)
+            if c then
+                fs:SetTextColor(c.r, c.g, c.b, 1)
+            else
+                fs:SetTextColor(1, 1, 1, 1)
+            end
+        else
+            fs:SetText("")
+        end
+    end
+
+    local function RefreshFlyoutItemLevels()
+        local flyout = EquipmentFlyoutFrame
+        if not flyout or not flyout.buttons then return end
+        local source = flyout.button
+        local parent = source and source:GetParent()
+        local settings = parent and parent.flyoutSettings
+        local useItemLocation = settings and settings.useItemLocation == true
+        for _, button in ipairs(flyout.buttons) do
+            PaintButton(button, useItemLocation)
+        end
+    end
+
+    local function InstallHook()
+        if not EquipmentFlyout_UpdateItems then return end
+        -- Item-upgrade flyouts use ItemLocation objects and bypass
+        -- EquipmentFlyout_DisplayButton entirely. They also leave that ItemLocation
+        -- on pooled buttons when an ordinary numeric-location flyout reuses them.
+        -- Refresh after the shared update and follow the active flyout's mode, so
+        -- both paths repaint instead of inheriting the other's item or overlay.
+        hooksecurefunc("EquipmentFlyout_UpdateItems", RefreshFlyoutItemLevels)
     end
 
     local f = CreateFrame("Frame")

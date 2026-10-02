@@ -27,11 +27,12 @@ local min, max = math.min, math.max
 local sin, cos = _G.sin or math.sin, _G.cos or math.cos  -- WoW globals are degree-based
 local GetTime = GetTime
 local GetCursorPosition = GetCursorPosition
-local GetSpellCooldown = C_Spell and C_Spell.GetSpellCooldown or GetSpellCooldown
-local UnitCastingInfo = UnitCastingInfo or CastingInfo
-local UnitChannelInfo = UnitChannelInfo or ChannelInfo
+local GetSpellCooldown = C_Spell.GetSpellCooldown
+local GCD_SPELL = EllesmereUI.GCD_SPELL
+local UnitCastingInfo = UnitCastingInfo
+local UnitChannelInfo = UnitChannelInfo
 
-local f, t
+local f, t, reticle
 local lastX, lastY
 
 local lastScale, lastHex, lastTex, lastAlpha
@@ -85,21 +86,40 @@ local function InRealInstancedContent()
 end
 
 -------------------------------------------------------------------------------
---  Cursor visibility (forward declaration — defined after trail/GCD/cast locals)
+--  Cursor visibility (forward declaration -- defined after trail/GCD/cast locals)
 -------------------------------------------------------------------------------
 local UpdateVisibility
 
 local lastUseClassColor
+
+local function CursorSize(p)
+    local size = floor((p.baseSize or DEF_BASESIZE) * (p.scale or DEF_SCALE) + 0.5)
+    if size < 8 then return 8 end
+    if size > 512 then return 512 end
+    return size
+end
+
+local function ApplyReticle(p, size, r, g, b, a)
+    if not reticle then return end
+    if not p.reticle then
+        reticle:Hide()
+        return
+    end
+    -- ~20% of the ring so the mask has enough pixels to stay circular.
+    local dot = max(4, floor(size * 0.2 + 0.5))
+    reticle:SetSize(dot, dot)
+    reticle:SetColorTexture(r, g, b, a)
+    reticle:Show()
+end
 
 local function Apply()
     if not f or not t then return end
     local p = ECL.db.profile
 
     local scale = p.scale or DEF_SCALE
+    local size = CursorSize(p)
     if scale ~= lastScale then
         lastScale = scale
-        local size = floor((p.baseSize or DEF_BASESIZE) * scale + 0.5)
-        if size < 8 then size = 8 elseif size > 512 then size = 512 end
         f:SetSize(size, size)
     end
 
@@ -110,10 +130,11 @@ local function Apply()
     -- changed. Accent mode also needs per-frame re-read since ELLESMERE_GREEN
     -- mutates in place when the user changes their accent color mid-session.
     local a = (p.alpha or 100) / 100
+    local r, g, b
     if hex ~= lastHex or p.useClassColor or p.useAccentColor or colorModeChanged or a ~= lastAlpha then
         lastHex = hex
         lastAlpha = a
-        local r, g, b = ResolveColor(p)
+        r, g, b = ResolveColor(p)
         t:SetVertexColor(r, g, b, a)
     end
 
@@ -125,6 +146,11 @@ local function Apply()
         local path = (ringKey and RING_TEXTURES[ringKey]) or RING_TEXTURES[tex] or TEX_CUSTOM
         t:SetTexture(path)
     end
+
+    -- Reticle is cheap and Apply() only runs on setting changes, so always
+    -- refresh it (toggle, scale, and color all land here).
+    if not r then r, g, b = ResolveColor(p) end
+    ApplyReticle(p, size, r, g, b, a)
 
     UpdateVisibility()
 end
@@ -237,13 +263,11 @@ local function ApplyTrail()
         trailContainer:SetScript("OnUpdate", function(_, elapsed)
             if not trailEnabled then return end
 
-            local p = ECL.db and ECL.db.profile
-            local circleEnabled = p and p.enabled ~= false
-            local inInstance = not (p and p.instanceOnly) or InRealInstancedContent()
-
-            -- Only spawn new dots when the cursor circle would be visible
-            local hiddenGate = not (p and p.onlyWhenHidden) or mouselookActive
-            if circleEnabled and inInstance and hiddenGate then
+            -- Only spawn dots while the cursor circle itself is visible, so the
+            -- trail follows every gate on the circle (Combat Only, Only Show in
+            -- Instances, Only Show When Hidden, the Visibility block) rather
+            -- than re-deriving a subset of them.
+            if isVisible then
                 local cx, cy = GetCursorPosition()
                 trailTimer = trailTimer + elapsed
                 local dx = cx - trailLastCX
@@ -384,6 +408,17 @@ local function CreateRing(parent, radius, ringTex, r, g, b, a)
         self:Show()
     end
 
+    -- Secret-value path: the engine draws the real cooldown from the duration
+    -- object; ceiling only bounds how long the ring frame stays shown
+    function ring:StartRingFromDuration(durObj, ceiling)
+        self.dur = 0
+        self.maxDur = ceiling
+        self._fg:Hide()
+        self._cd:SetCooldownFromDurationObject(durObj)
+        self._cd:Show()
+        self:Show()
+    end
+
     function ring:StopRing()
         self._cd:Hide()
         self._fg:Hide()
@@ -415,6 +450,25 @@ local function GCD_DB()
     return p and p.gcd or {}
 end
 
+-- Start the ring from the live GCD (does nothing when no GCD is running).
+-- Called from the cast events and from the combat-start visibility pass.
+local function ArmGCDRing()
+    if not gcdRing then return end
+    local cdData = GetSpellCooldown(GCD_SPELL)
+    if not cdData then return end
+    local d, s = cdData.duration, cdData.startTime
+    if issecretvalue(d) or issecretvalue(s) then
+        -- Restricted combat hides the numbers: hand the GCD's duration object to
+        -- the swipe (the Resource Bars GCD bar's native path). isActive is never
+        -- secret and skips a GCD that already ended (the SUCCEEDED of a hard cast).
+        if not cdData.isActive then return end
+        local durObj = C_Spell.GetSpellCooldownDuration(GCD_SPELL)
+        if durObj then gcdRing:StartRingFromDuration(durObj, 1.6) end
+    elseif d and d > 0 and d <= 1.6 and s and s > 0 then
+        gcdRing:StartRing(GetTime() - s, d)
+    end
+end
+
 local function CreateGCDCircle()
     if gcdRoot then return end
     local g = GCD_DB()
@@ -442,28 +496,27 @@ local function CreateGCDCircle()
         local g2 = GCD_DB()
         if not g2.enabled then return end
         if g2.instanceOnly and not InRealInstancedContent() then return end
+        if g2.combatOnly and not InCombatLockdown() then return end
         -- On cancelled/failed/interrupted casts the GCD resets stop the ring
         if event == "UNIT_SPELLCAST_FAILED" or event == "UNIT_SPELLCAST_INTERRUPTED" or event == "UNIT_SPELLCAST_STOP" then
-            local cdData = GetSpellCooldown(61304)
-            if not cdData or not cdData.duration or cdData.duration <= 0 or not cdData.startTime or cdData.startTime <= 0 then
+            local cdData = GetSpellCooldown(GCD_SPELL)
+            local stillActive = false
+            if cdData then
+                -- A secret read (restricted combat) keeps the ring: the GCD may still
+                -- be running (same rule as the Resource Bars GCD bar stop handler).
+                local d, s = cdData.duration, cdData.startTime
+                if issecretvalue(d) or issecretvalue(s) then
+                    stillActive = true
+                else
+                    stillActive = (d and d > 0 and s and s > 0) and true or false
+                end
+            end
+            if not stillActive then
                 gcdRing:StopRing()
             end
             return
         end
-        -- Query GCD via the reference spell; duration may be a secret number
-        -- so wrap the comparison in pcall to avoid taint errors
-        local cdData = GetSpellCooldown(61304)
-        if not cdData or not cdData.startTime then return end
-        local ok, elapsed, dur = pcall(function()
-            local d = cdData.duration
-            local s = cdData.startTime
-            if d and d > 0 and d <= 1.6 and s and s > 0 then
-                return GetTime() - s, d
-            end
-        end)
-        if ok and elapsed then
-            gcdRing:StartRing(elapsed, dur)
-        end
+        ArmGCDRing()
     end)
 
     gcdRoot:Hide()
@@ -504,6 +557,10 @@ local function ApplyGCDCircle()
     gcdRoot:Show()
     -- Respect instance-only: hide if not in instance
     if g.instanceOnly and not InRealInstancedContent() then
+        gcdRoot:Hide()
+    end
+    -- Respect combat-only: hide if not in combat
+    if g.combatOnly and not InCombatLockdown() then
         gcdRoot:Hide()
     end
     if attached and not EllesmereUI._unlockActive then
@@ -558,8 +615,14 @@ UpdateVisibility = function()
     if shouldShow and p.instanceOnly then
         shouldShow = InRealInstancedContent()
     end
+    -- "Combat Only": only show while the player is in combat. The combat-edge
+    -- events driving this are registered only while a toggle is on
+    -- (ApplyCombatOnlyEvents).
+    if shouldShow and p.combatOnly then
+        shouldShow = InCombatLockdown() and true or false
+    end
     -- Standard visibility options (returns true if should HIDE)
-    if shouldShow and EllesmereUI.CheckVisibilityOptions and EllesmereUI.CheckVisibilityOptions(p) then
+    if shouldShow and EllesmereUI.CheckVisibilityOptions(p) then
         shouldShow = false
     end
     -- Standard visibility mode (mouseover treated as always for cursor)
@@ -609,17 +672,25 @@ UpdateVisibility = function()
         HideTrailDots()
     end
 
-    -- GCD circle instance-only check
+    -- GCD circle instance-only / combat-only check
     if gcdRoot then
         local g = GCD_DB()
         if g.enabled then
-            if g.instanceOnly and not InRealInstancedContent() then
+            if (g.instanceOnly and not InRealInstancedContent())
+                or (g.combatOnly and not InCombatLockdown()) then
                 gcdRoot:Hide()
                 gcdRoot:SetScript("OnUpdate", nil)
             else
                 gcdRoot:Show()
-                -- Re-apply cursor tracking since cursor visibility may have changed
-                if g.attached ~= false then
+                -- Combat Only: the pull cast lands before combat starts, so the
+                -- OnEvent gate dropped its GCD; pick up whatever of it remains
+                if g.combatOnly and gcdRing and gcdRing.maxDur <= 0 then
+                    ArmGCDRing()
+                end
+                -- Re-apply cursor tracking since cursor visibility may have changed.
+                -- Skip while unlocked: the mover owns position, and re-arming this
+                -- would fight it (see the same gate in ApplyGCDCircle).
+                if g.attached ~= false and not EllesmereUI._unlockActive then
                     local cursorVisible = f and f:IsShown()
                     if cursorVisible then
                         gcdRoot:SetScript("OnUpdate", nil)
@@ -633,22 +704,27 @@ UpdateVisibility = function()
                             gcdRoot:SetPoint("CENTER", UIParent, "BOTTOMLEFT", floor(mx / sc + 0.5), floor(my / sc + 0.5))
                         end)
                     end
+                elseif g.attached ~= false then
+                    gcdRoot:SetScript("OnUpdate", nil)
                 end
             end
         end
     end
 
-    -- Cast circle instance-only check
+    -- Cast circle instance-only / combat-only check
     if castRoot then
         local c = Cast_DB()
         if c.enabled then
-            if c.instanceOnly and not InRealInstancedContent() then
+            if (c.instanceOnly and not InRealInstancedContent())
+                or (c.combatOnly and not InCombatLockdown()) then
                 castRoot:Hide()
                 castRoot:SetScript("OnUpdate", nil)
             else
                 castRoot:Show()
-                -- Re-apply cursor tracking since cursor visibility may have changed
-                if c.attached ~= false then
+                -- Re-apply cursor tracking since cursor visibility may have changed.
+                -- Skip while unlocked: the mover owns position, and re-arming this
+                -- would fight it (see the same gate in ApplyCastCircle).
+                if c.attached ~= false and not EllesmereUI._unlockActive then
                     local cursorVisible = f and f:IsShown()
                     if cursorVisible then
                         castRoot:SetScript("OnUpdate", nil)
@@ -662,6 +738,8 @@ UpdateVisibility = function()
                             castRoot:SetPoint("CENTER", UIParent, "BOTTOMLEFT", floor(mx / sc + 0.5), floor(my / sc + 0.5))
                         end)
                     end
+                elseif c.attached ~= false then
+                    castRoot:SetScript("OnUpdate", nil)
                 end
             end
         end
@@ -823,6 +901,7 @@ local function CreateCastCircle()
         local c2 = Cast_DB()
         if not c2.enabled then return end
         if c2.instanceOnly and not InRealInstancedContent() then return end
+        if c2.combatOnly and not InCombatLockdown() then return end
 
         if event == "UNIT_SPELLCAST_START" or event == "UNIT_SPELLCAST_DELAYED" then
             local name, _, _, startMS, endMS, _, cID = UnitCastingInfo("player")
@@ -946,6 +1025,10 @@ local function ApplyCastCircle()
     if c.instanceOnly and not InRealInstancedContent() then
         castRoot:Hide()
     end
+    -- Respect combat-only: hide if not in combat
+    if c.combatOnly and not InCombatLockdown() then
+        castRoot:Hide()
+    end
     if attached and not EllesmereUI._unlockActive then
         -- When the cursor circle is visible, anchor directly to it.
         -- When the cursor circle is hidden (e.g. instance-only outside an instance),
@@ -987,14 +1070,34 @@ local function RegisterUnlockElements()
 
     local elements = {}
 
-    local g = GCD_DB()
-    if g.enabled and g.attached == false then
+    -- Both keys register whenever the module runs and qualify LIVE through
+    -- isHidden/getFrame (a circle only has a mover while enabled and detached).
+    -- Never unregister a key that can come back: UnregisterUnlockElement runs
+    -- PruneStaleLinks, which deletes the key's saved anchor links, so toggling
+    -- Attach to Cursor would silently destroy a detached circle's anchor. The
+    -- mover sync reads isHidden every pass, and the options setters re-run
+    -- this registration on every Attach flip, so the mover follows the toggle
+    -- inside an open unlock session too.
+    local function GCDDetached()
+        local g2 = GCD_DB()
+        return g2.enabled and g2.attached == false
+    end
+    local function CastDetached()
+        local c2 = Cast_DB()
+        return c2.enabled and c2.attached == false
+    end
+
+    do
         elements[#elements + 1] = MK({
             key = "ECL_GCD",
             label = "GCD Circle",
             group = "Cursor Lite",
             order = 500,
-            getFrame = function() return gcdRoot end,
+            isHidden = function() return not GCDDetached() end,
+            getFrame = function()
+                if not GCDDetached() then return nil end
+                return gcdRoot
+            end,
             getSize = function()
                 local g2 = GCD_DB()
                 local r = g2.radius or 30
@@ -1043,14 +1146,17 @@ local function RegisterUnlockElements()
         })
     end
 
-    local c = Cast_DB()
-    if c.enabled and c.attached == false then
+    do
         elements[#elements + 1] = MK({
             key = "ECL_Cast",
             label = "Cast Bar Circle",
             group = "Cursor Lite",
             order = 501,
-            getFrame = function() return castRoot end,
+            isHidden = function() return not CastDetached() end,
+            getFrame = function()
+                if not CastDetached() then return nil end
+                return castRoot
+            end,
             getSize = function()
                 local c2 = Cast_DB()
                 local r = c2.radius or 36
@@ -1163,6 +1269,27 @@ _G._ECL_ApplyCastPosition = function()
     end
 end
 
+-- Combat-edge events exist only while some Combat Only toggle is on: the
+-- cursor circle is default-enabled, so unconditional PLAYER_REGEN_*
+-- registrations would run the visibility pass on every combat edge for every
+-- user. Re-evaluated from OnEnable and the three options setters; Lite's
+-- UnregisterEvent is nil-safe, the _combatEventsOn latch skips no-op flips.
+local function ApplyCombatOnlyEvents()
+    local p = ECL.db and ECL.db.profile
+    local want = (p and (p.combatOnly
+        or (p.gcd and p.gcd.combatOnly)
+        or (p.castCircle and p.castCircle.combatOnly))) and true or false
+    if want == ECL._combatEventsOn then return end
+    ECL._combatEventsOn = want
+    if want then
+        ECL:RegisterEvent("PLAYER_REGEN_DISABLED", UpdateVisibility)
+        ECL:RegisterEvent("PLAYER_REGEN_ENABLED", UpdateVisibility)
+    else
+        ECL:UnregisterEvent("PLAYER_REGEN_DISABLED")
+        ECL:UnregisterEvent("PLAYER_REGEN_ENABLED")
+    end
+end
+
 -------------------------------------------------------------------------------
 --  Initialization
 -------------------------------------------------------------------------------
@@ -1174,6 +1301,7 @@ function ECL:OnInitialize()
                 enabled = true,
                 instanceOnly = false,
                 onlyWhenHidden = false,
+                combatOnly = false,
                 useClassColor = true,
                 hex = "0CD29D",
                 texture = "ring_normal",
@@ -1189,6 +1317,7 @@ function ECL:OnInitialize()
                     alpha = 80,
                     useClassColor = false,
                     instanceOnly = false,
+                    combatOnly = false,
                 },
                 castCircle = {
                     enabled = false,
@@ -1202,8 +1331,10 @@ function ECL:OnInitialize()
                     sparkHex = nil,
                     useClassColor = true,
                     instanceOnly = false,
+                    combatOnly = false,
                 },
                 trail = false,
+                reticle = false,
                 visibility       = "always",
                 visOnlyInstances = false,
                 visHideHousing   = false,
@@ -1246,9 +1377,8 @@ function ECL:OnInitialize()
     _G._ECL_AceDB = self.db
     _G._ECL_Apply = Apply
     _G._ECL_UpdateVisibility = UpdateVisibility
-    if EllesmereUI and EllesmereUI.RegisterVisibilityUpdater then
-        EllesmereUI.RegisterVisibilityUpdater(UpdateVisibility)
-    end
+    _G._ECL_ApplyCombatOnlyEvents = ApplyCombatOnlyEvents
+    EllesmereUI.RegisterVisibilityUpdater(UpdateVisibility)
     _G._ECL_ApplyGCDCircle = ApplyGCDCircle
     _G._ECL_ApplyCastCircle = ApplyCastCircle
     _G._ECL_RegisterUnlock = RegisterUnlockElements
@@ -1270,6 +1400,22 @@ function ECL:OnEnable()
     t:SetAllPoints(f)
     t:SetTexture(TEX_CUSTOM)
 
+    -- Center reticle: solid fill through the shared portrait circle mask,
+    -- same construction as the patch-notes sidebar dot.
+    reticle = f:CreateTexture(nil, "OVERLAY", nil, 1)
+    reticle:SetPoint("CENTER")
+    reticle:SetColorTexture(1, 1, 1, 1)
+    if reticle.SetSnapToPixelGrid then
+        reticle:SetSnapToPixelGrid(false)
+        reticle:SetTexelSnappingBias(0)
+    end
+    local reticleMask = f:CreateMaskTexture()
+    reticleMask:SetTexture("Interface\\AddOns\\EllesmereUI\\media\\portraits\\circle_mask.tga",
+        "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+    reticleMask:SetAllPoints(reticle)
+    reticle:AddMaskTexture(reticleMask)
+    reticle:Hide()
+
     -- No OnUpdate: the shared cursor service drives positioning. The frame
     -- is SHOWN by default and isVisible initializes TRUE, so the first
     -- UpdateVisibility never takes a show TRANSITION -- subscribe here
@@ -1282,15 +1428,13 @@ function ECL:OnEnable()
     -- before the core resolves the profile accent, so Apply() above painted
     -- the parse-time fallback and is never called again. Also covers a
     -- mid-session accent change, which nothing pushed to us before.
-    if EllesmereUI.RegAccent then
-        EllesmereUI.RegAccent({ type = "callback", fn = function()
-            local p = ECL.db and ECL.db.profile
-            if not p then return end
-            if p.useAccentColor then Apply() end
-            if p.gcd and p.gcd.useAccentColor then ApplyGCDCircle() end
-            if p.castCircle and p.castCircle.useAccentColor then ApplyCastCircle() end
-        end })
-    end
+    EllesmereUI.RegAccent({ type = "callback", fn = function()
+        local p = ECL.db and ECL.db.profile
+        if not p then return end
+        if p.useAccentColor then Apply() end
+        if p.gcd and p.gcd.useAccentColor then ApplyGCDCircle() end
+        if p.castCircle and p.castCircle.useAccentColor then ApplyCastCircle() end
+    end })
 
     -- Apply GCD / Cast circles (creates on demand only when enabled)
     C_Timer.After(0.5, function()
@@ -1303,8 +1447,41 @@ function ECL:OnEnable()
         ApplyTrail()
         ApplyOnlyWhenHidden()
         RegisterUnlockElements()
+
+        -- Every _unlockActive check in this file only stops a FUTURE re-arm
+        -- of the attached cursor-tracking OnUpdate -- none of them tear down
+        -- one that's already running. CursorWatchBody (the 0.15s tick above)
+        -- is meant to hide an attached circle once unlock mode starts, but
+        -- it only ticks while the base cursor frame (f) is itself
+        -- subscribed/visible, so a user running GCD/Cast circles without the
+        -- base cursor dot gets no safety net at all: toggle Attach to Cursor
+        -- off then on (arms the OnUpdate while _unlockActive is still false,
+        -- correctly), then open unlock mode, and the circle just keeps
+        -- chasing the mouse forever with nothing to ever stop it. Hook the
+        -- real open/close event directly instead of depending on that tick.
+        if EllesmereUI and EllesmereUI.RegisterUnlockModeListener then
+            EllesmereUI:RegisterUnlockModeListener("EllesmereUIQoL_Cursor", function(active)
+                if active then
+                    if gcdRoot then
+                        gcdRoot:SetScript("OnUpdate", nil)
+                        if gcdAttached then gcdRoot:Hide() end
+                    end
+                    if castRoot then
+                        castRoot:SetScript("OnUpdate", nil)
+                        if castAttached then castRoot:Hide() end
+                    end
+                else
+                    -- Re-apply: an attached circle resumes live cursor
+                    -- tracking, a detached one snaps back to its saved spot.
+                    ApplyGCDCircle()
+                    ApplyCastCircle()
+                end
+            end)
+        end
     end)
 
     self:RegisterEvent("PLAYER_ENTERING_WORLD", UpdateVisibility)
     self:RegisterEvent("ZONE_CHANGED_NEW_AREA", UpdateVisibility)
+    -- Combat-edge events only while a Combat Only toggle needs them.
+    ApplyCombatOnlyEvents()
 end

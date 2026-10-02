@@ -23,18 +23,14 @@ if EUI_CLIENT_BLOCKED then return end -- pre-12.1 client failsafe (EllesmereUI_C
 --  toggle is on.
 -------------------------------------------------------------------------------
 
+local ns = select(2, ...)
+
 local function IsSecret(value)
     return issecretvalue and issecretvalue(value) or false
 end
 
--- Secret values throw on any comparison (==, <, ...) once execution is
--- tainted, so route a payload field through this before comparing it.
-local function PlainValue(value)
-    if IsSecret(value) then return nil end
-    return value
-end
-
 local inCombat = false
+local playerClassToken = select(2, UnitClass("player")) -- class never changes: resolved once
 
 -------------------------------------------------------------------------------
 --  Mobility spell tables
@@ -295,8 +291,7 @@ local function MovementEnabled()
     local ma = MA()
     local ec = ma and ma.enabledClasses
     if not ec then return false end
-    local _, class = UnitClass("player")
-    return ec[class] == true
+    return ec[playerClassToken] == true
 end
 _G._EUI_MovementAlert_DB = function() return db end
 EllesmereUI._ResetMovementAlert = function()
@@ -323,10 +318,10 @@ end
 -------------------------------------------------------------------------------
 local FALLBACK_FONT = "Fonts\\FRIZQT__.TTF"
 local function AlertFontPath()
-    return (EllesmereUI.GetFontPath and EllesmereUI.GetFontPath("extras")) or FALLBACK_FONT
+    return (EllesmereUI.GetFontPath("extras")) or FALLBACK_FONT
 end
 local function AlertFontOutline()
-    local o = (EllesmereUI.GetFontOutlineFlag and EllesmereUI.GetFontOutlineFlag("extras")) or ""
+    local o = (EllesmereUI.GetFontOutlineFlag("extras")) or ""
     if not o:find("OUTLINE") then o = (o == "") and "OUTLINE" or (o .. ", OUTLINE") end
     return o
 end
@@ -429,6 +424,7 @@ local activeSlotCount = 0
 -- last poll, so the "ready" TTS callout fires exactly once per cooldown
 -- ending instead of every poll tick while the spell sits ready.
 local readyAlertShown = {}
+local readyAlertScratch = {} -- swapped with readyAlertShown each check: no per-check table
 
 local function CreateDisplaySlot()
     local slot = CreateFrame("Frame", nil, movementFrame)
@@ -567,8 +563,7 @@ local function StyleSlot(slot)
     movementCdFont:SetTextColor(tR, tG, tB)
 
     -- Bar texture (change-guarded: StyleSlot runs on every poll tick)
-    local texPath = (EllesmereUI.ResolveTexturePath
-        and EllesmereUI.ResolveTexturePath(BAR_TEXTURES, ma.barTexture or "none", "Interface\\Buttons\\WHITE8x8"))
+    local texPath = (EllesmereUI.ResolveTexturePath(BAR_TEXTURES, ma.barTexture or "none", "Interface\\Buttons\\WHITE8x8"))
         or "Interface\\Buttons\\WHITE8x8"
     if slot.bar._lastTexPath ~= texPath then
         slot.bar:SetStatusBarTexture(texPath)
@@ -790,9 +785,9 @@ local function SafeGetBaseDuration(spellId)
 end
 
 local function ResolvePlayerSpecId()
-    local spec = GetSpecialization()
+    local spec = C_SpecializationInfo.GetSpecialization()
     if not spec then return nil end
-    local specId = select(1, GetSpecializationInfo(spec))
+    local specId = C_SpecializationInfo.GetSpecializationInfo(spec)
     if specId and specId > 0 then return specId end
     return nil
 end
@@ -810,6 +805,36 @@ local movementPreviewTicker = nil -- options-panel preview loop (nil = off)
 local CheckMovementCooldown
 local CancelAllRechargeTimers
 
+-- WoW Forever: the class counts as each of its retail specs, so the tracker
+-- walks every spec list of the class, merged in class order without repeats.
+-- Ids that are a different spell there are left out (781 is the threat-drop
+-- Disengage there, not a movement spell).
+-- Built once: its inputs (the player's class, the static MOVEMENT_ABILITIES)
+-- never change in a session. nil when the class has no list.
+local ForeverMovementList
+do
+    local merged
+    ForeverMovementList = function()
+        if not merged then
+            merged = {}
+            local skip = { [781] = true }
+            local classAbilities = MOVEMENT_ABILITIES[playerClassToken]
+            local ids = classAbilities and EllesmereUI.ForeverClassSpecIDs(playerClassToken)
+            for i = 1, (ids and #ids or 0) do
+                local specList = classAbilities[ids[i]]
+                for j = 1, (specList and #specList or 0) do
+                    local sid, dup = specList[j], false
+                    for k = 1, #merged do
+                        if merged[k] == sid then dup = true; break end
+                    end
+                    if not dup and not skip[sid] then merged[#merged + 1] = sid end
+                end
+            end
+        end
+        return merged[1] and merged or nil
+    end
+end
+
 local function GetPlayerMovementSpells()
     local class = select(2, UnitClass("player"))
     local specId = ResolvePlayerSpecId()
@@ -819,6 +844,7 @@ local function GetPlayerMovementSpells()
     local classAbilities = MOVEMENT_ABILITIES[class]
     if not classAbilities then return {} end
     local specAbilities = classAbilities[specId]
+    if EllesmereUI.IS_FOREVER then specAbilities = ForeverMovementList() end
     if not specAbilities then return {} end
 
     local result, seen = {}, {}
@@ -1006,6 +1032,7 @@ local function CacheMovementSpells(fullReset)
     local overrides = MA().spellOverrides or {}
     local classAbilities = MOVEMENT_ABILITIES[class]
     local specAbilities = classAbilities and specId and classAbilities[specId]
+    if EllesmereUI.IS_FOREVER and specId then specAbilities = ForeverMovementList() end
     if specAbilities then
         for _, spellId in ipairs(specAbilities) do
             local spellOverride = overrides[spellId]
@@ -1094,7 +1121,7 @@ end
 
 -- buffActive engine-lane handles (declared here so HideMovementDisplay -- the
 -- universal off-path -- can park the host; defined in the lane block below).
-local buffAlertHost, buffAlertBuilt, buffAlertRegenArm, buffAlertLastCount
+local buffAlertHost, buffAlertBuilt, buffAlertRegenFn, buffAlertLastCount
 local buffAlertContainer, buffAlertAssist, buffAlertVehicle
 
 -- keepBuffLane: the cooldown display is going away but the buffActive lane is
@@ -1366,7 +1393,7 @@ local function BuffAlertApplyExtra(button, d, style)
     local entry = style.maEntry
     local label = (entry and (entry.customText or entry.spellName)) or "Active!"
     local r, g, b = ResolveAlertColor("textColor", "textColorUseClass")
-    local fp = (EllesmereUI.GetFontPath and EllesmereUI.GetFontPath("qol")) or STANDARD_TEXT_FONT
+    local fp = (EllesmereUI.GetFontPath("qol")) or STANDARD_TEXT_FONT
     d.maText:SetFont(fp, ma.textSize or 16, "OUTLINE")
     d.maText:SetTextColor(r, g, b)
     d.maText:ClearAllPoints()
@@ -1520,14 +1547,12 @@ local function RepositionBuffAlertHost(count)
     if not buffAlertHost then return end
     buffAlertLastCount = count
     if InCombatLockdown() then
-        if not buffAlertRegenArm then
-            buffAlertRegenArm = CreateFrame("Frame")
-            buffAlertRegenArm:SetScript("OnEvent", function(self)
-                self:UnregisterEvent("PLAYER_REGEN_ENABLED")
+        if not buffAlertRegenFn then
+            buffAlertRegenFn = function()
                 RepositionBuffAlertHost(buffAlertLastCount or 0)
-            end)
+            end
         end
-        buffAlertRegenArm:RegisterEvent("PLAYER_REGEN_ENABLED")
+        ns.CombatQueue.Defer("BuffAlertHostPos", buffAlertRegenFn)
         return
     end
     local fw, fh = movementFrame:GetWidth(), movementFrame:GetHeight()
@@ -1603,6 +1628,31 @@ local function ApplyChargeVisibility(slot, spellId, chargeInfo, entry, duration)
     end
 end
 
+-- Same-frame coalescer for the check: cooldown/usable/charge storms and player
+-- aura batches fire several times per frame, and every check re-queries each
+-- tracked spell, so duplicates collapse into ONE check on the next OnUpdate.
+-- The frame is shown only while a check is pending (zero cost idle); the
+-- 100 ms countdown repaint rides the same funnel so it can never double up
+-- with an event-driven check in the same frame.
+local movementCheckCharges = false
+local movementCheckFrame = CreateFrame("Frame")
+movementCheckFrame:Hide()
+movementCheckFrame:SetScript("OnUpdate", function(self)
+    self:Hide()
+    if movementCheckCharges then
+        movementCheckCharges = false
+        UpdateCachedCharges()
+    end
+    CheckMovementCooldown()
+end)
+local function RequestMovementCheck()
+    movementCheckFrame:Show()
+end
+local function RequestMovementCheckWithCharges()
+    movementCheckCharges = true
+    movementCheckFrame:Show()
+end
+
 CheckMovementCooldown = function()
     -- The options-panel preview owns the display while it runs; the real
     -- renderer resumes from the preview's stop path. Costs one nil-check.
@@ -1613,7 +1663,8 @@ CheckMovementCooldown = function()
     if #cachedMovementSpells == 0 then HideMovementDisplay(); return end
 
     local count = 0
-    local nowShownReady = {}
+    local nowShownReady = readyAlertScratch
+    wipe(nowShownReady)
     for _, entry in ipairs(cachedMovementSpells) do
         if entry.checkType == "buffActive" then
             -- Engine-owned lane: presence rendering never passes through Lua
@@ -1676,7 +1727,7 @@ CheckMovementCooldown = function()
             end
         end
     end
-    readyAlertShown = nowShownReady
+    readyAlertShown, readyAlertScratch = nowShownReady, readyAlertShown
 
     for i = count + 1, activeSlotCount do
         local slot = displayPool[i]
@@ -1689,7 +1740,7 @@ CheckMovementCooldown = function()
         movementFrame:Show()
         CancelMovementCountdown()
         -- Fixed 100ms display refresh (smooth 1-decimal countdown).
-        movementCountdownTimer = C_Timer.NewTimer(0.1, CheckMovementCooldown)
+        movementCountdownTimer = C_Timer.NewTimer(0.1, RequestMovementCheck)
     else
         activeSlotCount = 0
         -- EnsureBuffAlertLane just showed/parked the host for this pass; leave
@@ -1769,8 +1820,8 @@ local function PreviewTick()
     -- page/module. (Page name must match PAGE_MOVEMENT in EUI_QoL_Options.lua.)
     local shown = EllesmereUI._mainFrame and EllesmereUI._mainFrame:IsShown()
     local onPage = shown
-        and EllesmereUI.GetActiveModule and EllesmereUI:GetActiveModule() == "EllesmereUIQoL"
-        and EllesmereUI.GetActivePage and EllesmereUI:GetActivePage() == "MoveAlert"
+        and EllesmereUI:GetActiveModule() == "EllesmereUIQoL"
+        and EllesmereUI:GetActivePage() == "MoveAlert"
     if not ma or not onPage then StopMovementPreview(); return end
 
     local now = GetTime()
@@ -1874,6 +1925,7 @@ local function IsValidTimeSpiralProc(spellId)
     local specId = ResolvePlayerSpecId()
     local classData = MOVEMENT_ABILITIES[class]
     local specSpells = classData and specId and classData[specId]
+    if EllesmereUI.IS_FOREVER and specId then specSpells = ForeverMovementList() end
     local matched = false
     if specSpells then
         for _, id in ipairs(specSpells) do
@@ -1953,10 +2005,11 @@ local gatewayFrame = CreateFrame("Frame", "EUI_GatewayShardFrame", UIParent)
 gatewayFrame:SetSize(200, 40)
 gatewayFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 150)
 gatewayFrame:Hide()
-local gatewayText = gatewayFrame:CreateFontString(nil, "OVERLAY")
+local gatewayText = gatewayFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
 gatewayText:SetPoint("CENTER")
 
 local lastGatewayUsable = false
+local lastGatewayText = nil
 local gatewayPollTicker = nil
 
 local function StopGatewayPolling()
@@ -1985,10 +2038,16 @@ local function CheckGatewayUsable()
     if isUsable and not lastGatewayUsable then FireTrackerAlert("gw") end
     lastGatewayUsable = isUsable
 
+    -- 10 Hz poll: only the usability read is per-tick work; the label and
+    -- visibility are written on change (a label edit still lands live).
     if isUsable then
-        gatewayText:SetText(ma.gwText or "GATEWAY READY")
-        gatewayFrame:Show()
-    else
+        local txt = ma.gwText or "GATEWAY READY"
+        if txt ~= lastGatewayText then
+            lastGatewayText = txt
+            gatewayText:SetText(txt)
+        end
+        if not gatewayFrame:IsShown() then gatewayFrame:Show() end
+    elseif gatewayFrame:IsShown() then
         gatewayFrame:Hide()
     end
 end
@@ -2079,9 +2138,7 @@ local function UpdateEventRegistration()
         -- installs the session-long late-registration callback), matching the
         -- CDM Tracking Bars setup: a saved SM texture renders correctly
         -- without the options panel ever opening.
-        if EllesmereUI.AppendSharedMediaTextures then
-            EllesmereUI.AppendSharedMediaTextures(BAR_TEXTURE_NAMES, BAR_TEXTURE_ORDER, nil, BAR_TEXTURES)
-        end
+        EllesmereUI.AppendSharedMediaTextures(BAR_TEXTURE_NAMES, BAR_TEXTURE_ORDER, nil, BAR_TEXTURES)
     elseif not anyEnabled and baselineEventsRegistered then
         for _, ev in ipairs(BASELINE_EVENTS) do loader:UnregisterEvent(ev) end
         baselineEventsRegistered = false
@@ -2268,26 +2325,23 @@ loader:SetScript("OnEvent", function(self, event, ...)
         CheckMovementCooldown()
         CheckGatewayUsable()
     elseif event == "SPELL_UPDATE_COOLDOWN" or event == "SPELL_UPDATE_USABLE" or event == "SPELL_UPDATE_CHARGES" then
-        UpdateCachedCharges()
-        CheckMovementCooldown()
+        RequestMovementCheckWithCharges()
     elseif event == "UNIT_AURA" then
-        local unit, updateInfo = ...
-        UpdateCachedCharges()
-        CheckMovementCooldown()
+        RequestMovementCheckWithCharges()
     elseif event == "UNIT_ENTERING_VEHICLE" or event == "UNIT_ENTERED_VEHICLE" then
         buffAlertVehicle = true
-        CheckMovementCooldown()
+        RequestMovementCheck()
     elseif event == "UNIT_EXITED_VEHICLE" then
         buffAlertVehicle = false
-        CheckMovementCooldown()
+        RequestMovementCheck()
     elseif event == "UNIT_FACTION" or event == "CINEMATIC_STOP" then
         -- Re-drive ONLY: a cinematic flips assistability with no vehicle
         -- involved, and BuffAlertAssistable's own probe reads that. Neither
         -- may touch the latch -- UNIT_FACTION also fires on the BOARDING
         -- transition, where clearing it would undo the suppression we just set.
-        CheckMovementCooldown()
+        RequestMovementCheck()
     elseif event == "PLAYER_DEAD" then
-        CheckMovementCooldown()
+        RequestMovementCheck()
     elseif event == "UNIT_SPELLCAST_SUCCEEDED" then
         local unit, _, spellId = ...
         for _, mod in ipairs(TALENT_CD_REDUCTIONS) do
@@ -2326,7 +2380,7 @@ loader:SetScript("OnEvent", function(self, event, ...)
             end
         end
         OnTrackedSpellCast(spellId)
-        CheckMovementCooldown()
+        RequestMovementCheck()
     elseif event == "UNIT_SPELLCAST_SENT" then
         local _, _, _, spellId = ...
         OnSpellCast(spellId)

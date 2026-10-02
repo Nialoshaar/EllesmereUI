@@ -31,15 +31,7 @@ end
 --  Fonts (module surface "mythicTimer": family/outline/shadow are global,
 --  only sizes are per-bar settings).
 --------------------------------------------------------------------------------
-local FONT_FALLBACK = "Interface\\AddOns\\EllesmereUI\\media\\fonts\\Expressway.TTF"
-local function SetFSFont(fs, size)
-    if not (fs and fs.SetFont) then return end
-    local path = (EllesmereUI.GetFontPath and EllesmereUI.GetFontPath("mythicTimer")) or FONT_FALLBACK
-    local outline = (EllesmereUI.GetFontOutlineFlag and EllesmereUI.GetFontOutlineFlag("mythicTimer")) or ""
-    local useShadow = EllesmereUI.GetFontUseShadow and EllesmereUI.GetFontUseShadow("mythicTimer")
-    if EllesmereUI.PrimeFontShadow then EllesmereUI.PrimeFontShadow(fs, useShadow) end
-    fs:SetFont(path, size, outline)
-end
+local function SetFSFont(fs, size) EllesmereUI.ApplyModuleFont(fs, nil, size, "mythicTimer") end
 
 --------------------------------------------------------------------------------
 --  State: two bar objects, built lazily. `bars.target` / `bars.focus`.
@@ -200,15 +192,29 @@ local function BuildBar(which)
     SetFSFont(bar.timer, 11)
 
     -- 10Hz cast timer text (engine-slept between fires; self-stops when the
-    -- cast ends). Remaining time from the duration object only.
+    -- cast ends). Remaining time from the duration object only. bar.durKind
+    -- (set by ArmFill, which already knows which getter applies) picks the
+    -- one matching API instead of probing all three every tick; falls back to
+    -- the full chain on a transient miss or before any kind is cached.
     bar._timerTick = function(force)
         if not bar.isCasting and not force then return end
         local cfg = BarCfg(bar.which)
         if not cfg or cfg.showTimer == false then return true end
         if UnitCastingDuration then
-            local durObj = UnitCastingDuration(bar.unit)
-                or (UnitEmpoweredChannelDuration and UnitEmpoweredChannelDuration(bar.unit, true))
-                or (UnitChannelDuration and UnitChannelDuration(bar.unit))
+            local durObj
+            local kind = bar.durKind
+            if kind == "cast" then
+                durObj = UnitCastingDuration(bar.unit)
+            elseif kind == "empowered" then
+                durObj = UnitEmpoweredChannelDuration and UnitEmpoweredChannelDuration(bar.unit, true)
+            elseif kind == "channel" then
+                durObj = UnitChannelDuration and UnitChannelDuration(bar.unit)
+            end
+            if not durObj then
+                durObj = UnitCastingDuration(bar.unit)
+                    or (UnitEmpoweredChannelDuration and UnitEmpoweredChannelDuration(bar.unit, true))
+                    or (UnitChannelDuration and UnitChannelDuration(bar.unit))
+            end
             if durObj then
                 bar.timer:SetFormattedText("%.1f", durObj:GetRemainingDuration())
             else
@@ -241,8 +247,7 @@ local function StyleBar(bar)
     bar.iconFrame:SetWidth(showIcon and h or 0.001)
     bar.iconFrame:SetShown(showIcon)
 
-    local texPath = EllesmereUI.ResolveTexturePath
-        and EllesmereUI.ResolveTexturePath(ns.barTextures, cfg.texture or "none", "Interface\\Buttons\\WHITE8x8")
+    local texPath = EllesmereUI.ResolveTexturePath(ns.barTextures, cfg.texture or "none", "Interface\\Buttons\\WHITE8x8")
         or "Interface\\Buttons\\WHITE8x8"
     bar.sb:SetStatusBarTexture(texPath)
     local pp = EllesmereUI.PP
@@ -549,12 +554,27 @@ end
 --------------------------------------------------------------------------------
 --  Target text (nameplate port: UnitShouldDisplaySpellTargetName gate).
 --------------------------------------------------------------------------------
+-- StyleBar's 48% name width assumes the target zone is in use; most casts (any
+-- self-cast, or a unit with target text off) never populate it, so name stays
+-- needlessly capped and clips into "..." with room to spare. Hand that zone back
+-- to the name whenever this cast has no target text to show.
+local function SizeNameForTarget(bar, hasTarget)
+    local cfg = BarCfg(bar.which)
+    if not cfg then return end
+    local w = cfg.width or 260
+    local h = cfg.height or 22
+    local reserve = (cfg.showTimer ~= false) and ((cfg.timerSize or 11) * 2.2) or 0
+    local shared = (w - h) * 0.48
+    bar.name:SetWidth(hasTarget and shared or math.max(shared, (w - h) - 8 - reserve))
+end
+
 local function PaintTarget(bar)
     local tf = TF()
     local fs = bar.target
     if not tf or tf.showTarget == false then
         fs:SetText("")
         fs:Hide()
+        SizeNameForTarget(bar, false)
         return
     end
     local spellTarget, spellTargetClass
@@ -568,6 +588,7 @@ local function PaintTarget(bar)
     if type(spellTarget) == "nil" then
         fs:SetText("")
         fs:Hide()
+        SizeNameForTarget(bar, false)
         return
     end
     if tf.targetClassColor ~= false and type(spellTargetClass) ~= "nil" and C_ClassColor then
@@ -579,6 +600,7 @@ local function PaintTarget(bar)
     end
     fs:SetText(spellTarget)
     fs:Show()
+    SizeNameForTarget(bar, true)
 end
 
 --------------------------------------------------------------------------------
@@ -599,12 +621,14 @@ local function ArmFill(bar, isChannel)
             local dirn = isEmp and Enum.StatusBarTimerDirection.ElapsedTime
                 or Enum.StatusBarTimerDirection.RemainingTime
             sb:SetTimerDuration(dur, nil, dirn)
+            bar.durKind = isEmp and "empowered" or "channel"
         end
     else
         dur = UnitCastingDuration(bar.unit)
         if dur then
             sb:SetReverseFill(false)
             sb:SetTimerDuration(dur, nil, Enum.StatusBarTimerDirection.ElapsedTime)
+            bar.durKind = "cast"
         end
     end
     return dur ~= nil, isEmp
@@ -681,10 +705,13 @@ local function UpdateCast(bar)
                 bar.icon:SetTexture(nil)
             end
         end
+        -- PaintTarget first: it sizes bar.name for whether this cast has target
+        -- text to share the row with, and SetWidth after SetText does not
+        -- reliably re-truncate an already-laid-out FontString.
+        PaintTarget(bar)
         if cfg.showSpellName ~= false then
             bar.name:SetText(name)
         end
-        PaintTarget(bar)
         bar.timer:SetText("")
 
         if type(kickProtected) == "nil" then kickProtected = false end
@@ -747,7 +774,7 @@ local function ShowInterruptedFlash(bar, interrupterGUID)
     if not ((issecretvalue and issecretvalue(protected)) or not protected) then return end
     bar._interrupted = true
     bar.flash:Show()
-    bar.name:SetText(EllesmereUI.L and EllesmereUI.L("Interrupted") or "Interrupted")
+    bar.name:SetText(EllesmereUI.L("Interrupted") or "Interrupted")
     bar.target:SetText("")
     bar.target:Hide()
     bar.timer:SetText("")
@@ -812,13 +839,28 @@ evt:SetScript("OnEvent", function(_, event, unit, ...)
         bar._kickGeoDirty = true
         UpdateCast(bar)
     elseif event == "UNIT_SPELLCAST_STOP"
-        or event == "UNIT_SPELLCAST_FAILED"
-        or event == "UNIT_SPELLCAST_EMPOWER_STOP" then
+        or event == "UNIT_SPELLCAST_FAILED" then
         UpdateCast(bar)
+    elseif event == "UNIT_SPELLCAST_EMPOWER_STOP" then
+        -- An interrupted empower carries the interrupter GUID as the 4th arg
+        -- after unit (castGUID, spellID, complete, interrupterGUID).
+        local _, _, _, interrupterGUID = ...
+        if type(interrupterGUID) ~= "nil" then
+            TeardownCast(bar)
+            if not bar._interrupted then ShowInterruptedFlash(bar, interrupterGUID) end
+        else
+            UpdateCast(bar)
+        end
     elseif event == "UNIT_SPELLCAST_CHANNEL_STOP" then
         -- Direct teardown: in restricted execution UnitCastingInfo can return
         -- secret values (not nil) for a stale channel (nameplate lesson).
+        -- An interrupted channel carries the interrupter GUID as the 3rd arg
+        -- after unit (castGUID, spellID, interrupterGUID); nil on a natural end.
         TeardownCast(bar)
+        local _, _, interrupterGUID = ...
+        if type(interrupterGUID) ~= "nil" and not bar._interrupted then
+            ShowInterruptedFlash(bar, interrupterGUID)
+        end
     elseif event == "UNIT_SPELLCAST_INTERRUPTED" then
         local _, _, interrupterGUID = ...
         ShowInterruptedFlash(bar, interrupterGUID)
@@ -988,17 +1030,13 @@ local function MakeBarUnlockElement(which, label, order)
             cfg.height = math.floor(h + 0.5)
             ns.TFB_Refresh()
         end,
-        savePos = function()
+        savePos = function(_, _, _, x, y)
+            -- Unlock mode hands over CENTER/CENTER coords; on Cancel the frame
+            -- still sits at the dragged spot, so never read the live position.
             local cfg = BarCfg(which)
-            local bar = bars[which]
-            if not (cfg and bar and bar.frame:GetCenter()) then return end
-            local cx, cy = bar.frame:GetCenter()
-            local upX, upY = UIParent:GetCenter()
-            local fes = bar.frame:GetEffectiveScale() or 1
-            local ues = UIParent:GetEffectiveScale() or 1
-            local ratio = fes / ues
-            cfg.pos = { centerX = cx * ratio - upX, centerY = cy * ratio - upY }
-            if not EllesmereUI._unlockActive then ApplyBarPosition(bar) end
+            if not (cfg and x and y) then return end
+            cfg.pos = { centerX = x, centerY = y }
+            if not EllesmereUI._unlockActive then ApplyBarPosition(bars[which]) end
         end,
         loadPos = function()
             local cfg = BarCfg(which)

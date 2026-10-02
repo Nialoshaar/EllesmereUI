@@ -6,19 +6,18 @@ if EUI_CLIENT_BLOCKED then return end -- pre-12.1 client failsafe (EllesmereUI_C
 --
 -- Rules that must never be broken:
 --   1. Never SetScript on ObjectiveTrackerFrame -- HookScript only.
---   2. Never walk the tracker's children to call EnableMouse. We hide the
---      frame by reparenting the top-level to a hidden container.
+--   2. Never walk the tracker's children to call EnableMouse, and never
+--      SetParent / SetPoint / Hide the EditMode-managed frame from our
+--      execution (its show and size handlers mark the container dirty under
+--      our taint). Hiding is alpha on the frame plus mouse-off on the NAMED
+--      click sinks Blizzard hangs off each block (EQT.ApplyTrackerMouse in
+--      the Skin file), restored only for the frames we switched off.
 --   3. Positioning is delegated to Blizzard's Edit Mode; we provide a
 --      ctrl-drag session-only nudge on top, nothing persistent.
 -------------------------------------------------------------------------------
 local _, ns = ...
 local EQT = ns.EQT
 
--- Hidden reparent target -- NEVER recursed into.
-local hiddenFrame = CreateFrame("Frame", "EllesmereUIQTHiddenParent", UIParent)
-hiddenFrame:Hide()
-
-local _eqtCollapsed       = false
 local _eqtSuppressed      = false
 
 -- Forward-declared so the auto-hide path can toggle BG visibility. The BG
@@ -41,15 +40,13 @@ local function GetBGLeftOffset()
     return EQT.Cfg("showQuestIcons") and -19 or -6
 end
 
--- When "Hide All Objectives" is on, otf.Header/HeaderMenu is Hidden but Blizzard's
--- topModulePadding still reserves its layout slot above the first module (the same
--- "dead gap" this suite has run into before) -- otf:GetTop() doesn't move to reclaim
--- it. Anchor the BG's top edge to the header's own bottom edge in that case instead,
--- so the BG shrinks to skip the empty gap. A Hidden frame's rect (GetBottom/GetTop)
--- still reflects its anchored layout position, since Blizzard doesn't reflow on
--- Hide(). When the header is shown, keep anchoring to the tracker's own top edge so
--- the BG covers the header as before. Returns: anchorFrame, relPoint ("TOP" or
--- "BOTTOM" -- caller appends LEFT/RIGHT).
+-- When "Hide All Objectives" is on, otf.Header/HeaderMenu is faded to alpha 0 but
+-- Blizzard's topModulePadding still reserves its layout slot above the first module
+-- (the same "dead gap" this suite has run into before) -- otf:GetTop() doesn't move to
+-- reclaim it. Anchor the BG's top edge to the header's own bottom edge in that case
+-- instead, so the BG shrinks to skip the empty gap. When the header is shown, keep
+-- anchoring to the tracker's own top edge so the BG covers the header as before.
+-- Returns: anchorFrame, relPoint ("TOP" or "BOTTOM" -- caller appends LEFT/RIGHT).
 local function GetBGTopAnchor()
     local otf = GetTracker()
     if not otf then return nil, "TOP" end
@@ -58,27 +55,6 @@ local function GetBGTopAnchor()
         if header then return header, "BOTTOM" end
     end
     return otf, "TOP"
-end
-
--------------------------------------------------------------------------------
--- Top-level collapse / expand via SetParent. No child recursion.
--------------------------------------------------------------------------------
-local function Collapse()
-    local otf = GetTracker()
-    if not otf then return end
-    if InCombatLockdown() then return end
-    if _eqtCollapsed then return end
-    _eqtCollapsed = true
-    otf:SetParent(hiddenFrame)
-end
-
-local function Expand()
-    local otf = GetTracker()
-    if not otf then return end
-    if InCombatLockdown() then return end
-    if not _eqtCollapsed then return end
-    _eqtCollapsed = false
-    otf:SetParent(UIParent)
 end
 
 -------------------------------------------------------------------------------
@@ -166,13 +142,15 @@ end
 -- template's protected HideBase/ShowBase, so calling either from addon execution during
 -- combat is blocked (ADDON_ACTION_BLOCKED) -- and the raid/encounter auto-hide fires
 -- exactly at combat start (vehicle boss pulls hit this). In combat fall back to alpha
--- suppression: top-level frame only, never children, never mouse state. The shared
--- visibility dispatcher re-runs UpdateVisibility on PLAYER_REGEN_ENABLED, where the
--- real Hide() lands -- same recovery shape as the M+ timer's HideTracker, minus the
--- private regen listener it needs (we are dispatcher-driven).
+-- suppression on the top-level frame, with the block click sinks switched off by name
+-- (EQT.ApplyTrackerMouse; alpha alone left them clickable). The shared visibility
+-- dispatcher re-runs UpdateVisibility on PLAYER_REGEN_ENABLED, where the real Hide()
+-- lands -- same recovery shape as the M+ timer's HideTracker, minus the private regen
+-- listener it needs (we are dispatcher-driven).
 local function HardHide(otf)
     if InCombatLockdown() then
         otf:SetAlpha(0)
+        if EQT.ApplyTrackerMouse then EQT.ApplyTrackerMouse(false) end
     else
         otf:SetAlpha(1)  -- clear any combat alpha-suppression before hiding
         otf:Hide()
@@ -247,6 +225,9 @@ local function UpdateVisibility()
 
     otf:SetAlpha(alpha)
     if _bgFrame then _bgFrame:SetAlpha(alpha) end
+    -- Alpha never affects mouse: an invisible tracker's block buttons would
+    -- still take the clicks meant for the world (see EQT.ApplyTrackerMouse).
+    if EQT.ApplyTrackerMouse then EQT.ApplyTrackerMouse(alpha > 0) end
 
     -- Let ResizeBGToContent decide BG shown/hidden based on real content;
     -- an unconditional Show here would resurrect the empty-state BG.
@@ -268,6 +249,8 @@ function EQT.RefreshStateDriver() UpdateVisibility() end
 -------------------------------------------------------------------------------
 local function EnsureBG()
     if _bgFrame then return _bgFrame end
+    -- Stock styles keep Blizzard's own panel behind the tracker: no background.
+    if EQT.Blizz() then return nil end
     local otf = GetTracker()
     if not otf then return nil end
     _bgFrame = CreateFrame("Frame", "EllesmereUIQTBackground", UIParent)
@@ -321,14 +304,26 @@ local function ApplyTopDivider()
     tex:Show()
 end
 
--- Find the frame that sits at the absolute bottom of all visible content
--- across every tracker module. Used to anchor the BG's bottom edge.
+-- Find the module that sits at the bottom of the tracker. Used to anchor the
+-- BG's bottom edge.
+--
+-- Reference-only: no coordinate is read here, because Blizzard's block geometry
+-- turns into a secret value once our execution is tainted and comparing one
+-- throws. The container anchors each displayed module below the previous one in
+-- ipairs(modules) order, so the last displayed one owns the bottom edge -- the
+-- same frame Blizzard anchors its own NineSlice background to.
+local function IsUsableAnchor(frame)
+    if not frame or type(frame) ~= "table" then return false end
+    if not frame.IsShown or not frame.GetObjectType then return false end
+    return frame:IsShown()
+end
+
 local function GetLowestContentFrame()
     local otf = GetTracker()
     if not otf then return nil end
     local modules = otf.modules or otf.MODULES
     if not modules then return nil end
-    local lowestFrame, lowestY
+    local lowestModule
     local _scenarioTracker = _G.ScenarioObjectiveTracker
     local _widgetTracker = _G.UIWidgetObjectiveTracker
     for _, tracker in ipairs(modules) do
@@ -344,39 +339,16 @@ local function GetLowestContentFrame()
         -- refuses to touch these frames for the same reason.
         if tracker == _scenarioTracker or tracker == _widgetTracker then
             -- skip
-        else
-        local function consider(frame)
-            if not frame or type(frame) ~= "table" then return end
-            if not frame.GetBottom or not frame.GetObjectType then return end
-            if not (frame.IsShown and frame:IsShown()) then return end
-            local ok, otype = pcall(frame.GetObjectType, frame)
-            if not ok then return end
-            if otype ~= "Frame" and otype ~= "Button" then return end
-            local y = frame:GetBottom()
-            if y and (not lowestY or y < lowestY) then
-                lowestY, lowestFrame = y, frame
-            end
+        -- EndLayout hides a module that has nothing to display, so IsShown is
+        -- the content gate, and a later module sits further down. Anchoring to
+        -- the module rather than to its lowest block matters: blocks go back
+        -- into Blizzard's pool on collapse, which clears their points and drags
+        -- an anchored BG along; module frames are permanent.
+        elseif IsUsableAnchor(tracker) then
+            lowestModule = tracker
         end
-        if tracker.usedBlocks then
-            for _, v in pairs(tracker.usedBlocks) do
-                if type(v) == "table" then
-                    if v.GetBottom then
-                        consider(v)
-                    else
-                        for _, block in pairs(v) do consider(block) end
-                    end
-                end
-            end
-        end
-        -- Only consider the Header as content if the tracker actually has something to
-        -- display. Empty trackers leave their Header shown at stale positions and would
-        -- otherwise stretch the BG past real content when a section clears.
-        if tracker.hasContents then
-            consider(tracker.Header)
-        end
-        end -- else (skip scenario / widget-pool trackers)
     end
-    return lowestFrame
+    return lowestModule
 end
 
 -- Event-driven resize with a debounce. Every QueueResize call coalesces into a single
@@ -386,7 +358,9 @@ end
 -- shift re- queues exactly one more pass -- never a continuous OnUpdate loop.
 local _resizePending = false
 local function QueueResize()
-    if _resizePending then return end
+    -- No background (not built yet, or a stock style): nothing to resize, so
+    -- arm no timer (ResizeBGToContent would return on the nil frame anyway).
+    if _resizePending or not _bgFrame then return end
     _resizePending = true
     C_Timer.After(0.05, function()
         _resizePending = false
@@ -440,27 +414,21 @@ local function ResizeBGToContent()
     local leftOfs = GetBGLeftOffset()
     local anchorFrame, anchorPoint = GetBGTopAnchor()
     anchorFrame = anchorFrame or otf
-    local topY = (anchorPoint == "BOTTOM") and anchorFrame:GetBottom() or anchorFrame:GetTop()
-    local lowestBottom = lowest:GetBottom()
     if bg._divider then
         bg._divider:ClearAllPoints()
         bg._divider:SetPoint("TOPLEFT",  anchorFrame, anchorPoint .. "LEFT",  leftOfs, topOfs)
         bg._divider:SetPoint("TOPRIGHT", anchorFrame, anchorPoint .. "RIGHT", 11, topOfs)
     end
-    if topY and lowestBottom then
-        local h = topY + topOfs - lowestBottom + 15
-        if h < 1 then h = 1 end
-        bg:ClearAllPoints()
-        bg:SetPoint("TOPLEFT",  anchorFrame, anchorPoint .. "LEFT",  leftOfs, topOfs)
-        bg:SetPoint("TOPRIGHT", anchorFrame, anchorPoint .. "RIGHT", 11, topOfs)
-        bg:SetHeight(h)
-        bg._lastHeight = h
-    elseif bg._lastHeight then
-        bg:ClearAllPoints()
-        bg:SetPoint("TOPLEFT",  anchorFrame, anchorPoint .. "LEFT",  leftOfs, topOfs)
-        bg:SetPoint("TOPRIGHT", anchorFrame, anchorPoint .. "RIGHT", 11, topOfs)
-        bg:SetHeight(bg._lastHeight)
-    end
+    -- UpdateHeight sizes a module to contentsHeight + bottomSpacing, so its
+    -- bottom sits bottomSpacing below its last block. Adding that back keeps the
+    -- 15px gap the old SetHeight calculation produced, still coordinate-free.
+    local bottomSpacing = lowest.bottomSpacing
+    if issecretvalue and issecretvalue(bottomSpacing) then bottomSpacing = nil end
+    if type(bottomSpacing) ~= "number" then bottomSpacing = 0 end
+    bg:ClearAllPoints()
+    bg:SetPoint("TOPLEFT",  anchorFrame, anchorPoint .. "LEFT",  leftOfs, topOfs)
+    bg:SetPoint("TOPRIGHT", anchorFrame, anchorPoint .. "RIGHT", 11, topOfs)
+    bg:SetPoint("BOTTOM",   lowest,      "BOTTOM",               0, bottomSpacing - 15)
     bg._lastLowest = lowest
 end
 EQT.ResizeBGToContent = ResizeBGToContent
@@ -499,8 +467,9 @@ function EQT.InitVisibility()
     EQT.ApplyForceOnScreen()
     InstallShowHook()
 
-    -- Live-update the top accent divider when the user changes UI Accent Color.
-    if EllesmereUI and EllesmereUI.RegAccent then
+    -- Live-update the top accent divider when the user changes UI Accent Color
+    -- (no background, so no divider, under the stock styles).
+    if not EQT.Blizz() and EllesmereUI and EllesmereUI.RegAccent then
         EllesmereUI.RegAccent({ type = "callback", fn = ApplyTopDivider })
     end
 
@@ -538,12 +507,10 @@ function EQT.InitVisibility()
 
     -- Register with the shared visibility dispatcher for combat/mount
     -- visibility modes. Bails immediately when suppressed (M+/raid).
-    if EllesmereUI.RegisterVisibilityUpdater then
-        EllesmereUI.RegisterVisibilityUpdater(function()
-            if _eqtSuppressed then return end
-            UpdateVisibility()
-        end)
-    end
+    EllesmereUI.RegisterVisibilityUpdater(function()
+        if _eqtSuppressed then return end
+        UpdateVisibility()
+    end)
 
     -- Mouseover mode: poll both the tracker and our BG frame as one target
     -- so hovering either fades them in together. SetAlpha on the proxy
@@ -570,6 +537,7 @@ function EQT.InitVisibility()
         moProxy.SetAlpha = function(_, a)
             if otf then otf:SetAlpha(a) end
             if _bgFrame then _bgFrame:SetAlpha(a) end
+            if EQT.ApplyTrackerMouse then EQT.ApplyTrackerMouse((a or 0) > 0) end
         end
         -- The monitor reveals via SetAlpha(1) + Show(). The BG may have been Hidden by
         -- a resize pass while idling at alpha 0 (TrackerIsVisible reads mouseover-idle
@@ -578,10 +546,12 @@ function EQT.InitVisibility()
         -- next resize pass re-hides the frame cleanly.
         moProxy.Show = function()
             if _bgFrame then _bgFrame:Show() end
+            if EQT.ApplyTrackerMouse then EQT.ApplyTrackerMouse(true) end
         end
         moProxy.Hide = function()
             if otf then otf:SetAlpha(0) end
             if _bgFrame then _bgFrame:SetAlpha(0) end
+            if EQT.ApplyTrackerMouse then EQT.ApplyTrackerMouse(false) end
         end
         moProxy.EnableMouse = function() end
         EllesmereUI.RegisterMouseoverTarget(moProxy, function()

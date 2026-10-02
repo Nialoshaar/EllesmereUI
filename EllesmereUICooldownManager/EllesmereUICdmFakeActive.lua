@@ -30,7 +30,7 @@ local _, ns = ...
 
 local GetTime                = GetTime
 local UnitClass              = UnitClass
-local GetSpecialization      = GetSpecialization
+local GetSpecialization      = C_SpecializationInfo.GetSpecialization
 local GetInventoryItemID     = GetInventoryItemID
 local CreateFrame            = CreateFrame
 local C_Timer                = C_Timer
@@ -39,6 +39,7 @@ local C_SpellBook            = C_SpellBook
 local wipe                   = wipe
 local pcall                  = pcall
 local type                   = type
+local tonumber               = tonumber
 local RAID_CLASS_COLORS      = RAID_CLASS_COLORS
 local C_Container            = C_Container
 local GetInventoryItemCooldown = GetInventoryItemCooldown
@@ -100,8 +101,14 @@ local _overlays  = setmetatable({}, { __mode = "k" })  -- iconFrame -> overlay d
 
 -- Cooldown-state effects (continuous, cooldown-driven; presets only).
 local _cdStateRules = {}                                -- subset: cas.cdStateEffect set
-local _cdStateTicker
+-- Same-frame coalescer for edge-driven cd-state evaluation. The engine owns
+-- the edges (widget push = cooldown started, OnCooldownDone = cooldown ended),
+-- so there is NO poll ticker: evaluation runs only when an edge fires.
+local _cdEvalQueued = false
 local _hasUserRules = false                             -- any profile (user) rule armed
+-- Any cd-state rule on Hidden Until Usable: its proc edges change only
+-- usability, so SPELL_UPDATE_USABLE joins the edges while one exists.
+local _needUsable = false
 
 -- CD-ready sound "armed" state, keyed by ability so it survives the rule-object
 -- churn of FakeActive_Rearm (rebuilds are frequent in M+ and would otherwise eat
@@ -112,8 +119,8 @@ local _cdrArmedByKey = {}
 local GetOverlay, ResolveSwipeColor, IconTexture, ApplyToFrame, ApplyRule, RaiseOverlayBorders, RestoreOverlayBorders
 local EnsureTicker, OpenWindow, CloseWindow, CloseAll, CastWindow
 local OpenFromAura, EvalCustom, InitialStamp, OnEvent, UpdateListeners
-local ResolveCastSpells
-local PresetOnCD, ApplyCdState, RestoreAllCdState, EnsureCdStateTicker, EvalCdStateNow
+local ResolveCastSpells, PresetAltItemIDs
+local PresetOnCD, ApplyCdState, RestoreAllCdState, EvalCdStateNow, QueueCdStateEval
 
 -- ---------------------------------------------------------------------------
 --  Icon identity: slot key <-> equipped item key
@@ -198,6 +205,12 @@ GetOverlay = function(iconFrame)
     local icon = f:CreateTexture(nil, "ARTWORK")
     icon:SetAllPoints(f)
     o.icon = icon
+    -- Blizzard Style: the copy rounds off with the art it copies (the
+    -- viewer's mask on pooled frames, ours on own frames).
+    if ns.CdmBlizzIcons and ns.CdmBlizzIcons() and ns.CdmBlizzIconMask then
+        local m = ns.CdmBlizzIconMask(iconFrame)
+        if m then pcall(icon.AddMaskTexture, icon, m) end
+    end
 
     local cd = CreateFrame("Cooldown", nil, f, "CooldownFrameTemplate")
     cd:SetAllPoints(f)
@@ -205,7 +218,7 @@ GetOverlay = function(iconFrame)
     cd:SetDrawEdge(false)
     cd:SetDrawBling(false)
     cd:SetHideCountdownNumbers(false)
-    cd:SetSwipeTexture("Interface\\Buttons\\WHITE8x8")
+    cd:SetSwipeTexture("Interface\\AddOns\\EllesmereUI\\media\\white-square.png")
     o.cd = cd
 
     -- Own glow frame for ns.ApplyActiveOverlays (never collides with the real
@@ -292,6 +305,50 @@ IconTexture = function(iconFrame, o, rule)
     end
 end
 
+-- Threshold Text block for one rule's overlay countdown. Per-spell Threshold Text covers
+-- the ACTIVE STATE countdown as well as cooldown and recharge, but a USER rule's styling
+-- block is its customActiveStates entry, which carries threshold keys only when they were
+-- set from the preset/custom menu -- a threshold set on the SPELL lives in the family
+-- entry and would never reach these overlays. Fall through to the shared resolver, which
+-- reads family first then cas. Returns ss untouched when it already arms the feature, and
+-- when nobody uses it (session gate), so non-users pay nothing.
+local function ThresholdFor(frame, rule, ss)
+    if (tonumber(ss and ss.thresholdSeconds) or 0) > 0 then return ss end
+    if not (ns._cdmAnyThresholdText and ns.ResolveThresholdTextSettings) then return ss end
+    local fcT = frame and ns._ecmeFC and ns._ecmeFC[frame]
+    local bkT = fcT and fcT.barKey
+    return ns.ResolveThresholdTextSettings(frame, rule.spellID,
+        bkT and ns.GetBarSpellData and ns.GetBarSpellData(bkT), bkT)
+end
+
+-- The overlay's active glow (drawn on its own glow frame) holds the icon's
+-- non-Blackout CD-state glow back, as the native active-state glow does:
+-- ns.StartCdGlow reads fd._faActiveGlow from the icon's own frame data. `on`
+-- is true only while that glow is lit AND the overlay renders (12.1 slot mode
+-- keeps the overlay dark). Edge-gated: the rising edge takes down a CD-state
+-- glow on the shared overlay and marks it owed, the falling edge relights it.
+local function HoldCdGlow(iconFrame, on)
+    local fd = ns._hookFrameData and ns._hookFrameData[iconFrame]
+    if not fd or (fd._faActiveGlow or false) == on then return end
+    fd._faActiveGlow = on or nil
+    if on then
+        -- A lit Blackout owns the memo (the active glow never holds it
+        -- back): never clear the memo out from under it.
+        local go = fd.glowOverlay
+        local bo = fd.blackoutOverlay
+        if go and go._glowActive and (fd._cdStateGlowOn or fd._presetCdGlowOn)
+           and not (fd.procGlowActive or fd._activeGlowOn)
+           and not (bo and bo._glowActive) then
+            ns.StopNativeGlow(go)
+            fd._cdStateGlowOn = false
+            fd._presetCdGlowOn = false
+            fd._cdGlowOwed = true
+        end
+    elseif fd._cdGlowOwed then
+        ns.CdGlowKick(iconFrame)
+    end
+end
+
 -- ---------------------------------------------------------------------------
 --  Show / hide the overlay on a single icon frame.
 -- ---------------------------------------------------------------------------
@@ -349,7 +406,7 @@ ApplyToFrame = function(iconFrame, rule, win)
         -- only touches widgets it manages, and StyleOverlayCooldownText (above)
         -- already set the countdown numbers per the Duration Text state.
         if ns._cdmAnyThresholdText and ns.ApplyThresholdFormatter then
-            ns.ApplyThresholdFormatter(o.cd, ss)
+            ns.ApplyThresholdFormatter(o.cd, ThresholdFor(iconFrame, rule, ss))
         end
         -- Feed the active glow + border the underlying icon's shape / border so
         -- Shape Glow masks to the shape (it reads the shape from its glow frame's
@@ -365,23 +422,36 @@ ApplyToFrame = function(iconFrame, rule, win)
             gfc.shapeBorder  = (uifc and uifc.shapeBorder) or nil
         end
         if ns.ApplyActiveOverlays then ns.ApplyActiveOverlays(o.frame, o, ss, true, bd) end
-        if win.fa121 and FA121 then
+        local slotMode = (win.fa121 and FA121) and true or false
+        if slotMode then
             -- 12.1 slot mode: the slot subtree renders the active display;
             -- Attach positions it and parks this legacy overlay at alpha 0.
             FA121.Attach(iconFrame, o, rule, ss, bd)
         else
             o.frame:SetAlpha(1)
         end
+        HoldCdGlow(iconFrame, o._activeGlowOn == true and not slotMode)
     else
         o._rule = nil
         o._ss = nil
         RestoreOverlayBorders(iconFrame, o)
         if ns.ApplyActiveOverlays then ns.ApplyActiveOverlays(o.frame, o, ss, false, bd) end
+        HoldCdGlow(iconFrame, false)
         o.cd:Clear()
         o.frame:SetAlpha(0)
         if FA121 then FA121.Detach(o) end
     end
 end
+
+-- User active states belong only to frames we inject. Removing a custom spell
+-- clears its customSpellIDs tag but preserves its profile-level settings for
+-- moves between bars. Those settings must not decorate a native viewer icon
+-- when the spell is later added through normal CDM tracking.
+local function IsInjectedFrame(f)
+    return (f._isCustomSpellFrame or f._isRacialFrame or f._isPresetFrame
+            or f._isItemPresetFrame or f._isTrinketFrame) and true or false
+end
+ns.CdmIsInjectedFrame = IsInjectedFrame
 
 -- BUILT-IN rules only ever target native viewer entries, so they only match
 -- icons on the three native bars. Guards against a stale cached spellID on a
@@ -389,9 +459,9 @@ end
 -- (field: Ebon Might's built-in overlay painting a custom-bar potion slot
 -- after icon-size/glow adjustments forced frame reuse). USER rules are
 -- deliberately NOT scoped: they are barKey-less by design and follow the
--- spell to whichever bar hosts it (see the AddUserRule contract below) --
--- scoping them would kill custom-bar cd-state effects, overlays and
--- ready-sounds.
+-- injected spell to whichever bar hosts it (see the AddUserRule contract below).
+-- Restrict their frame kind, not their bar, so native icons cannot inherit an
+-- orphaned custom timer while custom-bar presets keep their active states.
 local NATIVE_VIEWER_BARKEYS = { cooldowns = true, utility = true, buffs = true }
 
 -- Apply (or clear) a rule on every matching live icon. A rule with .barKey
@@ -410,7 +480,7 @@ ApplyRule = function(rule, win)
             if rule.barKey then
                 barScopeOK = fc and fc.barKey == rule.barKey
             elseif rule.user then
-                barScopeOK = fc ~= nil
+                barScopeOK = fc ~= nil and IsInjectedFrame(f)
             else
                 barScopeOK = fc and fc.barKey and NATIVE_VIEWER_BARKEYS[fc.barKey]
             end
@@ -491,7 +561,7 @@ end
                     pcall(ns.StyleOverlayCooldownText, st.cd, bd, ss, iconFrame:GetScale())
                 end
                 if ns._cdmAnyThresholdText and ns.ApplyThresholdFormatter then
-                    pcall(ns.ApplyThresholdFormatter, st.cd, ss)
+                    pcall(ns.ApplyThresholdFormatter, st.cd, ThresholdFor(iconFrame, rule, ss))
                 end
             else
                 st.cdLocked = true
@@ -613,7 +683,7 @@ end
                 cd:SetDrawEdge(false)
                 cd:SetDrawBling(false)
                 cd:SetHideCountdownNumbers(false)
-                cd:SetSwipeTexture("Interface\\Buttons\\WHITE8x8")
+                cd:SetSwipeTexture("Interface\\AddOns\\EllesmereUI\\media\\white-square.png")
                 cd:SetFrameLevel(button:GetFrameLevel() + 1)
                 local cr, cg, cb, ca = ResolveSwipeColor(ss)
                 cd:SetSwipeColor(cr, cg, cb, ca)
@@ -622,7 +692,11 @@ end
                     pcall(ns.StyleOverlayCooldownText, cd, bd, ss, scale)
                 end
                 if ns.ApplyThresholdFormatter then
-                    pcall(ns.ApplyThresholdFormatter, cd, ss)
+                    -- Resolve INSIDE the protection: an argument expression evaluates before pcall
+                    -- is entered, and a throw in this creation window takes the whole slot down
+                    -- (its swipe with it), not just the countdown text.
+                    local okT, ttB = pcall(ThresholdFor, st.srcFrame, rule, ss)
+                    pcall(ns.ApplyThresholdFormatter, cd, okT and ttB or ss)
                 end
                 if ns.ApplyShapeToOverlay and st.srcFrame then
                     pcall(ns.ApplyShapeToOverlay, st.srcFrame, tex, cd, bd)
@@ -651,7 +725,7 @@ end
                         tc:SetAllPoints(button)
                         tc:SetFrameLevel(cd:GetFrameLevel() + 5)
                         local fs = tc:CreateFontString(nil, "OVERLAY")
-                        local cdFont = (EllesmereUI.GetFontPath and EllesmereUI.GetFontPath("cdm"))
+                        local cdFont = (EllesmereUI.GetFontPath("cdm"))
                             or "Interface\\AddOns\\EllesmereUI\\media\\fonts\\Expressway.TTF"
                         local fsScale = (scale and scale > 0.01) and scale or 1
                         local cdSize = ((ss and ss.cooldownFontSize) or (bd and bd.cooldownFontSize) or 12) / fsScale
@@ -913,6 +987,9 @@ OnEvent = function(self, event, unit, _, spellID)
         -- refresh unconditionally. It is a wipe plus one lookup per slot on an
         -- event that fires only when gear actually changes.
         RefreshSlotItemKeys()
+        -- Gear changed: one re-evaluation so a swapped-in mid-cooldown item
+        -- paints its cd-state (trinket slots re-arm below, which also evals).
+        QueueCdStateEval()
         -- Re-arm stays TRINKET-ONLY on purpose. A trinket swap re-points a slot's
         -- settings to a different item, so the slot must pick up the newly-equipped
         -- trinket's rule (or none). Re-arming on every gear change would tear down and
@@ -921,6 +998,11 @@ OnEvent = function(self, event, unit, _, spellID)
         if unit == 13 or unit == 14 then
             ns.FakeActive_Rearm()
         end
+    elseif event == "PLAYER_REGEN_ENABLED" or event == "SPELL_UPDATE_USABLE" then
+        -- Combat end: cooldown reads were secret-dropped during combat, so any
+        -- fail-open cd-state paint corrects on this first plain re-read.
+        -- SPELL_UPDATE_USABLE: a Hidden Until Usable proc edge.
+        QueueCdStateEval()
     end
 end
 
@@ -934,6 +1016,12 @@ UpdateListeners = function()
         else _events:UnregisterEvent("UNIT_AURA") end
         if _needCast then _events:RegisterUnitEvent("UNIT_SPELLCAST_SUCCEEDED", "player")
         else _events:UnregisterEvent("UNIT_SPELLCAST_SUCCEEDED") end
+        -- Combat end re-syncs cd-state once: cooldown reads secret-drop during
+        -- combat, so the first plain read corrects anything painted fail-open.
+        if #_cdStateRules > 0 then _events:RegisterEvent("PLAYER_REGEN_ENABLED")
+        else _events:UnregisterEvent("PLAYER_REGEN_ENABLED") end
+        if _needUsable then _events:RegisterEvent("SPELL_UPDATE_USABLE")
+        else _events:UnregisterEvent("SPELL_UPDATE_USABLE") end
         -- Trinket swaps only matter when the player actually uses custom states.
         if _hasUserRules then _events:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
         else _events:UnregisterEvent("PLAYER_EQUIPMENT_CHANGED") end
@@ -979,6 +1067,20 @@ ResolveCastSpells = function(key)
             else
                 local _, spID = C_Item.GetItemSpell(itemID)
                 if spID then out[#out + 1] = spID end
+                -- Other family presets (primary id only): map each alternate's
+                -- on-use spell too (Demonic Healthstone, other mana pot ranks).
+                local alts = PresetAltItemIDs(itemID)
+                if alts then
+                    local seen = {}
+                    if spID then seen[spID] = true end
+                    for i = 1, #alts do
+                        local _, altSp = C_Item.GetItemSpell(alts[i])
+                        if altSp and not seen[altSp] then
+                            seen[altSp] = true
+                            out[#out + 1] = altSp
+                        end
+                    end
+                end
             end
         end
     end
@@ -1009,9 +1111,10 @@ end
 -- itemID -> its preset's alternate item IDs. A preset (e.g. Light's Potential)
 -- covers several ranks of the same consumable; the player owns one alternate and
 -- the cooldown ticks on THAT id, not the primary. ProcessPresetCooldowns already
--- walks these, so PresetOnCD must too or the "CD Ready" glow never turns off.
+-- walks these, so PresetOnCD must too or the "CD Ready" glow never turns off;
+-- ResolveCastSpells maps each alternate's on-use spell from it too.
 local _presetAltMap
-local function PresetAltItemIDs(itemID)
+PresetAltItemIDs = function(itemID)
     if not _presetAltMap then
         _presetAltMap = {}
         for _, pr in ipairs(ns.CDM_ITEM_PRESETS or {}) do
@@ -1092,6 +1195,19 @@ local function PresetCdReady(key, onCD)
     return ns.CdmCdStateReady(effKey, onCD)
 end
 
+-- Hidden Until Usable on a preset (ns.CdmSpellNotUsable): spells only, through
+-- the same override walk. An item key never reads unusable, so the mode acts
+-- as Hidden (On CD) on items.
+local function PresetNotUsable(key)
+    if key <= 0 then return false end
+    local effKey = key
+    if C_SpellBook and C_SpellBook.FindSpellOverrideByID then
+        local ov = C_SpellBook.FindSpellOverrideByID(key)
+        if ov and ov > 0 and ov ~= key then effKey = ov end
+    end
+    return ns.CdmSpellNotUsable(effKey)
+end
+
 -- Normal (shown) alpha for a frame, from its bar's opacity (out-of-combat fade folded
 -- in via EffectiveBarAlpha so restores don't clobber the fade). Overflow-diverted
 -- frames render inside the target bar, so their restore alpha follows that bar's
@@ -1144,7 +1260,8 @@ ApplyCdState = function(frame, fc, cas, eff, onCD, ready)
         if ns.SetCdStateShiftHidden then ns.SetCdStateShiftHidden(fc, false) end
         return
     end
-    -- Glow modes: glow while the ability is READY (off cooldown). Not a hide.
+    -- Glow modes: glow while the ability is READY (off cooldown), or while it is
+    -- ON cooldown for Glow (On CD). Not a hide.
     -- Restore the alpha as well as the flag, exactly as the appearance refresh
     -- does on this transition: once a bar has settled nothing else re-asserts a
     -- preset frame's alpha, so clearing the flag alone leaves a hide from an
@@ -1152,23 +1269,31 @@ ApplyCdState = function(frame, fc, cas, eff, onCD, ready)
     if fc._cdStateHidden then frame:SetAlpha(FrameBaseAlpha(fc)) end
     fc._cdStateHidden = false
     if ns.SetCdStateShiftHidden then ns.SetCdStateShiftHidden(fc, false) end
-    local glow = fd and fd.glowOverlay
-    if not glow then return end
-    if not onCD then
+    if not fd then return end
+    -- Glow (On CD) wants the OPPOSITE cooldown state from the Ready variants
+    -- (as the glowOnCD branch of the SetDesaturated hook in CdmHooks.lua).
+    local isOnCdGlow = (eff == "glowOnCD")
+    local wantsGlow = isOnCdGlow and onCD or (not isOnCdGlow and not onCD)
+    if wantsGlow then
+        local style = ns.CdReadyGlowStyle(eff, cas)
+        local styleEntry = ns.GLOW_STYLES[style]
+        -- A branch, not `and/or`: the Blackout frame does not exist before
+        -- its first start, and the shared overlay must not stand in for it.
+        local ov
+        if styleEntry and styleEntry.solidFill then ov = fd.blackoutOverlay else ov = fd.glowOverlay end
         -- Re-assert against the overlay's REAL state (overlay._glowActive), not
-        -- our flag alone. fd.glowOverlay is shared with the proc-glow and
+        -- our flag alone. The overlay is shared with the proc-glow and
         -- appearance passes, and twelve of the thirteen sites that stop it never
         -- tell this engine -- so the flag said "lit" while the overlay was dark
-        -- and a ready preset stayed unglowed until the next re-arm. Only ever
-        -- starts a glow when nothing is running, so it cannot stomp another
-        -- owner's.
-        if not fd._presetCdGlowOn or not glow._glowActive then
-            local gr, gg, gb = ns.ResolveGlowColor and ns.ResolveGlowColor(cas or {})
-            ns.StartNativeGlow(glow, eff == "pixelGlowReady" and 1 or 3, gr or 1, gg or 1, gb or 1)
-            fd._presetCdGlowOn = true
+        -- and a ready preset stayed unglowed until the next re-arm. A live
+        -- proc or active-state glow keeps the shared overlay (ns.StartCdGlow
+        -- returns nil), and the memo stays off until a later pass lights it.
+        if not fd._presetCdGlowOn or not (ov and ov._glowActive) then
+            local cr, cg, cb = ns.CdReadyGlowColor(style, cas)
+            fd._presetCdGlowOn = ns.StartCdGlow(fd, style, cr, cg, cb, ns.CdReadyGlowAlpha(cas)) ~= nil
         end
     elseif fd._presetCdGlowOn then
-        ns.StopNativeGlow(glow)
+        ns.StopCdGlow(fd)
         fd._presetCdGlowOn = false
     end
 end
@@ -1190,32 +1315,82 @@ RestoreAllCdState = function()
                     fc._cdStateHidden = false
                     if ns.SetCdStateShiftHidden then ns.SetCdStateShiftHidden(fc, false) end
                 end
-                if fd._presetCdGlowOn and fd.glowOverlay then
-                    ns.StopNativeGlow(fd.glowOverlay)
+                if fd._presetCdGlowOn and (fd.glowOverlay or fd.blackoutOverlay) then
+                    ns.StopCdGlow(fd)
                     fd._presetCdGlowOn = false
                 end
+                -- CloseAll wipes every window right after, but it reaches an
+                -- icon only through its identity, which a rebuild clears on
+                -- custom bars: drop the overlay's hold here so the icon's own
+                -- CD-state glow is not refused until its next window ends.
+                fd._faActiveGlow = nil
                 fd._presetCdTouched = nil
             end
         end
     end
 end
 
--- Is this frame one WE inject? customActiveStates is only editable from the
--- per-icon menu's "Custom Active State" section, offered for exactly these
--- frames (EUI_CooldownManager_Options.lua isCustomInjected). A Blizzard viewer
--- frame carries none of the flags, so a user rule reaching one is an orphan:
--- removing a custom spell clears customSpellIDs but not the profile-level
--- active state, and no menu can then show or clear it -- which hid a plainly
--- tracked spell with nothing to explain why.
-local function IsInjectedFrame(f)
-    return (f._isCustomSpellFrame or f._isRacialFrame or f._isPresetFrame
-            or f._isItemPresetFrame or f._isTrinketFrame) and true or false
+-- Same-frame coalesced evaluation: every engine edge funnels here. Zero cost
+-- while no cd-state rules exist.
+QueueCdStateEval = function()
+    if _cdEvalQueued or #_cdStateRules == 0 then return end
+    _cdEvalQueued = true
+    C_Timer.After(0, function()
+        _cdEvalQueued = false
+        EvalCdStateNow()
+    end)
 end
-ns.CdmIsInjectedFrame = IsInjectedFrame
+-- The hooks file's CD-state glow kick (ns.CdGlowKick) relights an owed preset
+-- glow through this pass.
+ns.FakeActive_QueueCdStateEval = QueueCdStateEval
 
--- One full evaluation pass. Driven by the ticker (continuous) AND called
--- synchronously at the end of a re-arm, so a settings change does not leave the
--- icon shown for a tick before the next poll re-hides it.
+-- NOTE: pushes NEVER arm anything directly. The drain is push-through by
+-- design (fresh duration objects land on frames constantly, including
+-- zero-duration pushes onto READY frames when cooldown chatter waves arm it),
+-- so a push proves nothing about cooldown state -- arming happens only in the
+-- evaluation's read branch, on a cooldown actually observed running. A
+-- push-side arm here fired ready sounds whenever ANY charge spell spent a
+-- charge (the chatter pushed onto unrelated ready frames).
+
+-- Install the engine-edge hooks on a rule-matched preset frame, once per frame
+-- object (pool reuse keeps hooks valid: handlers resolve the frame's CURRENT
+-- spell at fire time). The widget carries ONLY real cooldowns -- the drain
+-- pushes with ignoreGCD -- so OnCooldownDone is the true ready edge with no
+-- GCD confusion, and it fires under combat secrecy (the engine animates
+-- durations Lua cannot read) and at alpha 0 (cd-state hides never Hide()).
+local function WireCdStateFrame(f)
+    -- The wired mark lives in the frame's decoration data, never on the frame:
+    -- a natively tracked racial's icon is Blizzard's own pooled viewer frame.
+    local wfd = ns._hookFrameData and ns._hookFrameData[f]
+    if not wfd or wfd._cdsWired then return end
+    local cd = f.cd or f.Cooldown
+    if not cd then return end
+    wfd._cdsWired = true
+    cd:HookScript("OnCooldownDone", function()
+        QueueCdStateEval()
+    end)
+    if cd.SetCooldownFromDurationObject then
+        hooksecurefunc(cd, "SetCooldownFromDurationObject", function()
+            QueueCdStateEval()
+        end)
+    end
+    if cd.SetCooldown then
+        hooksecurefunc(cd, "SetCooldown", function()
+            QueueCdStateEval()
+        end)
+    end
+    -- Early clears (encounter resets, drain falling edges) are ready edges.
+    if cd.Clear then
+        hooksecurefunc(cd, "Clear", function()
+            QueueCdStateEval()
+        end)
+    end
+end
+
+-- One full evaluation pass. Edge-driven (widget push / OnCooldownDone / Clear /
+-- regen / gear, all through QueueCdStateEval) AND called synchronously at the
+-- end of a re-arm, so a settings change does not leave the icon shown for a
+-- frame before the next edge re-hides it.
 EvalCdStateNow = function()
     local icons = ns.cdmBarIcons
     local FCt = ns._ecmeFC
@@ -1234,6 +1409,13 @@ EvalCdStateNow = function()
             -- Separate read for the Hidden (CD Ready) effects: a charge spell is
             -- ready only at max charges (items fall through to "not onCD").
             local ready = PresetCdReady(rule.spellID, onCD)
+            -- Hidden Until Usable paints as Hidden (On CD) with "not usable"
+            -- counting as unavailable; the sound below keeps the plain onCD.
+            local hideCD = onCD
+            if eff == "hiddenUnusable" or eff == "hiddenUnusableShift" then
+                eff = (eff == "hiddenUnusableShift") and "hiddenOnCDShift" or "hiddenOnCD"
+                if not onCD then hideCD = PresetNotUsable(rule.spellID) end
+            end
             local sid = rule.spellID
             -- Sound only fires while the ability's icon is present on a bar.
             local hasIcon = false
@@ -1243,11 +1425,16 @@ EvalCdStateNow = function()
                     local fc = f and FCt[f]
                     -- rule.user rules come from the profile store; built-in rules
                     -- (FAKE_ACTIVE_RULES) deliberately decorate Blizzard icons and
-                    -- keep their reach.
+                    -- keep their reach. Racials are also let through natively-tracked
+                    -- (non-injected) frames: the Presets cog is their only cd-state
+                    -- config surface, unlike custom spells which legitimately defer
+                    -- to normal per-spell settings once Blizzard tracks them for real.
                     if fc and KeyMatches(sid, fc.spellID)
-                       and (not rule.user or IsInjectedFrame(f)) then
+                       and (not rule.user or IsInjectedFrame(f)
+                            or (ns._myRacialsSet and ns._myRacialsSet[sid])) then
                         hasIcon = true
-                        if eff then ApplyCdState(f, fc, cas, eff, onCD, ready) end
+                        WireCdStateFrame(f)
+                        if eff then ApplyCdState(f, fc, cas, eff, hideCD, ready) end
                     end
                 end
             end
@@ -1268,21 +1455,6 @@ EvalCdStateNow = function()
             end
         end
     end
-end
-
-EnsureCdStateTicker = function()
-    if not _cdStateTicker then
-        _cdStateTicker = CreateFrame("Frame")
-        _cdStateTicker:Hide()
-        _cdStateTicker._acc = 0
-        _cdStateTicker:SetScript("OnUpdate", function(self, elapsed)
-            self._acc = self._acc + elapsed
-            if self._acc < 0.12 then return end
-            self._acc = 0
-            EvalCdStateNow()
-        end)
-    end
-    _cdStateTicker:Show()
 end
 
 local function MapCast(rule)
@@ -1367,6 +1539,8 @@ function ns.FakeActive_OnIconRestyled(iconFrame)
     if o._ss and ns.ApplyActiveOverlays then
         o._sbColorSaved = false
         ns.ApplyActiveOverlays(o.frame, o, o._ss, true, bd)
+        -- A live glow edit can switch the overlay's active glow on or off.
+        HoldCdGlow(iconFrame, o._activeGlowOn == true and not st121)
     end
     -- 12.1 slot mode: the live swipe is the slot-child cooldown, not o.cd.
     -- Best-effort mirror only: the engine binding owns that region (field
@@ -1394,12 +1568,12 @@ function ns.FakeActive_Rearm()
     -- Re-read rather than wipe: a re-arm during the login window would leave
     -- the map empty and the lazy refresh in KeyMatches would just rebuild it.
     RefreshSlotItemKeys()
-    _needAura, _needCast, _armed, _hasUserRules = false, false, false, false
+    _needAura, _needCast, _armed, _hasUserRules, _needUsable = false, false, false, false, false
     if FA121 then FA121.BeginSweep() end
 
     -- 1. Built-in rules (class/spec gated).
     local _, classFile = UnitClass("player")
-    local specIdx = GetSpecialization and GetSpecialization() or nil
+    local specIdx = GetSpecialization()
     for i = 1, #FAKE_ACTIVE_RULES do
         local rule = FAKE_ACTIVE_RULES[i]
         if (not rule.class or rule.class == classFile)
@@ -1452,6 +1626,7 @@ function ns.FakeActive_Rearm()
             if hasCd or hasSound then
                 -- Both effects ride the same cooldown poll (EvalCdStateNow).
                 _cdStateRules[#_cdStateRules + 1] = rule
+                if eff == "hiddenUnusable" or eff == "hiddenUnusableShift" then _needUsable = true end
             end
         end
         local eq13 = GetInventoryItemID and GetInventoryItemID("player", 13) or nil
@@ -1490,10 +1665,9 @@ function ns.FakeActive_Rearm()
     _armed = #_rules > 0
     UpdateListeners()
     if #_cdStateRules > 0 then
-        EnsureCdStateTicker()
-        EvalCdStateNow()  -- apply now so the rebuild doesn't flash the icon visible
-    elseif _cdStateTicker then
-        _cdStateTicker:Hide()
+        -- Apply + wire the engine-edge hooks now so the rebuild doesn't flash
+        -- the icon visible; from here every transition is edge-driven.
+        EvalCdStateNow()
     end
 
     if not _armed then return end

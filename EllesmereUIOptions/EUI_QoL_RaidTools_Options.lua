@@ -54,10 +54,28 @@ initFrame:SetScript("OnEvent", function(self)
         return (Cfg("mode") or "never") == "never"
     end
 
-    -- The runtime owns the normalize (unknown values read as "one").
+    local function QuickFireDisabled()
+        return Disabled() or Cfg("quickFire") ~= true
+    end
+
+    -- The runtime owns the normalize (unknown values retain One Window).
     local function ShowAsVal()
         if ns.ShowAs then return ns.ShowAs() end
         return Cfg("showAs") or "one"
+    end
+
+    local function LegacyDisabled()
+        return Disabled() or ShowAsVal() == "compact"
+    end
+    local function RoleCheckDisabled()
+        return Disabled() or ShowAsVal() == "markers"
+    end
+    local function FullPanelButtonDisabled()
+        local mode = ShowAsVal()
+        return Disabled() or mode == "compact" or mode == "markers"
+    end
+    local function PullDisabled()
+        return Disabled() or ShowAsVal() == "markers"
     end
 
     -- Pull durations live in a fixed 3-slot array; each slider owns one slot.
@@ -117,115 +135,20 @@ initFrame:SetScript("OnEvent", function(self)
         -- an override binding on the secure toggle button, so pressing it
         -- works in combat; only the (re)binding itself waits for combat end.
         if not EllesmereUI._prebuilding then
-            local PP  = EllesmereUI.PanelPP
             local rgn = kbRow._rightRegion
-            local kbBtn = CreateFrame("Button", nil, rgn)
-            PP.Size(kbBtn, 126, 29)
-            PP.Point(kbBtn, "RIGHT", rgn, "RIGHT", -20, 0)
-            kbBtn:SetFrameLevel(rgn:GetFrameLevel() + 4)
-            kbBtn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-            local kbBg = EllesmereUI.SolidTex(kbBtn, "BACKGROUND", EllesmereUI.DD_BG_R, EllesmereUI.DD_BG_G, EllesmereUI.DD_BG_B, EllesmereUI.DD_BG_A)
-            kbBg:SetAllPoints()
-            kbBtn._border = EllesmereUI.MakeBorder(kbBtn, 1, 1, 1, EllesmereUI.DD_BRD_A, PP)
-            local kbLbl = EllesmereUI.MakeFont(kbBtn, 12, nil, 1, 1, 1)
-            kbLbl:SetAlpha(EllesmereUI.DD_TXT_A)
-            kbLbl:SetPoint("CENTER")
-
-            local listening = false
-
-            local function FormatKey(key)
-                if not key or key == "" then return EllesmereUI.L("Not Bound") end
-                local parts = {}
-                for mod in key:gmatch("(%u+)%-") do
-                    parts[#parts + 1] = mod:sub(1, 1) .. mod:sub(2):lower()
-                end
-                parts[#parts + 1] = key:match("[^%-]+$") or key
-                return table.concat(parts, " + ")
-            end
-
-            local function RefreshLabel()
-                if listening then return end
-                local k = Cfg("toggleKey")
-                if k == false then k = nil end
-                kbLbl:SetText(FormatKey(k))
-            end
-
-            local function RefreshState()
-                local off = Disabled()
-                kbBtn:SetAlpha(off and 0.3 or 1)
-                kbBtn:EnableMouse(not off)
-                if rgn._label then rgn._label:SetAlpha(off and 0.3 or 1) end
-                if off and listening then
-                    listening = false
-                    kbBtn:EnableKeyboard(false)
-                end
-                RefreshLabel()
-            end
-
-            kbBtn:SetScript("OnClick", function(self, button)
-                if Disabled() then return end
-                if button == "RightButton" then
-                    if listening then listening = false; self:EnableKeyboard(false) end
-                    Set("toggleKey", false)
+            local kbBtn, refresh = EllesmereUI.BuildKeybindButton(rgn, {
+                w = 126, h = 29, level = 4,
+                get = function() return Cfg("toggleKey") end,
+                set = function(v)
+                    Set("toggleKey", v or false)
                     Refresh()
-                    RefreshLabel()
-                    if EllesmereUI._NotifySettingWrite then EllesmereUI._NotifySettingWrite(rgn) end
-                    return
-                end
-                if listening then return end
-                listening = true
-                kbLbl:SetText(EllesmereUI.L("Press a key..."))
-                self:EnableKeyboard(true)
-            end)
-
-            kbBtn:SetScript("OnKeyDown", function(self, key)
-                if not listening then self:SetPropagateKeyboardInput(true); return end
-                if key == "LSHIFT" or key == "RSHIFT" or key == "LCTRL" or key == "RCTRL"
-                   or key == "LALT" or key == "RALT" then
-                    self:SetPropagateKeyboardInput(true); return
-                end
-                self:SetPropagateKeyboardInput(false)
-                if key == "ESCAPE" then
-                    listening = false; self:EnableKeyboard(false); RefreshLabel(); return
-                end
-                local mods = ""
-                if IsShiftKeyDown() then mods = mods .. "SHIFT-" end
-                if IsControlKeyDown() then mods = mods .. "CTRL-" end
-                if IsAltKeyDown() then mods = mods .. "ALT-" end
-                Set("toggleKey", mods .. key)
-                Refresh()
-                listening = false
-                self:EnableKeyboard(false)
-                RefreshLabel()
-                if EllesmereUI._NotifySettingWrite then EllesmereUI._NotifySettingWrite(rgn) end
-            end)
-
-            kbBtn:SetScript("OnEnter", function(self)
-                if Disabled() then
-                    EllesmereUI.ShowWidgetTooltip(self, EllesmereUI.DisabledTooltip("Show Raid Tools"))
-                    return
-                end
-                kbBg:SetColorTexture(EllesmereUI.DD_BG_R, EllesmereUI.DD_BG_G, EllesmereUI.DD_BG_B, EllesmereUI.DD_BG_HA)
-                if kbBtn._border and kbBtn._border.SetColor then kbBtn._border:SetColor(1, 1, 1, 0.3) end
-                EllesmereUI.ShowWidgetTooltip(self, "Toggles the Raid Tools panels, in or out of combat.\n\nLeft-click to set a keybind.\nRight-click to unbind.")
-            end)
-            kbBtn:SetScript("OnLeave", function()
-                if listening then return end
-                kbBg:SetColorTexture(EllesmereUI.DD_BG_R, EllesmereUI.DD_BG_G, EllesmereUI.DD_BG_B, EllesmereUI.DD_BG_A)
-                if kbBtn._border and kbBtn._border.SetColor then kbBtn._border:SetColor(1, 1, 1, EllesmereUI.DD_BRD_A) end
-                EllesmereUI.HideWidgetTooltip()
-            end)
-            kbBtn:SetScript("OnHide", function()
-                -- Closing the EUI window mid-capture must cancel the capture
-                -- AND hide the tooltip. OnLeave skips the hide while listening
-                -- (and may not fire at all if the mouse never left), so the
-                -- tooltip would otherwise linger after the window is gone.
-                if listening then listening = false; kbBtn:EnableKeyboard(false); RefreshLabel() end
-                EllesmereUI.HideWidgetTooltip()
-            end)
-
-            RefreshState()
-            EllesmereUI.RegisterWidgetRefresh(RefreshState)
+                    EllesmereUI._NotifySettingWrite(rgn)
+                end,
+                disabled = Disabled, disabledTip = "Show Raid Tools",
+                tooltip = "Toggles the Raid Tools panels, in or out of combat.\n\nLeft-click to set a keybind.\nRight-click to unbind.",
+            })
+            EllesmereUI.PanelPP.Point(kbBtn, "RIGHT", rgn, "RIGHT", -20, 0)
+            EllesmereUI.RegisterWidgetRefresh(refresh)
 
             -- Spec Overrides capture: bespoke widget, so its SLOT opts in with a
             -- synthetic accessor (the label cfg carries no get/set of its own).
@@ -235,40 +158,37 @@ initFrame:SetScript("OnEvent", function(self)
                 setValue = function(v)
                     Set("toggleKey", v)
                     Refresh()
-                    RefreshLabel()
+                    refresh()
                 end,
             })
         end
 
-        -- Row 2: collapsed-when-shown default | window composition. One rule
-        -- for every show, keybind included -- a user who wants the keybind to
-        -- toggle the full windows simply turns this off.
+        -- Row 2: collapsed-when-shown default | window composition.
         _, h = W:DualRow(parent, y,
             { type = "toggle", text = "Default to Collapsed When Shown",
-              tooltip = "Shows start as a small icon, and the keybind switches between the icon and the full windows. Turn off to show full windows and make the keybind hide and show them.",
-              disabled = Disabled,
+              tooltip = "Full-window modes only. Shows start as a small icon, and the keybind switches between the icon and the full windows.",
+              disabled = LegacyDisabled,
               getValue = function() return Cfg("collapsedIcon") ~= false end,
               setValue = function(v)
                   Set("collapsedIcon", v)
                   Refresh()
               end },
             { type = "dropdown", text = "Show as",
-              tooltip = "One Window combines everything into a single element; the Only choices show just that part.",
+              tooltip = "Compact Band puts markers, ready check and pull timer in one resizable row. The other choices keep the original window layouts.",
               disabled = Disabled,
-              values = { one = "One Window", two = "Two Windows",
-                         group = "Only Group & Pull", markers = "Only Markers" },
-              order = { "one", "two", "group", "markers" },
+              values = { compact = "Compact Band", one = "One Window",
+                         two = "Two Windows", group = "Only Group & Pull",
+                         markers = "Only Markers" },
+              order = { "compact", "one", "two", "group", "markers" },
               getValue = function() return ShowAsVal() end,
               setValue = function(v)
                   Set("showAs", v)
                   Refresh()
-                  EllesmereUI:RefreshPage()  -- the scale sliders follow
+                  EllesmereUI:RefreshPage()
               end }
         );  y = y - h
 
-        -- Row 3: one scale for the whole feature -- both shells and the
-        -- collapsed icon wear it, whichever windows the Show as choice puts
-        -- on screen | which way the windows extend from the collapsed icon.
+        -- Row 3: one scale for every layout | legacy menu grow direction.
         _, h = W:DualRow(parent, y,
             { type = "slider", text = "Window Scale", min = 0.5, max = 2.0, step = 0.05,
               disabled = Disabled,
@@ -278,8 +198,8 @@ initFrame:SetScript("OnEvent", function(self)
                   Refresh()
               end },
             { type = "dropdown", text = "Menu Grow Direction",
-              tooltip = "Which way the windows extend from the collapsed icon when they open.",
-              disabled = Disabled,
+              tooltip = "Full-window modes only. Which way the windows extend from the collapsed icon when they open.",
+              disabled = LegacyDisabled,
               values = { downright = "Down Right", upright = "Up Right",
                          downleft = "Down Left", upleft = "Up Left" },
               order = { "downright", "upright", "downleft", "upleft" },
@@ -290,6 +210,64 @@ initFrame:SetScript("OnEvent", function(self)
               end }
         );  y = y - h
 
+        -- QUICK FIRE
+        -- An explicitly enabled, empty-by-default set of world-marker binds.
+        _, h = W:SectionHeader(parent, "QUICK FIRE", y);  y = y - h
+
+        local qfEnableRow
+        qfEnableRow, h = W:DualRow(parent, y,
+            { type = "toggle", text = "Enable Quick Fire",
+              tooltip = "Adds three optional world-marker keybinds that remain usable in combat. Place drops the first free marker at the cursor in Star to Skull order; Undo removes the last marker placed through Quick Fire; Clear removes all world markers. Every binding starts empty. Marker changes made elsewhere during combat are picked up afterward.",
+              disabled = Disabled,
+              getValue = function() return Cfg("quickFire") == true end,
+              setValue = function(v)
+                  Set("quickFire", v)
+                  Refresh()
+                  EllesmereUI:RefreshPage()
+              end },
+            { type = "label", text = "Place World Marker" }
+        );  y = y - h
+
+        local qfKeysRow
+        qfKeysRow, h = W:DualRow(parent, y,
+            { type = "label", text = "Undo Last Marker" },
+            { type = "label", text = "Clear All Markers" }
+        );  y = y - h
+
+        if not EllesmereUI._prebuilding then
+            local PP = EllesmereUI.PanelPP
+
+            local function AddQuickFireKeybind(region, key)
+                local button, refresh = EllesmereUI.BuildKeybindButton(region, {
+                    w = 126, h = 29, level = 4, mouse = true,
+                    get = function() return Cfg(key) end,
+                    set = function(v)
+                        Set(key, v or false)
+                        Refresh()
+                        EllesmereUI._NotifySettingWrite(region)
+                    end,
+                    disabled = QuickFireDisabled,
+                    disabledTip = function() return Disabled() and "Show Raid Tools" or "Enable Quick Fire" end,
+                })
+                PP.Point(button, "RIGHT", region, "RIGHT", -20, 0)
+                EllesmereUI.RegisterWidgetRefresh(refresh)
+                EllesmereUI.AddCaptureAccessor(region, {
+                    type = "keybind",
+                    text = region._label and region._label:GetText() or key,
+                    getValue = function() return Cfg(key) end,
+                    setValue = function(v)
+                        Set(key, v)
+                        Refresh()
+                        refresh()
+                    end,
+                })
+            end
+
+            AddQuickFireKeybind(qfEnableRow._rightRegion, "quickFirePlaceKey")
+            AddQuickFireKeybind(qfKeysRow._leftRegion, "quickFireUndoKey")
+            AddQuickFireKeybind(qfKeysRow._rightRegion, "quickFireClearKey")
+        end
+
         -- GROUP BUTTONS
         --
         -- One switch per optional action. Ready Check has none: it is the
@@ -297,9 +275,9 @@ initFrame:SetScript("OnEvent", function(self)
         -- leaves -- the survivors re-flow across the rows.
         _, h = W:SectionHeader(parent, "GROUP BUTTONS", y);  y = y - h
 
-        local function ButtonToggle(key, text, tooltip)
+        local function ButtonToggle(key, text, tooltip, disabled)
             return { type = "toggle", text = text, tooltip = tooltip,
-                     disabled = Disabled,
+                     disabled = disabled or Disabled,
                      getValue = function() return Cfg(key) ~= false end,
                      setValue = function(v)
                          Set(key, v)
@@ -309,13 +287,16 @@ initFrame:SetScript("OnEvent", function(self)
 
         _, h = W:DualRow(parent, y,
             ButtonToggle("showRoleCheck", "Show Role Check",
-                "Shows the Role Check button. Turn it off and the remaining buttons close the gap."),
+                "Shows the Role Check button in window layouts and enables Right Click: Role Check on Compact Band.",
+                RoleCheckDisabled),
             ButtonToggle("showConvert", "Show Convert to Raid",
-                "Shows the Convert to Raid button, which reads Convert to Party while you are in a raid.")
+                "Shows the Convert to Raid button, which reads Convert to Party while you are in a raid.",
+                FullPanelButtonDisabled)
         );  y = y - h
         _, h = W:DualRow(parent, y,
             ButtonToggle("showDisband", "Show Disband",
-                "Shows the Disband button. It always asks before disbanding, but hiding it puts it out of misclick range for good."),
+                "Shows the Disband button. It always asks before disbanding, but hiding it puts it out of misclick range for good.",
+                FullPanelButtonDisabled),
             { type = "spacer" }
         );  y = y - h
 
@@ -323,11 +304,11 @@ initFrame:SetScript("OnEvent", function(self)
         _, h = W:SectionHeader(parent, "PULL TIMER", y);  y = y - h
 
         local PULL_LABELS = { "First Timer", "Second Timer", "Third Timer" }
-        local PULL_TIP = "Countdown length of this pull button, in seconds. Set it to 0 to hide the button; with all three at 0 the whole pull row disappears, Stop included."
+        local PULL_TIP = "Countdown length in seconds. Compact Band uses First with Ctrl + Left Click, Second with Shift + Left Click, Third with Left Click, and Right Click stops the timer. Set a timer to 0 to disable that shortcut."
         local function PullSlider(i)
             return { type="slider", text=PULL_LABELS[i], min=0, max=60, step=1,
                      tooltip=PULL_TIP,
-                     disabled=Disabled,
+                     disabled=PullDisabled,
                      getValue=function() return PullGet(i) end,
                      setValue=function(v) PullSet(i, v) end }
         end
@@ -353,8 +334,8 @@ initFrame:SetScript("OnEvent", function(self)
     -- callback re-enters the preview when our page is still the one in front.
     -- The page string must match PAGE_RAIDTOOLS in EUI_QoL_Options.lua.
     EllesmereUI:RegisterOnShow(function()
-        if EllesmereUI.GetActiveModule and EllesmereUI:GetActiveModule() == "EllesmereUIQoL"
-           and EllesmereUI.GetActivePage and EllesmereUI:GetActivePage() == "Raid Tools"
+        if EllesmereUI:GetActiveModule() == "EllesmereUIQoL"
+           and EllesmereUI:GetActivePage() == "Raid Tools"
            and _G._EUI_RaidTools_Preview then
             _G._EUI_RaidTools_Preview(true)
         end
