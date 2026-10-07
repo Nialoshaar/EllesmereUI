@@ -200,6 +200,8 @@ local FOLDER_BLACKLIST = {
     EllesmereUIQoL               = true,
     EllesmereUIAuraBuffReminders = true,
     EllesmereUIForeverEssentials = true,
+    -- Each action menu picks its own specs (Assign to Spec) instead.
+    EllesmereUIQuickdraw         = true,
     -- Minimap + Chat + CooldownManager ARE override-eligible; their
     -- spell/engine-coupled settings are excluded per-path via
     -- SETTING_BLACKLIST below (CDM spell data itself lives OUTSIDE the profile
@@ -3635,7 +3637,7 @@ local EXCLUDED_CONTEXTS = {
     [PROFILES_MODULE] = true,                  -- Profiles & Presets (incl. list tab)
     ["_EUIPatchNotes"] = true,                 -- Patch Notes
     ["_EUIGlobal"] = true,                     -- Global Settings (whole module)
-    -- (Global Settings -> Fonts & Colors stays eligible)
+    -- (Global Settings -> Colors stays eligible)
     -- Blacklisted modules (see FOLDER_BLACKLIST): their pages are fully
     -- outside the system, so the editing-as overlay/absorb covers them too.
     ["EllesmereUIBlizzardSkin"]      = true,
@@ -3647,6 +3649,7 @@ local EXCLUDED_CONTEXTS = {
     ["EllesmereUIQoL"]               = true,   -- whole module
     ["EllesmereUIAuraBuffReminders"] = true,
     ["EllesmereUIForeverEssentials"] = true,
+    ["EllesmereUIQuickdraw"]         = true,
     -- CDM: module eligible (bar settings override); these two tabs are
     -- spell/spec-coupled systems with their own per-spec storage.
     ["EllesmereUICooldownManager"] = {
@@ -4081,23 +4084,25 @@ end
 --- surfaces (Profiles & Presets, Patch Notes, Global Settings): they lock like
 --- every other excluded module. Plugin pages ("plugin:" keys) are never part of
 --- the override systems, so they are always excluded.
-local function IsPluginModule(folder)
-    return type(folder) == "string" and folder:sub(1, 7) == "plugin:"
-end
+-- Block-scoped: this file's main chunk sits near the 200-local cap.
+do
+    local _, ns = ...
+    ns = ns.__euiCoreNS or ns  -- standalone builds: the core's own table (EllesmereUI.lua)
 
-function EllesmereUI.SpecOverrides_ModuleExcluded(folder)
-    return (type(folder) == "string" and EXCLUDED_CONTEXTS[folder] == true)
-        or IsPluginModule(folder)
-end
+    function EllesmereUI.SpecOverrides_ModuleExcluded(folder)
+        return (type(folder) == "string" and EXCLUDED_CONTEXTS[folder] == true)
+            or ns.IsPluginKey(folder)
+    end
 
---- True when a module page is excluded (page-scoped entry, or the whole
---- module). Drives the page-tab lock while a session is active.
-function EllesmereUI.SpecOverrides_PageExcluded(module, page)
-    if IsPluginModule(module) then return true end
-    local ex = module and EXCLUDED_CONTEXTS[module]
-    if ex == true then return true end
-    if type(ex) == "table" and page then return ex[page] == true end
-    return false
+    --- True when a module page is excluded (page-scoped entry, or the whole
+    --- module). Drives the page-tab lock while a session is active.
+    function EllesmereUI.SpecOverrides_PageExcluded(module, page)
+        if ns.IsPluginKey(module) then return true end
+        local ex = module and EXCLUDED_CONTEXTS[module]
+        if ex == true then return true end
+        if type(ex) == "table" and page then return ex[page] == true end
+        return false
+    end
 end
 
 function Cond.GetStore(create)
@@ -5143,7 +5148,7 @@ local function SetSlotMark(region, mode, conflictSpecID, condName, tip)
         blocker:EnableMouse(true)
         local bg = blocker:CreateTexture(nil, "OVERLAY")
         bg:SetAllPoints()
-        bg:SetColorTexture(13/255, 17/255, 25/255, 1)
+        bg:SetColorTexture(17/255, 15/255, 12/255, 1)
         if EllesmereUI.PP and EllesmereUI.PP.CreateBorder then
             EllesmereUI.PP.CreateBorder(blocker, GOLD_R, GOLD_G, GOLD_B, 0.9, 1, "OVERLAY", 7)
         end
@@ -5222,8 +5227,8 @@ local function UpdateEditLocks()
 end
 
 -- AttachEditLock predicate for widgets writing the dark-mode CONDITION's input
--- flags (UF darkTheme, RF healthColorMode, the Fonts & Colors master; the Class
--- Resource Bar flag is NOT an input -- DarkModeMasterOn excludes it). True when
+-- flags (UF darkTheme, RF healthColorMode: the Colors page's Dark Mode rows; the
+-- Class Resource Bar row is NOT an input -- DarkModeMasterOn excludes it). True when
 --   (a) the editing-as session is a CONDITIONAL group with the Dark Mode
 --       condition: capturing a dark flag into it lets the override flip its own
 --       activation condition (apply -> false -> restore -> true -> ...); or
@@ -6307,8 +6312,8 @@ end
 --- in afterwards. Returns true when the view was actually suspended (caller must
 --- then resume it).
 ---
---- Why not just refuse the flip: the Dark Mode condition's only inputs (the two
---- Fonts & Colors masters, the UF/RF dark toggles) live INSIDE the options panel,
+--- Why not just refuse the flip: the Dark Mode condition's only inputs (the Colors
+--- page's Dark Mode rows, Class Resource Bar aside) live INSIDE the options panel,
 --- so its flips are ALWAYS raised with the view up, and only a zone change/roster
 --- update/combat end/reload re-drives a deferred flip -- it can stay pending a
 --- whole session. While pending, the outgoing conditional stays APPLIED and keeps
@@ -6766,7 +6771,7 @@ function EllesmereUI.SpecOverrides_PulseButton()
         local w = (lbl:GetStringWidth() or 120) + 20
         tip:SetSize(w, 24)
         tip:SetPoint("TOP", specBtn, "BOTTOM", 0, -8)
-        local tbg = EllesmereUI.SolidTex(tip, "BACKGROUND", 0.05, 0.06, 0.08, 0.95)
+        local tbg = EllesmereUI.SolidTex(tip, "BACKGROUND", 0.062, 0.050, 0.039, 0.95)
         EllesmereUI.MakeBorder(tip, 1, 0.82, 0.30, 0.85)
         local ag = tip:CreateAnimationGroup()
         ag:SetLooping("REPEAT")
@@ -7895,10 +7900,11 @@ function Cond.ShowPickerPopup(existing)
                     EllesmereUI.HideWidgetTooltip()
                 end)
             elseif def.requires then
-                -- Requirement-gated condition (e.g. Dark Mode needs the master toggle
-                -- ON). CHECKING is refused while unmet; UNchecking always works so an
-                -- existing group can never be trapped by a requirement that later went
-                -- false. Dim state is per-open (rows build once, the popup is reused).
+                -- Requirement-gated condition (e.g. Dark Mode needs every Dark Mode row
+                -- but Class Resource Bar on). CHECKING is refused while unmet;
+                -- UNchecking always works, so an existing group can never be trapped
+                -- by a requirement that later went false. Dim state is per-open (rows
+                -- build once, the popup is reused).
                 row._reqFn = def.requires
                 row._lbl = lbl
                 row:SetScript("OnClick", function(self)
@@ -7909,9 +7915,14 @@ function Cond.ShowPickerPopup(existing)
                     if p._refreshReqRows then p._refreshReqRows() end
                 end)
                 row:SetScript("OnEnter", function(self)
-                    if not p._staged[self._condID] and not self._reqFn()
-                       and def.requiresHint and EllesmereUI.ShowWidgetTooltip then
-                        EllesmereUI.ShowWidgetTooltip(self, L(def.requiresHint))
+                    -- The requirement hint while it would refuse a check, else
+                    -- the condition's own tooltip (what keeps it active).
+                    local tip = def.tooltip
+                    if not p._staged[self._condID] and not self._reqFn() and def.requiresHint then
+                        tip = def.requiresHint
+                    end
+                    if tip and EllesmereUI.ShowWidgetTooltip then
+                        EllesmereUI.ShowWidgetTooltip(self, L(tip))
                     end
                 end)
                 row:SetScript("OnLeave", function()
@@ -8871,7 +8882,7 @@ function EllesmereUI.SpecOverrides_BuildListPage(parent, startY)
         y = y - 6
         local BTN_W, BTN_H = 300, 38
         local lerp = EllesmereUI.lerp
-        local DARK_BG = EllesmereUI.DARK_BG or { r = 0.05, g = 0.07, b = 0.09 }
+        local DARK_BG = EllesmereUI.DARK_BG
         local btn = CreateFrame("Button", nil, parent)
         btn:SetSize(BTN_W, BTN_H)
         btn:SetPoint("TOP", parent, "TOP", 0, y)

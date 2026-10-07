@@ -210,88 +210,24 @@ local function BuildVisualBars(parent, y, W, onSection, EYE)
             if ns._healthAnimActive then StopHealthAnim(); RefreshHealthEye() end
         end)
 
-        -- One-time eyeball hint, raid/main page only.
+        -- One-time eyeball hint, raid/main page only. On the panel body like
+        -- the other panel tips: it hides with the window when it collapses and
+        -- rides the panel scale.
         if not optState._partyCtx and not (EllesmereUIDB and EllesmereUIDB.rfEyeHintSeen) then
-            local TIP_W, TIP_H = 310, 82
-            local EG = EllesmereUI.ELLESMERE_GREEN or { r = 0.05, g = 0.83, b = 0.62 }
-            local ar, ag, ab = EG.r, EG.g, EG.b
-
-            -- On the panel body like the other panel tips: it hides with the
-            -- window when it collapses and rides the panel scale.
-            local tip = CreateFrame("Frame", nil, EllesmereUI._panelBody)
-            tip:SetFrameStrata("FULLSCREEN_DIALOG")
-            tip:SetFrameLevel(200)
-            if PP then PP.Size(tip, TIP_W, TIP_H) end
-            tip:SetSize(TIP_W, TIP_H)
-            tip:EnableMouse(true)
-            tip:SetPoint("TOP", eyeBtn, "BOTTOM", 0, -14)
-
-            local tipBg = tip:CreateTexture(nil, "BACKGROUND")
-            tipBg:SetAllPoints()
-            tipBg:SetColorTexture(0.06, 0.08, 0.10, 0.95)
-
-            EllesmereUI.MakeBorder(tip, ar, ag, ab, 0.25, PP)
-
-            -- Arrow pointing up (clipped diamond)
-            local ARROW_SZ = 16
-            local arrowClip = CreateFrame("Frame", nil, tip)
-            arrowClip:SetFrameStrata("FULLSCREEN_DIALOG")
-            arrowClip:SetFrameLevel(tip:GetFrameLevel() + 10)
-            arrowClip:SetClipsChildren(true)
-            arrowClip:SetSize(ARROW_SZ * 2, ARROW_SZ)
-            arrowClip:SetPoint("BOTTOM", tip, "TOP", 0, -1)
-
-            local arrowFrame = CreateFrame("Frame", nil, arrowClip)
-            arrowFrame:SetFrameLevel(arrowClip:GetFrameLevel() + 1)
-            arrowFrame:SetSize(ARROW_SZ + 4, ARROW_SZ + 4)
-            arrowFrame:SetPoint("CENTER", arrowClip, "BOTTOM", 0, 0)
-
-            local arrowBorder = arrowFrame:CreateTexture(nil, "ARTWORK", nil, 7)
-            arrowBorder:SetSize(ARROW_SZ + 2, ARROW_SZ + 2)
-            arrowBorder:SetPoint("CENTER")
-            arrowBorder:SetColorTexture(ar, ag, ab, 0.18)
-            arrowBorder:SetRotation(math.rad(45))
-            if arrowBorder.SetSnapToPixelGrid then arrowBorder:SetSnapToPixelGrid(false); arrowBorder:SetTexelSnappingBias(0) end
-
-            local arrowFill = arrowFrame:CreateTexture(nil, "OVERLAY", nil, 6)
-            arrowFill:SetSize(ARROW_SZ, ARROW_SZ)
-            arrowFill:SetPoint("CENTER")
-            arrowFill:SetColorTexture(0.06, 0.08, 0.10, 0.95)
-            arrowFill:SetRotation(math.rad(45))
-            if arrowFill.SetSnapToPixelGrid then arrowFill:SetSnapToPixelGrid(false); arrowFill:SetTexelSnappingBias(0) end
-
-            local msg = EllesmereUI.MakeFont(tip, 10, nil, 1, 1, 1, 0.85)
-            msg:SetPoint("TOP", tip, "TOP", 0, -12)
-            msg:SetWidth(TIP_W - 24)
-            msg:SetJustifyH("CENTER")
-            msg:SetSpacing(4)
-            msg:SetText(EllesmereUI.L("Click this eye icon to preview live\nhealth bar effects like absorbs and healing."))
-
-            local okBtn = CreateFrame("Button", nil, tip)
-            okBtn:SetSize(70, 22)
-            okBtn:SetPoint("BOTTOM", tip, "BOTTOM", 0, 10)
-            EllesmereUI.MakeStyledButton(okBtn, "Okay", 10,
-                EllesmereUI.RB_COLOURS, function()
-                    tip:Hide()
+            local tip = EllesmereUI.BuildTipCallout(EllesmereUI._panelBody, {
+                width = 310, height = 82, pp = PP,
+                text = EllesmereUI.L("Click this eye icon to preview live\nhealth bar effects like absorbs and healing."),
+                fontSize = 10, textTop = 12, textInset = 24, spacing = 4, bgAlpha = 0.95,
+                btnW = 70, btnH = 22, btnBottom = 10, btnFontSize = 10,
+                onOkay = function()
                     ns._rfEyeHintTip = nil
                     EllesmereUIDB = EllesmereUIDB or {}
                     EllesmereUIDB.rfEyeHintSeen = true
-                end)
-
+                end,
+            })
+            tip:SetPoint("TOP", eyeBtn, "BOTTOM", 0, -14)
             ns._rfEyeHintTip = tip
-
-            tip:SetAlpha(0)
-            tip:Show()
-            local fadeIn = 0
-            tip:SetScript("OnUpdate", function(self, dt)
-                fadeIn = fadeIn + dt
-                if fadeIn >= 0.3 then
-                    self:SetAlpha(1)
-                    self:SetScript("OnUpdate", nil)
-                    return
-                end
-                self:SetAlpha(fadeIn / 0.3)
-            end)
+            EllesmereUI.ShowTipCallout(tip)
         end
     end  -- close do (health eyeball)
 
@@ -337,7 +273,7 @@ local function BuildVisualBars(parent, y, W, onSection, EYE)
           end },
         { type="slider", text="Background", min=0, max=100, step=1,
           disabled=function() return SVal("healthColorMode", "class") == "dark" end,
-          disabledTooltip="Not available in Dark Mode. Dark Mode colors can be adjusted in Global Settings -> Fonts & Colors.", rawTooltip=true,
+          disabledTooltip="Not available in Dark Mode. Dark Mode colors can be adjusted in Global Settings -> Colors.", rawTooltip=true,
           getValue=function() return SVal("bgDarkness", 50) end,
           setValue=function(v) SSet("bgDarkness", v) end });  y = y - h
     -- Fill Color's "dark" choice IS the Dark Mode condition's input, so lock the dropdown while a Dark Mode conditional is being edited -- else the override could capture a mode change that flips its own condition.
@@ -472,7 +408,7 @@ local function BuildVisualBars(parent, y, W, onSection, EYE)
         bgBlock:SetPoint("BOTTOMRIGHT", bgClassSwatch, "BOTTOMRIGHT", 0, 0)
         bgBlock:SetFrameLevel(bgClassSwatch:GetFrameLevel() + 10)
         bgBlock:EnableMouse(true)
-        bgBlock:SetScript("OnEnter", function() EllesmereUI.ShowWidgetTooltip(bgSwatch, "Not available in Dark Mode. Dark Mode colors can be adjusted in Global Settings -> Fonts & Colors.") end)
+        bgBlock:SetScript("OnEnter", function() EllesmereUI.ShowWidgetTooltip(bgSwatch, "Not available in Dark Mode. Dark Mode colors can be adjusted in Global Settings -> Colors.") end)
         bgBlock:SetScript("OnLeave", function() EllesmereUI.HideWidgetTooltip() end)
         local function UpdateBgSwatchVis()
             if SVal("healthColorMode", "class") == "dark" then
@@ -715,7 +651,7 @@ local function BuildVisualBars(parent, y, W, onSection, EYE)
         local rgn = absorbRow._leftRegion
         -- Placement labels follow the FILL AXIS: saved values stay right/left (meaning the FAR/NEAR end of the fill), worded top/bottom on a vertical bar.
         -- MUTATE IN PLACE, never rebuild this table: RefreshPage's fast path skips a full rebuild and the cog popup is built once then cached, so a fresh table would never reach the widget. The popup re-reads values[get()] every show; _invalidateMenu makes an already-built menu re-read entries from this same table on next click.
-        local absorbEdgeLabels = { overlay = "Overlay", overlayReverse = "Overlay Reverse" }
+        local absorbEdgeLabels = { overlay = "Overlay", overlayReverse = "Overlay Reverse", overlayReverseFull = "Overlay Reverse (Full)" }
         local absorbEdgeLabelsVert  -- last applied axis; nil until first sync
         -- (The Party Frames kit's bar always fills horizontally; decided at build.)
         local kitPage = ns.RF_OptPartyKit()
@@ -734,7 +670,9 @@ local function BuildVisualBars(parent, y, W, onSection, EYE)
             rows = {
                 { type="dropdown", label="Placement",
                   values = absorbEdgeLabels,
-                  order = { "overlay", "overlayReverse", "right", "left" },
+                  -- Wide enough for "Overlay Reverse (Full)".
+                  ddWidth = 190,
+                  order = { "overlay", "overlayReverse", "overlayReverseFull", "right", "left" },
                   disabled = function() return SVal("absorbStyle", "none") == "blizzardModern" end,
                   disabledTooltip = "Default Blizz Frames uses a fixed placement",
                   rawTooltip = true,
@@ -745,8 +683,9 @@ local function BuildVisualBars(parent, y, W, onSection, EYE)
                   values = { never = "Never", always = "Always", fromleft = "From Left" },
                   order = { "never", "always", "fromleft" },
                   -- From Left only exists in the plain Overlay placement:
-                  -- edge modes have no overshield and Overlay Reverse
-                  -- already clamps the whole absorb inside the fill.
+                  -- edge modes have no overshield, Overlay Reverse
+                  -- already clamps the whole absorb inside the fill and
+                  -- its Full variant draws the excess from the origin edge.
                   itemDisabled=function(v)
                       return v == "fromleft" and SVal("absorbEdgeMode", "overlay") ~= "overlay"
                   end,
@@ -1386,7 +1325,7 @@ local function BuildVisualBars(parent, y, W, onSection, EYE)
             SSet("powerBgPowerColored", true)
             EllesmereUI:RefreshPage()
         end)
-        bgPwrSwatch:HookScript("OnEnter", function() EllesmereUI.ShowWidgetTooltip(bgPwrSwatch, "Power Colored Background. Power colors can be adjusted in Global Settings -> Fonts & Colors.") end)
+        bgPwrSwatch:HookScript("OnEnter", function() EllesmereUI.ShowWidgetTooltip(bgPwrSwatch, "Power Colored Background. Power colors can be adjusted in Global Settings -> Colors.") end)
         bgPwrSwatch:HookScript("OnLeave", function() EllesmereUI.HideWidgetTooltip() end)
         bgPwrSwatch:SetPoint("RIGHT", rgn._lastInline or rgn._control, "LEFT", -8, 0)
         rgn._lastInline = bgPwrSwatch
@@ -1508,8 +1447,7 @@ local function BuildVisualBars(parent, y, W, onSection, EYE)
         }
         if EllesmereUI.IS_FOREVER then
             table.insert(nameRows, 1, { type="dropdown", label="Name Format",
-                values={ first = "First Name", last = "Last Name", full = "First and Last" },
-                order={ "first", "last", "full" },
+                values=EllesmereUI.NAME_FORMAT_VALUES, order=EllesmereUI.NAME_FORMAT_ORDER,
                 get=function() return SVal("nameFormat", "full") end,
                 set=function(v) SSet("nameFormat", v) end })
         end

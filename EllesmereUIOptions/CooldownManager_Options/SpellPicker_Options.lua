@@ -304,7 +304,7 @@ local function ShowSpellPicker(anchorFrame, barKey, slotIndex, excludeSet, onSel
                 end
                 -- Cd-claimed collided-buff slot: settings key is the collision "c"..
                 -- cooldownID form directly -- the marker's mere presence already proves
-                -- this slot's identity (no ambiguity, unlike ResolveBuffSettingsKey's buff-bar case). Matches ResolveSpellSettings' runtime key exactly (EllesmereUICdmHooks.lua, settings["c"..cdID]).
+                -- this slot's identity (no ambiguity, unlike ResolveBuffSettingsKey's buff-bar case). Matches ResolveSpellSettings' runtime key exactly (EUI_CDM_HookResolve.lua, settings["c"..cdID]).
                 local cdClaimS = spellID and ns.CdClaimMarkerToCdID and ns.CdClaimMarkerToCdID(spellID)
                 if cdClaimS then
                     spellID = "c" .. cdClaimS
@@ -1354,10 +1354,14 @@ local function ShowSpellPicker(anchorFrame, barKey, slotIndex, excludeSet, onSel
                     { val = "hiddenReadyShift", label = "Hidden CD Ready (Shift Icons)" },
                     { val = "hiddenUnusableShift", label = "Hidden Until Usable (Shift Icons)",
                       tooltip = "Only shown while usable and off cooldown, such as Overpower or Victory Rush after a proc. Low resources do not hide it." },
+                    { val = "hiddenFormShift", label = "Hidden Outside Form/Stance (Shift Icons)",
+                      tooltip = "Only shown in the form or stance the spell needs, even while it is on cooldown." },
                     { val = "hiddenOnCD",      label = "Hidden (On CD)" },
                     { val = "hiddenReady",     label = "Hidden (CD Ready)" },
                     { val = "hiddenUnusable",  label = "Hidden (Until Usable)",
                       tooltip = "Only shown while usable and off cooldown, such as Overpower or Victory Rush after a proc. Low resources do not hide it." },
+                    { val = "hiddenForm",      label = "Hidden (Outside Form/Stance)",
+                      tooltip = "Only shown in the form or stance the spell needs, even while it is on cooldown." },
                     -- One CD Ready glow per variant; the style is its own row below
                     -- (cdStateGlowStyle). The stored button* values still render as
                     -- Action Button Glow and read back as the matching entry here.
@@ -2756,10 +2760,14 @@ local function ShowSpellPicker(anchorFrame, barKey, slotIndex, excludeSet, onSel
                         { val = "hiddenReadyShift", label = "Hidden CD Ready (Shift Icons)" },
                         { val = "hiddenUnusableShift", label = "Hidden Until Usable (Shift Icons)",
                           tooltip = "Only shown while usable and off cooldown, such as Overpower or Victory Rush after a proc. Low resources do not hide it." },
+                        { val = "hiddenFormShift", label = "Hidden Outside Form/Stance (Shift Icons)",
+                          tooltip = "Only shown in the form or stance the spell needs, even while it is on cooldown." },
                         { val = "hiddenOnCD",      label = "Hidden (On CD)" },
                         { val = "hiddenReady",     label = "Hidden (CD Ready)" },
                         { val = "hiddenUnusable",  label = "Hidden (Until Usable)",
                           tooltip = "Only shown while usable and off cooldown, such as Overpower or Victory Rush after a proc. Low resources do not hide it." },
+                        { val = "hiddenForm",      label = "Hidden (Outside Form/Stance)",
+                          tooltip = "Only shown in the form or stance the spell needs, even while it is on cooldown." },
                         { val = "pixelGlowReady",  label = "Glow (CD Ready)" },
                         { val = "glowOnCD",        label = "Glow (On CD)" },
                     }
@@ -4085,7 +4093,7 @@ local function ShowSpellPicker(anchorFrame, barKey, slotIndex, excludeSet, onSel
                 popup:SetFrameLevel(dimmer:GetFrameLevel() + 10)
                 popup:EnableMouse(true)
                 local popBg = popup:CreateTexture(nil, "BACKGROUND")
-                popBg:SetAllPoints(); popBg:SetColorTexture(0.06, 0.08, 0.10, 1)
+                popBg:SetAllPoints(); popBg:SetColorTexture(0.077, 0.068, 0.058, 1)
                 EllesmereUI.MakeBorder(popup, 1, 1, 1, 0.15, EllesmereUI.PP)
 
                 local title = popup:CreateFontString(nil, "OVERLAY")
@@ -4105,7 +4113,7 @@ local function ShowSpellPicker(anchorFrame, barKey, slotIndex, excludeSet, onSel
                 editBox:SetTextColor(1, 1, 1, 0.9)
                 editBox:SetJustifyH("CENTER")
                 local ebBg = editBox:CreateTexture(nil, "BACKGROUND")
-                ebBg:SetAllPoints(); ebBg:SetColorTexture(0.04, 0.06, 0.08, 1)
+                ebBg:SetAllPoints(); ebBg:SetColorTexture(0.060, 0.049, 0.037, 1)
                 EllesmereUI.MakeBorder(editBox, 1, 1, 1, 0.12, EllesmereUI.PP)
 
                 local placeholder = editBox:CreateFontString(nil, "ARTWORK")
@@ -4163,7 +4171,7 @@ local function ShowSpellPicker(anchorFrame, barKey, slotIndex, excludeSet, onSel
                     wrap:SetPoint("BOTTOM", popup, "BOTTOM", -46, 60)
                     wrap:Hide()
                     local bg = wrap:CreateTexture(nil, "BACKGROUND")
-                    bg:SetAllPoints(); bg:SetColorTexture(0.04, 0.06, 0.08, 1)
+                    bg:SetAllPoints(); bg:SetColorTexture(0.060, 0.049, 0.037, 1)
                     EllesmereUI.MakeBorder(wrap, 1, 1, 1, 0.15, EllesmereUI.PP)
                     local mark = wrap:CreateTexture(nil, "ARTWORK")
                     mark:SetPoint("CENTER"); mark:SetSize(9, 9)
@@ -4215,7 +4223,7 @@ local function ShowSpellPicker(anchorFrame, barKey, slotIndex, excludeSet, onSel
                 durBox:SetTextColor(1, 1, 1, 0.9)
                 durBox:SetJustifyH("CENTER")
                 local durBg = durBox:CreateTexture(nil, "BACKGROUND")
-                durBg:SetAllPoints(); durBg:SetColorTexture(0.04, 0.06, 0.08, 1)
+                durBg:SetAllPoints(); durBg:SetColorTexture(0.060, 0.049, 0.037, 1)
                 EllesmereUI.MakeBorder(durBox, 1, 1, 1, 0.12, EllesmereUI.PP)
                 local durPlaceholder = durBox:CreateFontString(nil, "ARTWORK")
                 durPlaceholder:SetFont(FONT_PATH, 12, GetCDMOptOutline())
@@ -4233,7 +4241,7 @@ local function ShowSpellPicker(anchorFrame, barKey, slotIndex, excludeSet, onSel
             end
 
             local function SetStatus(text, r, g, b)
-                popup._status:SetText(text)
+                popup._status:SetText(EllesmereUI.L(text))
                 popup._status:SetTextColor(r or 1, g or 0.3, b or 0.3, 1)
                 if popup._statusTimer then popup._statusTimer:Cancel() end
                 if text ~= "" then

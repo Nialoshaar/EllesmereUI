@@ -184,7 +184,7 @@ local function BuildCogPopup(opts)
             EllesmereUI._popupFrames[#EllesmereUI._popupFrames + 1] = { popup = pf }
         end
 
-        local bg = SolidTex(pf, "BACKGROUND", 0.06, 0.08, 0.10, opts.bgAlpha or 0.95)
+        local bg = SolidTex(pf, "BACKGROUND", 0.077, 0.068, 0.058, opts.bgAlpha or 0.95)
         bg:SetAllPoints()
         MakeBorder(pf, BORDER_COLOR.r, BORDER_COLOR.g, BORDER_COLOR.b, 0.15, PP)
 
@@ -194,6 +194,27 @@ local function BuildCogPopup(opts)
         titleFS:SetText(EllesmereUI.L(opts.title or ""))
 
         local curY = -(TOP_PAD + TITLE_H + TITLE_GAP)
+        -- A dropdown-height row's disabled overlay (row.disabled set): dims the row,
+        -- blocks it and explains the lock; the refresh shows it while disabled.
+        local function RowDisabledOverlay(row, y)
+            if not row.disabled then return nil end
+            local dis = CreateFrame("Frame", nil, pf)
+            dis:SetPoint("TOPLEFT", pf, "TOPLEFT", 1, y)
+            dis:SetPoint("TOPRIGHT", pf, "TOPRIGHT", -1, y)
+            dis:SetHeight(DROPDOWN_ROW_H)
+            dis:SetFrameLevel(pf:GetFrameLevel() + 10)
+            dis:EnableMouse(true)
+            local disTex = SolidTex(dis, "OVERLAY", 0.077, 0.068, 0.058, 0.70)
+            disTex:SetAllPoints()
+            dis:SetScript("OnEnter", function(self)
+                local tip = ResolveDisabledTip(row)
+                if tip and EllesmereUI.ShowWidgetTooltip then
+                    EllesmereUI.ShowWidgetTooltip(self, tip)
+                end
+            end)
+            dis:SetScript("OnLeave", function() EllesmereUI.HideWidgetTooltip() end)
+            return dis
+        end
         for i, row in ipairs(rows) do
             if i > 1 then curY = curY - GAP end
 
@@ -231,7 +252,7 @@ local function BuildCogPopup(opts)
                     sliderDis:SetHeight(ROW_H)
                     sliderDis:SetFrameLevel(pf:GetFrameLevel() + 10)
                     sliderDis:EnableMouse(true)
-                    local disTex = SolidTex(sliderDis, "OVERLAY", 0.06, 0.08, 0.10, 0.70)
+                    local disTex = SolidTex(sliderDis, "OVERLAY", 0.077, 0.068, 0.058, 0.70)
                     disTex:SetAllPoints()
                     sliderDis:SetScript("OnEnter", function(self)
                         local tip = ResolveDisabledTip(row)
@@ -284,7 +305,7 @@ local function BuildCogPopup(opts)
                     toggleDis:SetHeight(TOGGLE_ROW_H)
                     toggleDis:SetFrameLevel(pf:GetFrameLevel() + 10)
                     toggleDis:EnableMouse(true)
-                    local disTex = SolidTex(toggleDis, "OVERLAY", 0.06, 0.08, 0.10, 0.70)
+                    local disTex = SolidTex(toggleDis, "OVERLAY", 0.077, 0.068, 0.058, 0.70)
                     disTex:SetAllPoints()
                     toggleDis:SetScript("OnEnter", function(self)
                         local tip = ResolveDisabledTip(row)
@@ -327,24 +348,7 @@ local function BuildCogPopup(opts)
                 end)
 
                 -- Disabled overlay, mirroring slider/input handling
-                local ddDis
-                if row.disabled then
-                    ddDis = CreateFrame("Frame", nil, pf)
-                    ddDis:SetPoint("TOPLEFT", pf, "TOPLEFT", 1, curY)
-                    ddDis:SetPoint("TOPRIGHT", pf, "TOPRIGHT", -1, curY)
-                    ddDis:SetHeight(DROPDOWN_ROW_H)
-                    ddDis:SetFrameLevel(pf:GetFrameLevel() + 10)
-                    ddDis:EnableMouse(true)
-                    local disTex = SolidTex(ddDis, "OVERLAY", 0.06, 0.08, 0.10, 0.70)
-                    disTex:SetAllPoints()
-                    ddDis:SetScript("OnEnter", function(self)
-                        local tip = ResolveDisabledTip(row)
-                        if tip and EllesmereUI.ShowWidgetTooltip then
-                            EllesmereUI.ShowWidgetTooltip(self, tip)
-                        end
-                    end)
-                    ddDis:SetScript("OnLeave", function() EllesmereUI.HideWidgetTooltip() end)
-                end
+                local ddDis = RowDisabledOverlay(row, curY)
 
                 rowWidgets[#rowWidgets + 1] = { type = 'dropdown', btn = ddBtn, lbl = ddLbl, get = row.get, values = row.values, refresh = ddBtn._ddRefresh, disOverlay = ddDis, disCheck = row.disabled }
                 curY = curY - DROPDOWN_ROW_H
@@ -378,8 +382,9 @@ local function BuildCogPopup(opts)
                         self._ddMenu:SetFrameLevel(pf:GetFrameLevel() + 30)
                     end
                 end)
+                local rcDis = RowDisabledOverlay(row, curY)
 
-                rowWidgets[#rowWidgets + 1] = { type = 'reordercheck', btn = ddBtn, refresh = refresh }
+                rowWidgets[#rowWidgets + 1] = { type = 'reordercheck', btn = ddBtn, refresh = refresh, disOverlay = rcDis, disCheck = row.disabled }
                 curY = curY - DROPDOWN_ROW_H
             elseif row.type == 'segmented' then
                 local lbl = MakeFont(pf, 11, nil, 1, 1, 1); lbl:SetAlpha(0.6)
@@ -410,7 +415,7 @@ local function BuildCogPopup(opts)
                     segDis:SetHeight(TOGGLE_ROW_H)
                     segDis:SetFrameLevel(pf:GetFrameLevel() + 10)
                     segDis:EnableMouse(true)
-                    local disTex = SolidTex(segDis, "OVERLAY", 0.06, 0.08, 0.10, 0.70)
+                    local disTex = SolidTex(segDis, "OVERLAY", 0.077, 0.068, 0.058, 0.70)
                     disTex:SetAllPoints()
                     segDis:SetScript("OnEnter", function(self)
                         local tip = ResolveDisabledTip(row)
@@ -550,7 +555,7 @@ local function BuildCogPopup(opts)
                     mswDis:SetHeight(ROW_H)
                     mswDis:SetFrameLevel(pf:GetFrameLevel() + 10)
                     mswDis:EnableMouse(true)
-                    local disTex = SolidTex(mswDis, "OVERLAY", 0.06, 0.08, 0.10, 0.70)
+                    local disTex = SolidTex(mswDis, "OVERLAY", 0.077, 0.068, 0.058, 0.70)
                     disTex:SetAllPoints()
                     mswDis:SetScript("OnEnter", function(self)
                         local tip = ResolveDisabledTip(row)
@@ -666,7 +671,7 @@ local function BuildCogPopup(opts)
                     inputDis:SetHeight(ROW_H)
                     inputDis:SetFrameLevel(pf:GetFrameLevel() + 10)
                     inputDis:EnableMouse(true)
-                    local disTex = SolidTex(inputDis, "OVERLAY", 0.06, 0.08, 0.10, 0.70)
+                    local disTex = SolidTex(inputDis, "OVERLAY", 0.077, 0.068, 0.058, 0.70)
                     disTex:SetAllPoints()
                     inputDis:SetScript("OnEnter", function(self)
                         local tip = ResolveDisabledTip(row)
@@ -772,27 +777,18 @@ local function BuildCogPopup(opts)
                 ht:SetText(EllesmereUI.L(row.hint or "Drag to Reorder"))
                 mY = mY - 18
 
-                local items = (row.items and row.items()) or {}
                 -- Height cap: rows live on a scroll child. Menus longer than
                 -- row.maxVisible rows clamp to that many and mousewheel-scroll;
                 -- the drag math below is scroll-child-relative, so reordering
                 -- keeps working while scrolled. No maxVisible = full height,
                 -- scrolling never engages (exact legacy behavior).
-                local visN = #items
-                if row.maxVisible and row.maxVisible > 0 and visN > row.maxVisible then
-                    visN = row.maxVisible
-                end
-                local listH = #items * MH
-                local visH = visN * MH
                 local scroller = CreateFrame("ScrollFrame", nil, menu)
                 scroller:SetPoint("TOPLEFT", menu, "TOPLEFT", 0, mY)
                 scroller:SetPoint("TOPRIGHT", menu, "TOPRIGHT", 0, mY)
-                scroller:SetHeight(math.max(visH, 1))
                 scroller:SetFrameLevel(menu:GetFrameLevel() + 1)
                 local sChild = CreateFrame("Frame", nil, scroller)
-                sChild:SetSize(RR_W, math.max(listH, 1))
                 scroller:SetScrollChild(sChild)
-                local maxScroll = math.max(0, listH - visH)
+                local maxScroll = 0
                 menu:EnableMouseWheel(true)
                 menu:SetScript("OnMouseWheel", function(_, delta)
                     if maxScroll <= 0 then return end
@@ -802,8 +798,7 @@ local function BuildCogPopup(opts)
                 end)
 
                 local cbBaseY = 0
-                mY = 0
-                local rowFrames = {}
+                local rowFrames, rowPool = {}, {}
                 local insLine = sChild:CreateTexture(nil, "OVERLAY", nil, 7)
                 insLine:SetHeight(2)
                 local EG2 = EllesmereUI.ELLESMERE_GREEN or { r = 0.05, g = 0.82, b = 0.62 }
@@ -816,21 +811,49 @@ local function BuildCogPopup(opts)
                     if row.set then row.set(keys) end
                 end
 
-                for ci, it in ipairs(items) do
+                -- Runs on the pressed row only, from mouse down to mouse up.
+                local function DragUpdate(self)
+                    if not dsY then return end
+                    local _, cy = GetCursorPosition()
+                    if not isDragging then
+                        if math.abs(cy - dsY) < 3 then return end
+                        isDragging = true
+                        self:SetFrameLevel(menu:GetFrameLevel() + 10); self:SetAlpha(0.8)
+                        for _, r2 in ipairs(rowFrames) do
+                            if r2._lbl then r2._lbl:SetTextColor(0.75, 0.75, 0.75, 1) end
+                        end
+                    end
+                    local sc = menu:GetEffectiveScale()
+                    local cY = cy / sc
+                    local mT = sChild:GetTop() or 0
+                    local iI = #rowFrames
+                    for ri, r2 in ipairs(rowFrames) do
+                        if r2 ~= self and r2._baseY then
+                            local rm = mT + r2._baseY - MH / 2
+                            if cY > rm then iI = ri; break end
+                            iI = ri + 1
+                        end
+                    end
+                    iI = math.max(1, math.min(iI, #rowFrames + 1))
+                    local lnY = (iI <= 1) and (cbBaseY + 1) or (cbBaseY - (iI - 1) * MH + 1)
+                    insLine:ClearAllPoints()
+                    insLine:SetPoint("TOPLEFT", sChild, "TOPLEFT", 8, lnY)
+                    insLine:SetPoint("TOPRIGHT", sChild, "TOPRIGHT", -8, lnY)
+                    insLine:Show()
+                    self:ClearAllPoints()
+                    self:SetPoint("TOPLEFT", sChild, "TOPLEFT", 1, cY - mT)
+                    self:SetPoint("TOPRIGHT", sChild, "TOPRIGHT", -1, cY - mT)
+                end
+
+                local function MakeRow()
                     local rf = CreateFrame("Button", nil, sChild)
                     rf:SetHeight(MH)
-                    rf._baseY = mY
-                    rf._cbIndex = ci
-                    rf._key = it.key
-                    rf:SetPoint("TOPLEFT", sChild, "TOPLEFT", 1, mY)
-                    rf:SetPoint("TOPRIGHT", sChild, "TOPRIGHT", -1, mY)
                     rf:SetFrameLevel(menu:GetFrameLevel() + 2)
 
                     local rl = rf:CreateFontString(nil, "OVERLAY")
                     rl:SetFont(FONT, 13, "")
                     rl:SetPoint("LEFT", rf, "LEFT", 20, 0)
                     rl:SetJustifyH("LEFT")
-                    rl:SetText(it.label)
                     rl:SetTextColor(0.75, 0.75, 0.75, 1)
                     rf._lbl = rl
 
@@ -856,43 +879,12 @@ local function BuildCogPopup(opts)
                         if b ~= "LeftButton" then return end
                         local _, cy = GetCursorPosition()
                         dsY = cy; dragRow = self
-                    end)
-
-                    rf:SetScript("OnUpdate", function(self)
-                        if dragRow ~= self or not dsY then return end
-                        local _, cy = GetCursorPosition()
-                        if not isDragging then
-                            if math.abs(cy - dsY) < 3 then return end
-                            isDragging = true
-                            self:SetFrameLevel(menu:GetFrameLevel() + 10); self:SetAlpha(0.8)
-                            for _, r2 in ipairs(rowFrames) do
-                                if r2._lbl then r2._lbl:SetTextColor(0.75, 0.75, 0.75, 1) end
-                            end
-                        end
-                        local sc = menu:GetEffectiveScale()
-                        local cY = cy / sc
-                        local mT = sChild:GetTop() or 0
-                        local iI = #rowFrames
-                        for ri, r2 in ipairs(rowFrames) do
-                            if r2 ~= self and r2._baseY then
-                                local rm = mT + r2._baseY - MH / 2
-                                if cY > rm then iI = ri; break end
-                                iI = ri + 1
-                            end
-                        end
-                        iI = math.max(1, math.min(iI, #rowFrames + 1))
-                        local lnY = (iI <= 1) and (cbBaseY + 1) or (cbBaseY - (iI - 1) * MH + 1)
-                        insLine:ClearAllPoints()
-                        insLine:SetPoint("TOPLEFT", sChild, "TOPLEFT", 8, lnY)
-                        insLine:SetPoint("TOPRIGHT", sChild, "TOPRIGHT", -8, lnY)
-                        insLine:Show()
-                        self:ClearAllPoints()
-                        self:SetPoint("TOPLEFT", sChild, "TOPLEFT", 1, cY - mT)
-                        self:SetPoint("TOPRIGHT", sChild, "TOPRIGHT", -1, cY - mT)
+                        self:SetScript("OnUpdate", DragUpdate)
                     end)
 
                     rf:SetScript("OnMouseUp", function(self, b)
                         if b ~= "LeftButton" or dragRow ~= self then return end
+                        self:SetScript("OnUpdate", nil)
                         dsY = nil; dragRow = nil
                         if not isDragging then return end
                         isDragging = false; insLine:Hide()
@@ -927,15 +919,56 @@ local function BuildCogPopup(opts)
                             r2:SetPoint("TOPRIGHT", sChild, "TOPRIGHT", -1, ry)
                         end
                     end)
-
-                    rowFrames[#rowFrames + 1] = rf
-                    mY = mY - MH
+                    return rf
                 end
-                menu:SetHeight(20 + visH + 4)
+
+                -- row.items() is read again on every open: a cached popup must
+                -- not keep a list that changed since (the stats shown right
+                -- now, a tracked spell list). An unchanged list keeps its rows.
+                local itemSig
+                local function Populate()
+                    local items = (row.items and row.items()) or {}
+                    local sig = ""
+                    for _, it in ipairs(items) do
+                        sig = sig .. tostring(it.key) .. "\n" .. tostring(it.label) .. "\n"
+                    end
+                    if sig == itemSig then return end
+                    itemSig = sig
+                    wipe(rowFrames)
+                    for ci, it in ipairs(items) do
+                        local rf = rowPool[ci] or MakeRow()
+                        rowPool[ci] = rf
+                        local ry = cbBaseY - (ci - 1) * MH
+                        rf._baseY, rf._cbIndex, rf._key = ry, ci, it.key
+                        rf._lbl:SetText(it.label)
+                        rf:ClearAllPoints()
+                        rf:SetPoint("TOPLEFT", sChild, "TOPLEFT", 1, ry)
+                        rf:SetPoint("TOPRIGHT", sChild, "TOPRIGHT", -1, ry)
+                        rf:Show()
+                        rowFrames[ci] = rf
+                    end
+                    for i = #items + 1, #rowPool do rowPool[i]:Hide() end
+                    local visN = #items
+                    if row.maxVisible and row.maxVisible > 0 and visN > row.maxVisible then
+                        visN = row.maxVisible
+                    end
+                    local listH, visH = #items * MH, visN * MH
+                    scroller:SetHeight(math.max(visH, 1))
+                    sChild:SetSize(RR_W, math.max(listH, 1))
+                    scroller:SetVerticalScroll(0)
+                    maxScroll = math.max(0, listH - visH)
+                    menu:SetHeight(20 + visH + 4)
+                end
+                Populate()
                 EllesmereUI.TrackOverlay(menu)
 
                 ddBtn:SetScript("OnClick", function()
-                    if menu:IsShown() then menu:Hide() else menu:Show() end
+                    if menu:IsShown() then
+                        menu:Hide()
+                    else
+                        Populate()
+                        menu:Show()
+                    end
                     -- Controller cursor: into the opened list.
                     if EllesmereUI.PadCursorShown() and menu:IsShown() then EllesmereUI.PadFocus(menu) end
                 end)
@@ -949,7 +982,7 @@ local function BuildCogPopup(opts)
                     reorderDis:SetHeight(DROPDOWN_ROW_H)
                     reorderDis:SetFrameLevel(pf:GetFrameLevel() + 12)
                     reorderDis:EnableMouse(true)
-                    local disTex = SolidTex(reorderDis, "OVERLAY", 0.06, 0.08, 0.10, 0.70)
+                    local disTex = SolidTex(reorderDis, "OVERLAY", 0.077, 0.068, 0.058, 0.70)
                     disTex:SetAllPoints()
                     reorderDis:SetScript("OnEnter", function(self)
                         local tip = ResolveDisabledTip(row)
@@ -1085,6 +1118,12 @@ local function BuildCogPopup(opts)
                         end
                     end
                 elseif rw.type == 'reordercheck' then
+                    if rw.disOverlay then
+                        local dis = rw.disCheck
+                        if type(dis) == "function" then dis = dis() end
+                        rw.disOverlay:SetShown(dis and true or false)
+                        if dis and rw.btn._ddMenu then rw.btn._ddMenu:Hide() end
+                    end
                     if rw.refresh then rw.refresh() end
                 end
             end

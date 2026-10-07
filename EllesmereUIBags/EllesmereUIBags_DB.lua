@@ -24,18 +24,20 @@ local BAGS_DEFAULTS = {
         bagSplitSetGearBySet  = false,
         bagShowSetGearName    = false,
         bagSetNameFontSize    = 9,
-        bagMergeDuplicates    = true,
+        bagMergeDuplicates    = true,    -- every display
         bagSidebarCollapsed   = false,
+        bagHideSidebarIconsCollapsed = false, -- on: collapsed = no icon strip, the expand arrow sits by the title
         bankSidebarCollapsed  = false,
         bagShowPinnedItems    = true,
         bagShowRecentItems    = true,
         bagPinnedInOneBag     = true,
         bagRecentInOneBag     = false,
         bagShowRecentClear    = false,
-        bagShowPinRecentTips  = true,
+        -- Bag Top Bar Icons: the header's Show Bags, Junk Marker and Sort icons
+        bagShowBagsIcon       = true,
+        bagShowJunkIcon       = true,    -- the Junk Marker: header coin, Junk category, Sell Junk at merchants
         bagShowSortIcon       = true,
         bagSortToBottom       = false,
-        bagHideRandomize      = false,
         bagDefaultBagType     = "all",   -- "all" | "onebag" | "multibag"
         bagDefaultOneBag      = false,   -- legacy; migrated to bagDefaultBagType
         bagNestByExpansion    = false,
@@ -45,20 +47,24 @@ local BAGS_DEFAULTS = {
         bankHideTabsInSidebar = false,
         bankHideEmptyWhenNested = false,
         bankListView          = false,  -- reload to apply
+        bankCompactView       = false,  -- reload to apply; bankListView wins when both are set
         bagArmoryGroupBySlot  = false,
         bagCompactArmorySlotGroups = false,
-        bagHideOneBagWarning  = false,
         bagHideAddCategory    = false,
-        bagMoveNoShift        = false,
-        bagAllowWindowsOverBags = true,
+        bagWindowLocked       = false,   -- footer lock icon: no resizing or moving
+        bankWindowLocked      = false,
+        -- bagFrameStrata has no default: unset reads the retired
+        -- bagAllowWindowsOverBags (ns.BagFrameStrata)
         bagStackSplitter      = false,
         enableGoldTracking    = true,
         detachReagentBag      = false,
         enhancedBags          = true,
-        bagDesaturateJunkItems = false,
+        bagDesaturateJunkItems = false,  -- Junk Item Visuals: grey items and Junk Marker junk, every display
+        bagShowJunkCoin       = false,   -- Junk Item Visuals: the coin badge on junk (Grid and Compact)
+        bagQualityBorder      = true,    -- Quality Item Border, every display
         bagDisplayBindType    = false,
         bagBindTypeFontSize   = 11,
-        bagDisplayMode        = "grid",  -- "grid" | "list" (reload to apply)
+        bagDisplayMode        = "grid",  -- "grid" | "list" | "compact" (reload to apply)
         bagListRoundIcons     = false,
         bagListSplitArmor     = false,
         bagListSplitWeapons   = false,
@@ -66,6 +72,9 @@ local BAGS_DEFAULTS = {
         bagListGapL           = 15,
         bagListGapR           = 23,
         bagListFontSize       = 11,
+        bagListRowHeight      = 24,
+        bagListHideStripes    = false,
+        bagListSectionValue   = false,
     },
 }
 local db = EllesmereUI.Lite.NewDB("EllesmereUIBagsDB", BAGS_DEFAULTS)
