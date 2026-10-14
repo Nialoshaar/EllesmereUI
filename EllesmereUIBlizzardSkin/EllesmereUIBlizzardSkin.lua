@@ -1216,14 +1216,25 @@ end
         if unit and guid and db and db.tooltipShowMount and not _tipHasLine(tt, "Mount:") then
             local mountName, mountCollected
             local cached = _mountCache[guid]
-            if cached and (GetTime() - cached.time) < _mountCacheTTL then
+            local now = GetTime()
+            if cached and (now - cached.time) < _mountCacheTTL then
                 mountName = cached.name
                 mountCollected = cached.collected
             else
                 local nm, col = _getMountedAuraName(unit)
                 mountName = nm or false
                 mountCollected = col
-                _mountCache[guid] = { name = mountName, collected = mountCollected, time = GetTime() }
+                -- Expired entries are dropped, so only the last few seconds of hovers stay
+                -- cached and this loop stays tiny; this player's stale entry is refreshed
+                -- in place rather than replaced.
+                for g, e in pairs(_mountCache) do
+                    if e ~= cached and (now - e.time) >= _mountCacheTTL then _mountCache[g] = nil end
+                end
+                if cached then
+                    cached.name, cached.collected, cached.time = mountName, mountCollected, now
+                else
+                    _mountCache[guid] = { name = mountName, collected = mountCollected, time = now }
+                end
             end
             if mountName then
                 -- Green check / red X for whether YOU own this mount (nil = unknown, no marker).
@@ -3007,9 +3018,10 @@ do
             return
         end
         -- An open Unlock Mode session owns the anchor frame (live drags + uncommitted edits): re-parking from saved would snap it back mid-session, so pin to wherever the session has it.
+        -- A screen-edge link in Unlock Mode owns the position too: re-parking would pull the box off the edge until the anchor chain moves it back a frame later.
         if EllesmereUI._unlockActive then
             EnsureSeeded()
-        else
+        elseif not EllesmereUI.IsUnlockAnchored("EUI_TooltipAnchor") then
             PositionFromSaved()
         end
         tooltip:SetOwner(parent, "ANCHOR_NONE")
@@ -4503,15 +4515,24 @@ end
             if f then HUD.containers[#HUD.containers + 1] = f end
         end
         -- Any other UIParent child that is a widget container. Children taken
-        -- ONCE; UIParent has a few hundred of them.
+        -- ONCE; UIParent has a few hundred of them. GetChildren returns every
+        -- child as its own value, so a UIParent holding thousands of frames
+        -- (something in the session creating them without end) overflows the
+        -- Lua stack: past the cap, or if the call fails anyway, only the named
+        -- containers above and the adopted ones below are swept.
         local up = _G.UIParent
-        if up and up.GetChildren then
-            local kids = { up:GetChildren() }
+        local okC, numKids = false, nil
+        if up and up.GetNumChildren then okC, numKids = pcall(up.GetNumChildren, up) end
+        local okK, kids = false, nil
+        if okC and type(numKids) == "number" and numKids <= 4000 then
+            okK, kids = pcall(KidsOf, up)
+        end
+        if okK and kids then
             for i = 1, #kids do
                 local ch = kids[i]
                 if ch and ch.GetName and not (ch.IsForbidden and ch:IsForbidden()) then
                     local okN, n = pcall(ch.GetName, ch)
-                    local okP, pools = pcall(function() return ch.widgetPools end)
+                    local okP, pools = pcall(HUDGet, ch, "widgetPools")
                     local isWidget = (okN and type(n) == "string" and n:find("^UIWidget"))
                                      or (okP and pools ~= nil)
                     -- The tracker's own widget container is excluded on

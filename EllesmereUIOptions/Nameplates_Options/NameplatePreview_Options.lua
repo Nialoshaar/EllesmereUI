@@ -747,6 +747,74 @@ local function BuildNameplatePreview(parent, parentW)
     CP.bar._bg:SetAllPoints()
     CP.bar._bg:SetColorTexture(0.082, 0.082, 0.082, 1)
 
+    -- Offset badge: shown by UpdateCP (via CP.Clamp) only when the class-resource
+    -- Y offset is clamped to the plate in the preview. Reports the real offset
+    -- at the clamped pip position so the configured value is still communicated
+    -- without the pips dragging the header or leaving the frame.
+    CP.offBadge = pf:CreateFontString(nil, "OVERLAY")
+    SetPVFont(CP.offBadge, FONT_PATH, 9, GetNPOptOutline())
+    CP.offBadge:SetTextColor(1, 0.82, 0.30)  -- gold: marks a clamped value
+    CP.offBadge:Hide()
+    -- Delta arrow drawn beside the badge, pointing the way the offset continues
+    -- past the clamped pips.
+    CP.offArrow = pf:CreateTexture(nil, "OVERLAY")
+    CP.offArrow:SetVertexColor(1, 0.82, 0.30)
+    CP.offArrow:Hide()
+    CP.ARROW_UP   = "Interface\\AddOns\\EllesmereUI\\media\\icons\\eui-arrow-up3.png"
+    CP.ARROW_DOWN = "Interface\\AddOns\\EllesmereUI\\media\\icons\\eui-arrow-down3.png"
+
+    -- Preview-only: clamp the class-resource pips to the plate's own edges so a
+    -- large Y offset can't drag the header or push pips out of frame.
+    -- Position-aware: a bottom-anchored resource may travel the whole plate
+    -- height; a top-anchored one only the room above the health bar. healthTopY
+    -- and castBotY are the health bar's top and the cast bar's bottom in pf
+    -- coordinates. Returns the offset to draw, the real offset (only when
+    -- clamped), and the clamped group's inboard edge with the direction into
+    -- the plate (for the badge).
+    function CP.Clamp(topPos, yDir, off, ph, healthTopY, castBotY)
+        local anchorY = topPos and healthTopY or castBotY
+        local bandTop = -2                     -- just inside pf top
+        -- Just below the cast bar: measured from castBotY (which includes the
+        -- cast Y offset) so the band matches the pip anchor -- a skin with a
+        -- cast drop (classic) must not read as clamped at tiny offsets.
+        -- 13 = the preview's 15px lower pad minus the 2px margin.
+        local bandBot = castBotY - ph - 13
+        local edge    = anchorY + yDir * off
+        local gTop    = (yDir == 1) and (edge + ph) or edge
+        local gBot    = (yDir == 1) and edge or (edge - ph)
+        local shift   = 0
+        if gTop > bandTop then shift = bandTop - gTop
+        elseif gBot < bandBot then shift = bandBot - gBot end
+        -- Pips pinned at the top edge (shift < 0) -> badge below them (dir -1,
+        -- arrow up); pinned at the bottom -> badge above them (dir +1, arrow down).
+        local edgeInboard = (shift < 0) and (gBot + shift) or (gTop + shift)
+        local dirInboard  = (shift < 0) and -1 or 1
+        return yDir * ((edge + shift) - anchorY),   -- clamped offset (cpYShown)
+               (shift ~= 0) and off or nil,         -- real offset, only when clamped
+               edgeInboard, dirInboard
+    end
+
+    -- Shows the real offset centred on centerX (pf coordinates) beside the
+    -- clamped pips, with the arrow just left of the number pointing the way the
+    -- offset continues.
+    function CP.ShowBadge(edgeInboard, dirInboard, centerX, realOff)
+        local b = CP.offBadge
+        b:SetText(string.format("%+d", math.floor(realOff + 0.5)))
+        local textH = b:GetStringHeight()
+        local cy = Snap(edgeInboard + dirInboard * (textH / 2 + 3))
+        b:ClearAllPoints()
+        b:SetPoint("CENTER", pf, "TOPLEFT", Snap(centerX), cy)
+        b:Show()
+        local a = CP.offArrow
+        a:SetTexture((dirInboard == -1) and CP.ARROW_UP or CP.ARROW_DOWN)
+        -- The chevron fills 22 x 12 of its 30 px image.
+        local asz = math.max(8, math.floor(textH * 1.1 + 0.5))
+        a:SetSize(asz, asz)
+        a:ClearAllPoints()
+        a:SetPoint("RIGHT", b, "LEFT", -1, 0)
+        a:Show()
+    end
+
     -- Debuffs: 2 icons centered above name
     local debuffs = {}
     local debuffData = {
@@ -996,8 +1064,10 @@ local function BuildNameplatePreview(parent, parentW)
             local cpPos = DBVal("classPowerPos") or defaults.classPowerPos
             if cpPos == "top" then
                 local cpScale = DBVal("classPowerScale") or defaults.classPowerScale
-                local cpYOff  = DBVal("classPowerYOffset") or defaults.classPowerYOffset
-                cpPush = CP.PIP_H * cpScale + cpYOff
+                -- Reserve only the base pip height above the bar; the Y offset is
+                -- NOT added here so the preview frame never grows with the offset.
+                -- UpdateCP clamps the pips inside the plate and badges the real value.
+                cpPush = CP.PIP_H * cpScale
             end
         end
         -- Apply current random preview values (regenerated on tab switch only)
@@ -1007,6 +1077,7 @@ local function BuildNameplatePreview(parent, parentW)
         local pctStr = curHpPct .. "%"
         local pctNoSignStr = tostring(curHpPct)
         local hpNumStr = tostring(curHpVal):reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^,", "")
+        local hpMaxStr = tostring(PV_CONST.FAKE_MAX_HP):reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^,", "")
         -- Synthetic fractional percent so "Show % Decimal" is visible here (the fake preview HP is a whole number).
         local pctStrDec = string.format("%.1f%%", curHpPct + 0.4)
         local pctNoSignStrDec = string.format("%.1f", curHpPct + 0.4)
@@ -1113,13 +1184,19 @@ local function BuildNameplatePreview(parent, parentW)
                     bc.r, bc.g, bc.b, 1, "solid")
             end
             if radius > 0 then
+                -- Join Cast Bar: the preview always shows its cast bar.
+                local corners, castCorners = DBVal("cornerMask"), DBVal("cornerMask")
+                if DBVal("cornerJoinCast") then
+                    corners, castCorners = EllesmereUI.RoundedJoinCorners(corners)
+                end
                 EllesmereUI.RoundCorners(pf, radius, {
                     roots = {}, rect = health, border = pcb, style = style,
+                    corners = corners,
                     textures = { health:GetStatusBarTexture(), healthBG,
                         pvAbs.absorb:GetStatusBarTexture(), pvAbs.absorbForward:GetStatusBarTexture() },
                 })
                 EllesmereUI.RoundCorners(cast, radius, {
-                    roots = {}, border = cast,
+                    roots = {}, border = cast, corners = castCorners,
                     textures = { cast:GetStatusBarTexture(), castBG },
                 })
             else
@@ -1330,8 +1407,11 @@ local function BuildNameplatePreview(parent, parentW)
         end
         local reIconSz = (clPos ~= "none") and (DBVal(clPos .. "SlotSize") or defaults[clPos .. "SlotSize"] or 20) or 20
         local showCL = optState.showClassificationPreview or optState._sliderDragShowClassification
+        local hideRare = DBVal("classificationHideRare")
         classIcon:SetSize(reIconSz, reIconSz)
-        if clPos == "none" or not showCL then
+        -- Both halves off (the WoW Forever look's seed can leave that when the
+        -- Quest Indicator was already off): live plates draw nothing there.
+        if clPos == "none" or not showCL or (hideRare and DBVal("classificationHideQuest")) then
             classIcon:Hide()
             if pf._classOverlay then pf._classOverlay:Hide() end
         else
@@ -1350,9 +1430,8 @@ local function BuildNameplatePreview(parent, parentW)
             elseif clPos == "bottom" then
                 classIcon:SetPoint("TOP", cast, "BOTTOM", clXOff, -2 + clYOff)
             end
-            -- The quest mark while the Rare Indicator is off (or under the WoW
-            -- Forever look, whose plates show no elite or rare marks).
-            if DBVal("classificationHideRare") or EllesmereUI.BlizzStyle.Forever("nameplates") then
+            -- The quest mark while the Elite/Rare Indicator is off.
+            if hideRare then
                 classIcon:SetAtlas("Crosshair_Quest_64")
             else
                 classIcon:SetTexture("Interface\\AddOns\\EllesmereUI\\media\\elite-rare-indicator.png")
@@ -1517,7 +1596,7 @@ local function BuildNameplatePreview(parent, parentW)
             elseif ns.IsComboHealthText(element) then
                 SetPVFont(hpText, fontPath, fontSize, npOutline)
                 hpText:SetParent(healthTextFrame)
-                ns.SetCombinedHealthText(hpText, element, dec and pctStrDec or pctStr, hpNumStr)
+                ns.SetCombinedHealthText(hpText, element, dec and pctStrDec or pctStr, hpNumStr, hpMaxStr)
                 hpText:SetPoint(point, health, anchor, xOff, yOff)
                 hpText:SetTextColor(cr, cg, cb, 1)
                 hpText:Show()
@@ -1570,7 +1649,7 @@ local function BuildNameplatePreview(parent, parentW)
                 hpNumber:Show()
             elseif ns.IsComboHealthText(element) then
                 SetPVFont(hpText, fontPath, fontSize, npOutline)
-                ns.SetCombinedHealthText(hpText, element, dec and pctStrDec or pctStr, hpNumStr)
+                ns.SetCombinedHealthText(hpText, element, dec and pctStrDec or pctStr, hpNumStr, hpMaxStr)
                 hpText:SetParent(topTextFrame)
                 hpText:SetPoint("BOTTOM", health, "TOP", txOff, 4 + nameYOff + cpPush + tyOff)
                 hpText:SetTextColor(cr, cg, cb, 1)
@@ -2056,9 +2135,7 @@ local function BuildNameplatePreview(parent, parentW)
         for i = 1, PV_CONST.BUFF_COUNT do
             if buffSlotVal == "none" then
                 buffs[i]:Hide()
-                if buffs[i].dispelGlow and buffs[i].dispelGlow.active then
-                    ns.StopDispelGlow(buffs[i])
-                end
+                ns.NPC_PreviewBorder(buffs[i], nil, nil, false)
             else
                 buffs[i]:Show()
                 buffs[i]:SetSize(Snap(buffSz), Snap(buffH))
@@ -2067,16 +2144,9 @@ local function BuildNameplatePreview(parent, parentW)
                 buffs[i].durationText:SetTextColor(buffDurC.r, buffDurC.g, buffDurC.b, 1)
                 ApplyTimerPos(buffs[i].durationText, buffs[i], buffTPos, buffDurSz, buffDurX, buffDurY, buffDurC)
                 PlaceInSlot(buffs[i], buffSlotVal, i, PV_CONST.BUFF_COUNT, buffSz, buffH, buffSpacing, buffXOff, buffYOff)
-                -- Dispel glow preview (always stop first to pick up color/style changes)
-                local previewType = PreviewDispelType()
-                if DBVal("dispelGlow") == true and previewType then
-                    if buffs[i].dispelGlow and buffs[i].dispelGlow.active then
-                        ns.StopDispelGlow(buffs[i])
-                    end
-                    ns.StartDispelGlow(buffs[i], buffSz, previewType, buffH)
-                elseif buffs[i].dispelGlow and buffs[i].dispelGlow.active then
-                    ns.StopDispelGlow(buffs[i])
-                end
+                -- Show Glow preview: the border the live buff row draws.
+                ns.NPC_PreviewBorder(buffs[i], buffSz, buffH,
+                    DBVal("dispelGlow") == true and PreviewDispelType() ~= nil)
             end
         end
 
@@ -2218,7 +2288,15 @@ local function BuildNameplatePreview(parent, parentW)
         local cpExtraH = 0
         local cpIsBarType = false
         local cpResourceName = nil
+        -- Hide the clamp badge/arrow by default; the render branches below re-show
+        -- them only when the offset is actually clamped to the plate.
+        CP.offBadge:Hide(); CP.offArrow:Hide()
         if showCP then
+            -- The pips are clamped to the plate (CP.Clamp) and the real offset is
+            -- badged when clamped, so the preview frame size never changes with
+            -- the offset.
+            local cpCenterX = xOff + barW / 2   -- health-bar center (barW is shadowed in branches)
+            local castBotY  = -healthFromTop - barH + pCastY - castH
             -- Determine pip count from player's class, using live UnitPowerMax when available
             local _, playerClass = UnitClass("player")
             local cpInfo = CP.CLASS_MAP[playerClass]
@@ -2299,12 +2377,13 @@ local function BuildNameplatePreview(parent, parentW)
                     anchorFrame    = cast
                     yDir = -1
                 end
+                local cpYShown, cpYReal, cpEdgeIn, cpDirIn = CP.Clamp(cpPos == "top", yDir, cpYOff, scaledH, -healthFromTop, castBotY)
 
                 local bar = CP.bar
                 bar:ClearAllPoints()
                 bar:SetSize(barW, scaledH)
                 bar:SetPoint(anchorPoint, anchorFrame, anchorRelPoint,
-                    Snap(cpXOff), Snap(yDir * cpYOff))
+                    Snap(cpXOff), Snap(yDir * cpYShown))
                 bar:SetMinMaxValues(0, 100)
                 bar:SetValue(45)  -- preview at 45% (moderate stagger)
                 bar:SetStatusBarColor(1.0, 0.85, 0.2, 1)  -- yellow for preview
@@ -2312,8 +2391,9 @@ local function BuildNameplatePreview(parent, parentW)
                 bar:Show()
 
                 if cpPos ~= "top" then
-                    cpExtraH = cpYOff + scaledH
+                    cpExtraH = scaledH
                 end
+                if cpYReal then CP.ShowBadge(cpEdgeIn, cpDirIn, cpCenterX + cpXOff, cpYReal) end
             elseif cpMax <= 0 then
                 for i = 1, CP.MAX_POSSIBLE do
                     CP.pips[i]:Hide()
@@ -2353,6 +2433,7 @@ local function BuildNameplatePreview(parent, parentW)
                     anchorFrame    = cast
                     yDir = -1
                 end
+                local cpYShown, cpYReal, cpEdgeIn, cpDirIn = CP.Clamp(cpPos == "top", yDir, cpYOff, scaledH, -healthFromTop, castBotY)
 
                 local cpEmptyCol = (DB() and DB().classPowerEmptyColor) or defaults.classPowerEmptyColor
 
@@ -2373,7 +2454,7 @@ local function BuildNameplatePreview(parent, parentW)
                         pip:SetSize(scaledW, scaledH)
                         local pipLeftX = Snap(pipPositions[i] - halfGroup + cpXOff)
                         pip:SetPoint(leftAnchor, anchorFrame, anchorRelPoint,
-                            pipLeftX, Snap(yDir * cpYOff))
+                            pipLeftX, Snap(yDir * cpYShown))
 
                         -- Background behind each pip
                         local bg = pip._bg
@@ -2436,10 +2517,12 @@ local function BuildNameplatePreview(parent, parentW)
                         if pip._borderBox then pip._borderBox:Hide() end
                     end
                 end
-                -- Extra height only when pips are below the cast bar
+                -- Base reservation only -- the offset never grows the frame (pips
+                -- are clamped to the plate by CP.Clamp instead).
                 if cpPos ~= "top" then
-                    cpExtraH = cpYOff + scaledH
+                    cpExtraH = scaledH
                 end
+                if cpYReal then CP.ShowBadge(cpEdgeIn, cpDirIn, cpCenterX + cpXOff, cpYReal) end
             end
         else
             for i = 1, CP.MAX_POSSIBLE do

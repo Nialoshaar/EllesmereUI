@@ -207,71 +207,12 @@ initFrame:SetScript("OnEvent", function(self)
     EllesmereUI:RegisterOnShow(UpdatePreview)
 
     ---------------------------------------------------------------------------
-    --  Glow sites: the Dispel and Important Cast glows as shared glow
+    --  Glow sites: the Dispel, Pandemic and Important Cast glows as shared glow
     --  descriptors, used by the page rows and the Global Settings Glows page.
     ---------------------------------------------------------------------------
-    local npDispelGlowDesc, npImpCastGlowDesc
+    local npDispelGlowDesc, npImpCastGlowDesc, npPandemicGlowDesc
     do
         local GO = EllesmereUI.GlowOptions
-        local function RefreshDispel() RefreshAllAuras(); UpdatePreview() end
-        -- Engine aura buttons (no Auto-Cast/Shape); an unset color is the
-        -- suite default (gold).
-        -- Blizzard Border: Blizzard's static stealable art, outside the view.
-        local BLIZZ_BORDER = EllesmereUI.Glows.STEALABLE_BORDER
-        npDispelGlowDesc = {
-            view = ns.NP_GLOW_VIEW, host = "engine",
-            extras = { { value = BLIZZ_BORDER, label = "Blizzard Border", style = BLIZZ_BORDER } },
-            caps = { mode = true, params = true, bg = true },
-            defaultColor = EllesmereUI.Glows.DEFAULT_COLOR,
-            isOff = function() return DBVal("dispelGlow") ~= true end,
-            -- Color by Type replaces the swatch color on every group.
-            colorDisabled = function() return DBVal("dispelGlowUseTypeColor") == true end,
-            colorDisabledTooltip = "Color by Type (Magic/Enrage)",
-            onChange = RefreshDispel,
-            get = function(f)
-                local d = DB()
-                if f == "style" then return ns.GetDispelGlowStyle and ns.GetDispelGlowStyle() or 2
-                elseif f == "mode" then return d.dispelGlowColorMode or (d.dispelGlowColor and "custom" or "default")
-                end
-                return EllesmereUI.GlowOptions.FlatGet(d, "dispelGlow", f)
-            end,
-            set = function(f, a, b2, c2)
-                local d = DB()
-                if f == "style" then
-                    if a == 0 then d.dispelGlow = false else d.dispelGlow = true; d.dispelGlowStyle = a end
-                elseif f == "mode" then d.dispelGlowColorMode = a
-                else EllesmereUI.GlowOptions.FlatSet(d, "dispelGlow", f, a, b2, c2)
-                end
-            end,
-            -- off->on pays the per-plate aura-watcher cost -- prompt like other performance-priced enables; already-on style switches never prompt.
-            confirm = function(v, commit)
-                if v ~= 0 and DBVal("dispelGlow") ~= true then
-                    EllesmereUI:ShowConfirmPopup({
-                        title       = "Dispel Glow",
-                        message     = "Dispel Glow may cause a slight loss in performance efficiency. Do you want to enable it?",
-                        confirmText = "Enable",
-                        cancelText  = "Cancel",
-                        onConfirm   = commit,
-                        onCancel    = function()
-                            C_Timer.After(0, function() EllesmereUI:RefreshPage() end)
-                        end,
-                    })
-                    return
-                end
-                commit()
-            end,
-            -- Magic buffs and enrages are separate groups in the buff row, so the
-            -- color can follow the type; it overrides the color above per group.
-            cogRows = {
-                { type="toggle", label="Color by Type (Magic/Enrage)",
-                  get=function() return DBVal("dispelGlowUseTypeColor") or false end,
-                  set=function(v)
-                      DB().dispelGlowUseTypeColor = v
-                      RefreshDispel()
-                      EllesmereUI:RefreshPage()
-                  end },
-            },
-        }
         -- The cast bar is a bar host (no Shape).
         npImpCastGlowDesc = {
             view = ns.NP_GLOW_VIEW, host = "bar",
@@ -301,9 +242,6 @@ initFrame:SetScript("OnEvent", function(self)
                 end
             end,
         }
-        GO.RegisterSite({ id = "np_dispel", label = "Dispel Glow", group = "module",
-            module = "EllesmereUINameplates", page = PAGE_GENERAL, section = SECTION_AURA,
-            highlight = "Dispel Glow Style", desc = npDispelGlowDesc })
         GO.RegisterSite({ id = "np_importantcast", label = "Important Cast Glow", group = "module",
             module = "EllesmereUINameplates", page = PAGE_DISPLAY, section = SECTION_CASTBAR,
             highlight = "Important Cast Glow", desc = npImpCastGlowDesc })
@@ -641,19 +579,15 @@ initFrame:SetScript("OnEvent", function(self)
             tfxHeader, targetGlowRow, classResourceHeader, classResourceSection, generalTextHeader,
             auraDurPosRow, auraTimerStackRow, spellNameRow = ns.NPO_BuildDisplayBars(parent, y, ctx)
 
+        -- The search pre-build indexes rows only. The click navigation below
+        -- rewires the live preview's hit overlays, which a hidden build of
+        -- this page must leave alone.
+        if EllesmereUI._prebuilding then return math.abs(y) end
+
         -----------------------------------------------------------------------
         --  CLICK NAVIGATION: glow, scroll, mapping, hit overlays
         -----------------------------------------------------------------------
         local PlaySettingGlow = EllesmereUI.MakeSettingGlow({ color = EllesmereUI.ELLESMERE_GREEN, thickness = function() return PP.Scale(2) end, noSnap = true })
-
-        -- Maps Core Position slot keys to their row/region
-        local corePosToRow = {
-            top      = { row = coreRow1, side = "_leftRegion" },
-            right    = { row = coreRow1, side = "_rightRegion" },
-            left     = { row = coreRow2, side = "_leftRegion" },
-            topright = { row = coreRow2, side = "_rightRegion" },
-            topleft  = { row = coreRow3, side = "_leftRegion" },
-        }
 
         -- Maps Core Text Position slot keys to their row/region (the cells of
         -- the texts the list shows)
@@ -682,9 +616,9 @@ initFrame:SetScript("OnEvent", function(self)
         local function ResolveCoreMapping(element)
             local pos = FindCorePosForElement(element)
             if not pos then return { section = coreHeader, target = coreRow1 } end
-            local info = corePosToRow[pos]
+            local info = ctx.corePosToRegion[pos]
             if not info then return { section = coreHeader, target = coreRow1 } end
-            return { section = coreHeader, target = info.row, slotSide = (info.side == "_leftRegion") and "left" or "right" }
+            return { section = coreHeader, target = info[1], slotSide = (info[2] == "_leftRegion") and "left" or "right" }
         end
 
         local clickMappings = {
@@ -1165,6 +1099,7 @@ initFrame:SetScript("OnEvent", function(self)
         LazyColorPreviewBar = LazyColorPreviewBar, NAME_RAID_MARKER_GAP = NAME_RAID_MARKER_GAP,
         NextCastFill = NextCastFill, NextCastIcon = NextCastIcon,
         npDispelGlowDesc = npDispelGlowDesc, npImpCastGlowDesc = npImpCastGlowDesc,
+        npPandemicGlowDesc = npPandemicGlowDesc,
         optState = optState, pairs = pairs, pcall = pcall, plates = plates, PP = PP,
         RandomizePreviewValues = RandomizePreviewValues, RefreshAllAuras = RefreshAllAuras,
         RefreshAllPlates = RefreshAllPlates, SECTION_AURA = SECTION_AURA,

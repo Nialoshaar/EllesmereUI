@@ -37,7 +37,7 @@ if EUI_CLIENT_BLOCKED then return end -- pre-12.1 client failsafe (EllesmereUI_C
 -- creation), pre-warmed shown at alpha 0 out of combat, and in-combat
 -- transitions touch only alpha + content (icon/cooldown/texts -- all legal
 -- on protected frames). Geometry, mouse flags and the producers' container
--- shifts are deferred to PLAYER_REGEN_ENABLED, then one full pass repacks.
+-- shifts use the shared combat queue, then one full pass repacks.
 --
 -- Secrecy: GetTemporaryEnchantmentInfo's returns carry NO Secret* flags in
 -- the generated API docs (equipment state, not unit-aura data) -- plain
@@ -59,7 +59,7 @@ local EllesmereUI = _G.EllesmereUI
 local SLOTS = { INVSLOT_MAINHAND or 16, INVSLOT_OFFHAND or 17, INVSLOT_RANGED or 18 }
 
 local hosts = {}   -- "pab"/"uf" -> { frame, buttons = {}, rec }
-local evFrame, regenFrame, textTicker
+local evFrame, textTicker
 local activeInfos, activeCount = {}, 0   -- packed active list (MH first)
 local activeBySlot = {}                  -- slot -> info
 
@@ -402,8 +402,7 @@ local function PokeProducers(combat)
     if ns.UF_ReloadAllAuraContainers then ns.UF_ReloadAllAuraContainers() end
 end
 
-local function OnRegen(self)
-    self:UnregisterEvent("PLAYER_REGEN_ENABLED")
+local function OnRegen()
     ReadEnchants()
     PokeProducers(false)
     Paint()
@@ -416,12 +415,8 @@ local function OnEnchantEvent()
         local combat = InCombatLockdown()
         PokeProducers(combat)
         if combat then
-            -- Secure-button geometry can't follow until regen: repack then.
-            if not regenFrame then
-                regenFrame = CreateFrame("Frame")
-                regenFrame:SetScript("OnEvent", OnRegen)
-            end
-            regenFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
+            -- The shared queue owns combat-end deferral and coalesces repacks.
+            ns.CombatQueue.Defer("WeaponEnchants_Repack", OnRegen)
         end
     end
     Paint()
