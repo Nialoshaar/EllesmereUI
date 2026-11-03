@@ -81,7 +81,8 @@ do
         healthBar = {
             "healthBarTexture", "healthBarOpacity", "healthColorMode",
             "customFillColor", "dynamicColor100", "dynamicColor50", "dynamicColor0",
-            "customBgColor", "bgClassColored", "bgDarkness", "smoothBars",
+            "customBgColor", "bgClassColored", "bgColorMode", "bgDarkness", "smoothBars",
+            "bgDynamicColor100", "bgDynamicColor50", "bgDynamicColor0",
             "healPrediction", "healPredOpacity", "healPredColor",
             "healthVerticalFill", "healthInvertFill",
             "textureBg",
@@ -250,7 +251,17 @@ end
 -- and runs on every enable/profile swap, so imported profiles are covered too.
 ns._NormalizePartySyncSections = function()
     if not (db and db.profile) then return end
-    local ss = db.profile.partySyncSections
+    local profile = db.profile
+    -- Preserve the old class/custom background independently for unsynced party frames.
+    if profile.bgColorMode == nil then
+        profile.bgColorMode = profile.bgClassColored and "class" or "custom"
+    end
+    local ss = profile.partySyncSections
+    if ss and ss.healthBar == false and profile.party_bgColorMode == nil then
+        local classColored = profile.party_bgClassColored
+        if classColored == nil then classColored = profile.bgClassColored end
+        profile.party_bgColorMode = classColored and "class" or "custom"
+    end
     if ss and ss.absorbs == nil and ss.healthBar == false then
         ss.absorbs = false
     end

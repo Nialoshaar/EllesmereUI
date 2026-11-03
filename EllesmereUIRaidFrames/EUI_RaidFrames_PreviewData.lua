@@ -169,22 +169,8 @@ local function ApplyPreviewData(f, index, roles, classTokens)
         -- Textured Background, as on the live frames.
         ns.RF_TexBgLayer(f._health, f._bg, not f.kit
             and ns.RF_TexBgOpaque(s, s.healthColorMode == "dark") and ns.RF_TexBgPath(s) or nil)
-        if s.healthColorMode == "dark" then
-            AnchorPreviewBg()
-            f._bg:SetColorTexture(EllesmereUI.GetDarkModeBg())
-        else
-            -- Matches the real-frame themed branch + Dark mode. Keeps the preview
-            -- a 1:1 replica for reduced-fill-opacity setups.
-            AnchorPreviewBg()
-            local bgA = (s.bgDarkness or 50) / 100
-            local cc = s.bgClassColored and classToken and EllesmereUI.GetClassColor(classToken)
-            if cc then
-                f._bg:SetColorTexture(cc.r, cc.g, cc.b, bgA)
-            else
-                local bgc = s.customBgColor or defaults.customBgColor
-                f._bg:SetColorTexture(bgc.r, bgc.g, bgc.b, bgA)
-            end
-        end
+        AnchorPreviewBg()
+        f._bg:SetColorTexture(ns.ResolveBackgroundColor(s, classToken, healthPct / 100))
     end
 
     -- Absorb shield preview (dual clip-frame: backfill + forward)

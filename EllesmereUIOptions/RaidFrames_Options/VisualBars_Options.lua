@@ -153,6 +153,12 @@ local function BuildVisualBars(parent, y, W, onSection, EYE)
                                 local r, g, b = ns.ResolveClassReactiveColor(s, f._classToken, st.current / 100)
                                 f._health:SetStatusBarColor(r, g, b, (s.healthBarOpacity or 100) / 100)
                             end
+                            if f._bg then
+                                local mode = ns.GetBgColorMode(s)
+                                if s.healthColorMode ~= "dark" and (mode == "classic" or mode == "customDynamic" or mode == "classReactive") then
+                                    f._bg:SetColorTexture(ns.ResolveBackgroundColor(s, f._classToken, st.current / 100))
+                                end
+                            end
                         end -- snapTimer ready
                     end
                 end
@@ -255,11 +261,9 @@ local function BuildVisualBars(parent, y, W, onSection, EYE)
         { type="dropdown", text="Health Bar Texture", values=hbtValues, order=hbtOrder,
           getValue=function() return SVal("healthBarTexture", "atrocity") end,
           setValue=function(v) SSet("healthBarTexture", v) end },
-        { type="slider", text="Fill Opacity", min=0, max=100, step=1,
-          disabled=function() return SVal("healthColorMode", "class") == "dark" end,
-          disabledTooltip="Not available in Dark Mode", rawTooltip=true,
-          getValue=function() return SVal("healthBarOpacity", 100) end,
-          setValue=function(v) SSet("healthBarOpacity", v) end });
+        { type="toggle", text="Smooth Health Bars",
+          getValue=function() return SVal("smoothBars", true) end,
+          setValue=function(v) SSet("smoothBars", v) end });
     -- Vertical Fill cog lives in the Health Bar party-sync section, so an unsynced party tab keeps its own value.
     if not EllesmereUI._prebuilding then
         local lrgn = texRow._leftRegion
@@ -291,30 +295,42 @@ local function BuildVisualBars(parent, y, W, onSection, EYE)
               EllesmereUI.Conditions_Recheck()
               EllesmereUI:RefreshPage()
           end },
-        { type="slider", text="Background", min=0, max=100, step=1,
+        { type="slider", text="Fill Opacity", min=0, max=100, step=1,
           disabled=function() return SVal("healthColorMode", "class") == "dark" end,
-          disabledTooltip="Not available in Dark Mode. Dark Mode colors can be adjusted in Global Settings -> Colors.", rawTooltip=true,
-          getValue=function() return SVal("bgDarkness", 50) end,
-          setValue=function(v) SSet("bgDarkness", v) end });  y = y - h
+          disabledTooltip="Not available in Dark Mode", rawTooltip=true,
+          getValue=function() return SVal("healthBarOpacity", 100) end,
+          setValue=function(v) SSet("healthBarOpacity", v) end });  y = y - h
     -- Fill Color's "dark" choice IS the Dark Mode condition's input, so lock the dropdown while a Dark Mode conditional is being edited -- else the override could capture a mode change that flips its own condition.
     if EllesmereUI.SpecOverrides_AttachEditLock and not EllesmereUI._prebuilding then
         EllesmereUI.SpecOverrides_AttachEditLock(row._leftRegion,
             "Fill Color's Dark Mode choice drives a Dark Mode override condition, so it can't be changed while editing an override",
             EllesmereUI.SpecOverrides_DarkCondEditActive)
     end
-    -- Custom fill swatch plus the three Custom Dynamic stop swatches (100/50/0%) share one inline slot; the Fill Color mode decides which set is interactive.
-    if not EllesmereUI._prebuilding then
+    local function BuildColorSwatches(row, background)
+        if EllesmereUI._prebuilding then return end
+        local function GetMode()
+            if background then
+                return SVal("bgColorMode", SVal("bgClassColored", false) and "class" or "custom")
+            end
+            return SVal("healthColorMode", "class")
+        end
+        local function DarkBackground()
+            return background and SVal("healthColorMode", "class") == "dark"
+        end
+        local customKey = background and "customBgColor" or "customFillColor"
+        local prefix = background and "bgDynamicColor" or "dynamicColor"
         local rgn = row._leftRegion
 
         local swatch = EllesmereUI.BuildColorSwatch(
             rgn, row:GetFrameLevel() + 3,
             function()
-                local c = SGet("customFillColor")
+                local c = SGet(customKey)
                 if c then return c.r, c.g, c.b, 1 end
+                if background then return 17/255, 17/255, 17/255, 1 end
                 return 37/255, 193/255, 29/255, 1
             end,
             function(r, g, b)
-                SWrite("customFillColor", { r=r, g=g, b=b })
+                SWrite(customKey, { r=r, g=g, b=b })
                 ReloadAndUpdate()
             end, false, 20)
         swatch:SetPoint("RIGHT", rgn._lastInline or rgn._control, "LEFT", -8, 0)
@@ -324,14 +340,14 @@ local function BuildVisualBars(parent, y, W, onSection, EYE)
         block:SetAllPoints()
         block:SetFrameLevel(swatch:GetFrameLevel() + 10)
         block:EnableMouse(true)
-        block:SetScript("OnEnter", function() EllesmereUI.ShowWidgetTooltip(swatch, "Only available with Custom fill color") end)
+        block:SetScript("OnEnter", function() EllesmereUI.ShowWidgetTooltip(swatch, background and "Only available with Custom background color" or "Only available with Custom fill color") end)
         block:SetScript("OnLeave", function() EllesmereUI.HideWidgetTooltip() end)
 
         -- Three gradient-stop swatches, built right-to-left so the visual order reads 100% | 50% | 0%; tooltips carry the pct.
         local dynDefs = {
-            { key = "dynamicColor100", def = { r = 0, g = 1, b = 0 }, label = "100%", tip = "Health bar color at full (100%) health" },
-            { key = "dynamicColor50",  def = { r = 0xEC/255, g = 0xEC/255, b = 0x32/255 }, label = "50%",  tip = "Health bar color at half (50%) health" },
-            { key = "dynamicColor0",   def = { r = 0xE3/255, g = 0x30/255, b = 0x30/255 }, label = "0%",   tip = "Health bar color at empty (0%) health" },
+            { key = prefix .. "100", def = { r = 0, g = 1, b = 0 }, label = "100%", tip = background and "Background color at full (100%) health" or "Health bar color at full (100%) health" },
+            { key = prefix .. "50",  def = { r = 0xEC/255, g = 0xEC/255, b = 0x32/255 }, label = "50%",  tip = background and "Background color at half (50%) health" or "Health bar color at half (50%) health" },
+            { key = prefix .. "0",   def = { r = 0xE3/255, g = 0x30/255, b = 0x30/255 }, label = "0%",   tip = background and "Background color at empty (0%) health" or "Health bar color at empty (0%) health" },
         }
         local dynSwatches = {}
         local prevAnchor = rgn._control
@@ -354,8 +370,22 @@ local function BuildVisualBars(parent, y, W, onSection, EYE)
             prevAnchor = sw
         end
 
+        local darkBlock
+        if background then
+            darkBlock = CreateFrame("Frame", nil, rgn)
+            darkBlock:SetPoint("TOPLEFT", prevAnchor, "TOPLEFT", 0, 0)
+            darkBlock:SetPoint("BOTTOMRIGHT", swatch, "BOTTOMRIGHT", 0, 0)
+            darkBlock:SetFrameLevel(swatch:GetFrameLevel() + 11)
+            darkBlock:EnableMouse(true)
+            darkBlock:SetScript("OnEnter", function()
+                EllesmereUI.ShowWidgetTooltip(swatch, "Not available in Dark Mode. Dark Mode colors can be adjusted in Global Settings -> Colors.")
+            end)
+            darkBlock:SetScript("OnLeave", function() EllesmereUI.HideWidgetTooltip() end)
+        end
         local function UpdateSwatchVis()
-            local mode = SVal("healthColorMode", "class")
+            local mode = GetMode()
+            local locked = DarkBackground()
+            if darkBlock then darkBlock:SetShown(locked) end
             local isDynamic = mode == "customDynamic"
             -- Class Reactive shares the dynamic stops but its 100% color IS
             -- the class color: only the 0%/50% swatches apply there.
@@ -365,10 +395,11 @@ local function BuildVisualBars(parent, y, W, onSection, EYE)
                 swatch:Hide(); block:Hide()
             else
                 swatch:Show()
-                if mode == "custom" then swatch:SetAlpha(1); block:Hide()
+                if mode == "custom" and not locked then swatch:SetAlpha(1); block:Hide()
                 else swatch:SetAlpha(0.3); block:Show() end
             end
             for i, sw in ipairs(dynSwatches) do
+                sw:SetAlpha(locked and 0.3 or 1)
                 -- dynSwatches[1] = the 100% stop (class-driven in Class Reactive).
                 if isDynamic or (isClassReactive and i > 1) then sw:Show() else sw:Hide() end
             end
@@ -376,73 +407,27 @@ local function BuildVisualBars(parent, y, W, onSection, EYE)
         EllesmereUI.RegisterWidgetRefresh(UpdateSwatchVis)
         UpdateSwatchVis()
     end
-    -- Background Custom + Class swatch pair: clicking either toggles bgClassColored, the inactive one dims (mirrors the fill picker).
-    if not EllesmereUI._prebuilding then
-        local rgn = row._rightRegion
-        -- Class swatch shows the player's class color and is not editable.
-        local bgClassSwatch = EllesmereUI.BuildColorSwatch(
-            rgn, row:GetFrameLevel() + 3,
-            function()
-                local _, ct = UnitClass("player")
-                local cc = ct and EllesmereUI.GetClassColor(ct)
-                if cc then return cc.r, cc.g, cc.b, 1 end
-                return 1, 1, 1, 1
-            end,
-            function() end, false, 20)
-        bgClassSwatch:SetScript("OnClick", function()
-            SSet("bgClassColored", true)
-            ReloadAndUpdate(); EllesmereUI:RefreshPage()
-        end)
-        bgClassSwatch:HookScript("OnEnter", function() EllesmereUI.ShowWidgetTooltip(bgClassSwatch, "Class Colored Background") end)
-        bgClassSwatch:HookScript("OnLeave", function() EllesmereUI.HideWidgetTooltip() end)
-        bgClassSwatch:SetPoint("RIGHT", rgn._lastInline or rgn._control, "LEFT", -8, 0)
-        rgn._lastInline = bgClassSwatch
+    BuildColorSwatches(row, false)
 
-        local bgSwatch = EllesmereUI.BuildColorSwatch(
-            rgn, row:GetFrameLevel() + 3,
-            function()
-                local c = SGet("customBgColor")
-                if c then return c.r, c.g, c.b, 1 end
-                return 17/255, 17/255, 17/255, 1
-            end,
-            function(r, g, b)
-                SWrite("customBgColor", { r=r, g=g, b=b })
-                ReloadAndUpdate()
-            end, false, 20)
-        bgSwatch._eabOrigClick = bgSwatch:GetScript("OnClick")
-        bgSwatch:SetScript("OnClick", function(self)
-            if SVal("bgClassColored", false) then
-                SSet("bgClassColored", false)
-                ReloadAndUpdate(); EllesmereUI:RefreshPage()
-                return
-            end
-            if self._eabOrigClick then self._eabOrigClick(self) end
-        end)
-        bgSwatch:HookScript("OnEnter", function() EllesmereUI.ShowWidgetTooltip(bgSwatch, "Custom Background Color") end)
-        bgSwatch:HookScript("OnLeave", function() EllesmereUI.HideWidgetTooltip() end)
-        bgSwatch:SetPoint("RIGHT", rgn._lastInline or rgn._control, "LEFT", -8, 0)
-        rgn._lastInline = bgSwatch
-        -- Blocking overlay spans BOTH swatches: Dark Mode has no background.
-        local bgBlock = CreateFrame("Frame", nil, rgn)
-        bgBlock:SetPoint("TOPLEFT", bgSwatch, "TOPLEFT", 0, 0)
-        bgBlock:SetPoint("BOTTOMRIGHT", bgClassSwatch, "BOTTOMRIGHT", 0, 0)
-        bgBlock:SetFrameLevel(bgClassSwatch:GetFrameLevel() + 10)
-        bgBlock:EnableMouse(true)
-        bgBlock:SetScript("OnEnter", function() EllesmereUI.ShowWidgetTooltip(bgSwatch, "Not available in Dark Mode. Dark Mode colors can be adjusted in Global Settings -> Colors.") end)
-        bgBlock:SetScript("OnLeave", function() EllesmereUI.HideWidgetTooltip() end)
-        local function UpdateBgSwatchVis()
-            if SVal("healthColorMode", "class") == "dark" then
-                bgSwatch:SetAlpha(0.3); bgClassSwatch:SetAlpha(0.3); bgBlock:Show()
-            else
-                bgBlock:Hide()
-                local classOn = SVal("bgClassColored", false)
-                bgSwatch:SetAlpha(classOn and 0.3 or 1)
-                bgClassSwatch:SetAlpha(classOn and 1 or 0.3)
-            end
+    local bgColorValues, bgColorOrder = {}, {}
+    for _, mode in ipairs(healthColorOrder) do
+        if mode ~= "dark" then
+            bgColorValues[mode] = healthColorValues[mode]
+            bgColorOrder[#bgColorOrder + 1] = mode
         end
-        EllesmereUI.RegisterWidgetRefresh(UpdateBgSwatchVis)
-        UpdateBgSwatchVis()
     end
+    row, h = W:DualRow(parent, y,
+        { type="dropdown", text="Background Color", values=bgColorValues, order=bgColorOrder,
+          disabled=function() return SVal("healthColorMode", "class") == "dark" end,
+          disabledTooltip="Not available in Dark Mode. Dark Mode colors can be adjusted in Global Settings -> Colors.", rawTooltip=true,
+          getValue=function() return SVal("bgColorMode", SVal("bgClassColored", false) and "class" or "custom") end,
+          setValue=function(v) SSet("bgColorMode", v); EllesmereUI:RefreshPage() end },
+        { type="slider", text="Background Opacity", min=0, max=100, step=1,
+          disabled=function() return SVal("healthColorMode", "class") == "dark" end,
+          disabledTooltip="Not available in Dark Mode. Dark Mode colors can be adjusted in Global Settings -> Colors.", rawTooltip=true,
+          getValue=function() return SVal("bgDarkness", 50) end,
+          setValue=function(v) SSet("bgDarkness", v) end }); y = y - h
+    BuildColorSwatches(row, true)
 
     -- Rows the test panel's Edit buttons scroll to. The search prebuild's rows
     -- are stand-ins, so it records them in a scratch table instead.
@@ -505,21 +490,19 @@ local function BuildVisualBars(parent, y, W, onSection, EYE)
         return "This option requires a Border Size above 0."
     end
 
-    local smoothThreatRow
-    smoothThreatRow, h = W:DualRow(parent, y,
-        { type="toggle", text="Smooth Health Bars",
-          getValue=function() return SVal("smoothBars", true) end,
-          setValue=function(v) SSet("smoothBars", v) end },
+    local threatRow
+    threatRow, h = W:DualRow(parent, y,
         { type="slider", text="Threat Borders", min=0, max=4, step=1,
           getValue=function() return SVal("threatBorderSize", 2) end,
-          setValue=function(v) SSet("threatBorderSize", v) end });  y = y - h
-    editTargets.threat = smoothThreatRow
-    editTargets.animateBars = smoothThreatRow
+          setValue=function(v) SSet("threatBorderSize", v) end },
+        EllesmereUI.BlankRowCfg()); y = y - h
+    editTargets.threat = threatRow
+    editTargets.animateBars = texRow
     -- Cog on Threat Borders: Color Custom Borders recolors the frame's own border in
     -- the threat color on aggro, drawn instead of the inner border (the slider's
     -- size still applies whenever the recolor cannot).
     if not EllesmereUI._prebuilding then
-        local rgn = smoothThreatRow._rightRegion
+        local rgn = threatRow._leftRegion
         -- Its only row needs a custom border: dimmed, with the reason, until there is one.
         EllesmereUI.BuildInlineCog(rgn, {
             disabled = CustomBorderOff, disabledTooltip = CustomBorderOffTip, requireState = "disabled",

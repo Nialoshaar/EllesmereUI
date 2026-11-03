@@ -65,50 +65,55 @@ end
 -- curve to UnitHealthPercent (secret-value safe); cached, rebuilt only when one of the three
 -- colors changes. do-block keeps the cache state off the main-chunk local budget.
 do
-    local DEF100 = { r = 0, g = 1, b = 0 }
-    local DEF50  = { r = 0xEC/255, g = 0xEC/255, b = 0x32/255 }
-    local DEF0   = { r = 0xE3/255, g = 0x30/255, b = 0x30/255 }
-    local dynCurve
-    local r0, g0, b0, r50, g50, b50, r100, g100, b100
-    function ns.GetCustomDynamicCurve(s)
-        s = s or db.profile
-        local c0   = s.dynamicColor0   or DEF0
-        local c50  = s.dynamicColor50  or DEF50
-        local c100 = s.dynamicColor100 or DEF100
-        if not (dynCurve
-            and r0   == c0.r   and g0   == c0.g   and b0   == c0.b
-            and r50  == c50.r  and g50  == c50.g  and b50  == c50.b
-            and r100 == c100.r and g100 == c100.g and b100 == c100.b) then
-            dynCurve = C_CurveUtil.CreateColorCurve()
-            dynCurve:SetType(Enum.LuaCurveType.Linear)
-            dynCurve:AddPoint(0,   CreateColor(c0.r,   c0.g,   c0.b,   1))
-            dynCurve:AddPoint(0.5, CreateColor(c50.r,  c50.g,  c50.b,  1))
-            dynCurve:AddPoint(1,   CreateColor(c100.r, c100.g, c100.b, 1))
-            r0, g0, b0       = c0.r, c0.g, c0.b
-            r50, g50, b50    = c50.r, c50.g, c50.b
-            r100, g100, b100 = c100.r, c100.g, c100.b
+    local function CreateHelpers(key0, key50, key100)
+        local DEF100 = { r = 0, g = 1, b = 0 }
+        local DEF50  = { r = 0xEC/255, g = 0xEC/255, b = 0x32/255 }
+        local DEF0   = { r = 0xE3/255, g = 0x30/255, b = 0x30/255 }
+        local dynCurve
+        local r0, g0, b0, r50, g50, b50, r100, g100, b100
+        local function GetCurve(s)
+            s = s or db.profile
+            local c0   = s[key0]   or DEF0
+            local c50  = s[key50]  or DEF50
+            local c100 = s[key100] or DEF100
+            if not (dynCurve
+                and r0   == c0.r   and g0   == c0.g   and b0   == c0.b
+                and r50  == c50.r  and g50  == c50.g  and b50  == c50.b
+                and r100 == c100.r and g100 == c100.g and b100 == c100.b) then
+                dynCurve = C_CurveUtil.CreateColorCurve()
+                dynCurve:SetType(Enum.LuaCurveType.Linear)
+                dynCurve:AddPoint(0,   CreateColor(c0.r,   c0.g,   c0.b,   1))
+                dynCurve:AddPoint(0.5, CreateColor(c50.r,  c50.g,  c50.b,  1))
+                dynCurve:AddPoint(1,   CreateColor(c100.r, c100.g, c100.b, 1))
+                r0, g0, b0       = c0.r, c0.g, c0.b
+                r50, g50, b50    = c50.r, c50.g, c50.b
+                r100, g100, b100 = c100.r, c100.g, c100.b
+            end
+            return dynCurve
         end
-        return dynCurve
-    end
 
-    -- Clean-number interpolation matching the curve, for previews where the
-    -- percent is a known fake (0-1): linear 0/50 below half, 50/100 above.
-    function ns.ResolveDynamicColor(s, pct01)
-        s = s or db.profile
-        local c0   = s.dynamicColor0   or DEF0
-        local c50  = s.dynamicColor50  or DEF50
-        local c100 = s.dynamicColor100 or DEF100
-        if pct01 >= 0.5 then
-            local t = (pct01 - 0.5) * 2
-            return c50.r + (c100.r - c50.r) * t,
-                   c50.g + (c100.g - c50.g) * t,
-                   c50.b + (c100.b - c50.b) * t
+        -- Clean-number interpolation matching the curve, for previews where the
+        -- percent is a known fake (0-1): linear 0/50 below half, 50/100 above.
+        local function ResolveColor(s, pct01)
+            s = s or db.profile
+            local c0   = s[key0]   or DEF0
+            local c50  = s[key50]  or DEF50
+            local c100 = s[key100] or DEF100
+            if pct01 >= 0.5 then
+                local t = (pct01 - 0.5) * 2
+                return c50.r + (c100.r - c50.r) * t,
+                       c50.g + (c100.g - c50.g) * t,
+                       c50.b + (c100.b - c50.b) * t
+            end
+            local t = pct01 * 2
+            return c0.r + (c50.r - c0.r) * t,
+                   c0.g + (c50.g - c0.g) * t,
+                   c0.b + (c50.b - c0.b) * t
         end
-        local t = pct01 * 2
-        return c0.r + (c50.r - c0.r) * t,
-               c0.g + (c50.g - c0.g) * t,
-               c0.b + (c50.b - c0.b) * t
+        return GetCurve, ResolveColor
     end
+    ns.GetCustomDynamicCurve, ns.ResolveDynamicColor = CreateHelpers("dynamicColor0", "dynamicColor50", "dynamicColor100")
+    ns.GetBackgroundDynamicCurve, ns.ResolveBackgroundDynamicColor = CreateHelpers("bgDynamicColor0", "bgDynamicColor50", "bgDynamicColor100")
 end
 
 -- Class Color Reactive: the Custom Dynamic gradient whose 100% stop is the
@@ -118,68 +123,73 @@ end
 -- class color, so Custom Class Colors edits rebuild too). Secret-safe: the
 -- curve is evaluated inside UnitHealthPercent exactly like Classic/Dynamic.
 do
-    local DEF50 = { r = 0xEC/255, g = 0xEC/255, b = 0x32/255 }
-    local DEF0  = { r = 0xE3/255, g = 0x30/255, b = 0x30/255 }
-    local GRAY  = { r = 0.5, g = 0.5, b = 0.5 }
-    local curves = {}   -- classToken -> { curve, r, g, b (class color used) }
-    local r0, g0, b0, r50, g50, b50
-    function ns.GetClassReactiveCurve(s, classToken)
-        local EllesmereUI = ns.EllesmereUI  -- upvalue read, not a global read (see the taint note at the top of EllesmereUIRaidFrames.lua)
-        s = s or db.profile
-        local c0  = s.dynamicColor0  or DEF0
-        local c50 = s.dynamicColor50 or DEF50
-        if not (r0 == c0.r and g0 == c0.g and b0 == c0.b
-            and r50 == c50.r and g50 == c50.g and b50 == c50.b) then
-            wipe(curves)
-            r0, g0, b0    = c0.r, c0.g, c0.b
-            r50, g50, b50 = c50.r, c50.g, c50.b
-        end
-        local cc = EllesmereUI.GetClassColor(classToken) or GRAY
-        local e = curves[classToken]
-        if not (e and e.r == cc.r and e.g == cc.g and e.b == cc.b) then
-            local curve = C_CurveUtil.CreateColorCurve()
-            curve:SetType(Enum.LuaCurveType.Linear)
-            -- Front-loaded class return: full reactive at 40% health, and the
-            -- 0.75 stop carries 75% class weight, so identity snaps back
-            -- quickly (40->75% climbs 0->75% class, 75->100% eases the rest).
-            curve:AddPoint(0,    CreateColor(c0.r,  c0.g,  c0.b,  1))
-            curve:AddPoint(0.4,  CreateColor(c50.r, c50.g, c50.b, 1))
-            curve:AddPoint(0.75, CreateColor(
-                c50.r + (cc.r - c50.r) * 0.75,
-                c50.g + (cc.g - c50.g) * 0.75,
-                c50.b + (cc.b - c50.b) * 0.75, 1))
-            curve:AddPoint(1,    CreateColor(cc.r,  cc.g,  cc.b,  1))
-            e = { curve = curve, r = cc.r, g = cc.g, b = cc.b }
-            curves[classToken] = e
-        end
-        return e.curve
-    end
-
-    -- Clean-number twin for previews (fake 0-1 percents), mirroring the curve
-    -- above: reactive 0-stop -> mid-stop below 40% health, front-loaded class
-    -- weight above (75% class by 75% health, easing in the rest to 100%).
-    function ns.ResolveClassReactiveColor(s, classToken, pct01)
-        local EllesmereUI = ns.EllesmereUI  -- upvalue read, not a global read (see the taint note at the top of EllesmereUIRaidFrames.lua)
-        s = s or db.profile
-        local cc = (classToken and EllesmereUI.GetClassColor(classToken)) or GRAY
-        local c0  = s.dynamicColor0  or DEF0
-        local c50 = s.dynamicColor50 or DEF50
-        if pct01 >= 0.4 then
-            local w
-            if pct01 >= 0.75 then
-                w = 0.75 + (pct01 - 0.75)
-            else
-                w = (pct01 - 0.4) / 0.35 * 0.75
+    local function CreateHelpers(key0, key50)
+        local DEF50 = { r = 0xEC/255, g = 0xEC/255, b = 0x32/255 }
+        local DEF0  = { r = 0xE3/255, g = 0x30/255, b = 0x30/255 }
+        local GRAY  = { r = 0.5, g = 0.5, b = 0.5 }
+        local curves = {}   -- classToken -> { curve, r, g, b (class color used) }
+        local r0, g0, b0, r50, g50, b50
+        local function GetCurve(s, classToken)
+            local EllesmereUI = ns.EllesmereUI  -- upvalue read, not a global read (see the taint note at the top of EllesmereUIRaidFrames.lua)
+            s = s or db.profile
+            local c0  = s[key0]  or DEF0
+            local c50 = s[key50] or DEF50
+            if not (r0 == c0.r and g0 == c0.g and b0 == c0.b
+                and r50 == c50.r and g50 == c50.g and b50 == c50.b) then
+                wipe(curves)
+                r0, g0, b0    = c0.r, c0.g, c0.b
+                r50, g50, b50 = c50.r, c50.g, c50.b
             end
-            return c50.r + (cc.r - c50.r) * w,
-                   c50.g + (cc.g - c50.g) * w,
-                   c50.b + (cc.b - c50.b) * w
+            local cc = EllesmereUI.GetClassColor(classToken) or GRAY
+            local e = curves[classToken]
+            if not (e and e.r == cc.r and e.g == cc.g and e.b == cc.b) then
+                local curve = C_CurveUtil.CreateColorCurve()
+                curve:SetType(Enum.LuaCurveType.Linear)
+                -- Front-loaded class return: full reactive at 40% health, and the
+                -- 0.75 stop carries 75% class weight, so identity snaps back
+                -- quickly (40->75% climbs 0->75% class, 75->100% eases the rest).
+                curve:AddPoint(0,    CreateColor(c0.r,  c0.g,  c0.b,  1))
+                curve:AddPoint(0.4,  CreateColor(c50.r, c50.g, c50.b, 1))
+                curve:AddPoint(0.75, CreateColor(
+                    c50.r + (cc.r - c50.r) * 0.75,
+                    c50.g + (cc.g - c50.g) * 0.75,
+                    c50.b + (cc.b - c50.b) * 0.75, 1))
+                curve:AddPoint(1,    CreateColor(cc.r,  cc.g,  cc.b,  1))
+                e = { curve = curve, r = cc.r, g = cc.g, b = cc.b }
+                curves[classToken] = e
+            end
+            return e.curve
         end
-        local t = pct01 / 0.4
-        return c0.r + (c50.r - c0.r) * t,
-               c0.g + (c50.g - c0.g) * t,
-               c0.b + (c50.b - c0.b) * t
+
+        -- Clean-number twin for previews (fake 0-1 percents), mirroring the curve
+        -- above: reactive 0-stop -> mid-stop below 40% health, front-loaded class
+        -- weight above (75% class by 75% health, easing in the rest to 100%).
+        local function ResolveColor(s, classToken, pct01)
+            local EllesmereUI = ns.EllesmereUI  -- upvalue read, not a global read (see the taint note at the top of EllesmereUIRaidFrames.lua)
+            s = s or db.profile
+            local cc = (classToken and EllesmereUI.GetClassColor(classToken)) or GRAY
+            local c0  = s[key0]  or DEF0
+            local c50 = s[key50] or DEF50
+            if pct01 >= 0.4 then
+                local w
+                if pct01 >= 0.75 then
+                    w = 0.75 + (pct01 - 0.75)
+                else
+                    w = (pct01 - 0.4) / 0.35 * 0.75
+                end
+                return c50.r + (cc.r - c50.r) * w,
+                       c50.g + (cc.g - c50.g) * w,
+                       c50.b + (cc.b - c50.b) * w
+            end
+            local t = pct01 / 0.4
+            return c0.r + (c50.r - c0.r) * t,
+                   c0.g + (c50.g - c0.g) * t,
+                   c0.b + (c50.b - c0.b) * t
+        end
+        return GetCurve, ResolveColor
     end
+    ns.GetClassReactiveCurve, ns.ResolveClassReactiveColor = CreateHelpers("dynamicColor0", "dynamicColor50")
+    ns.GetBackgroundClassReactiveCurve, ns.ResolveBackgroundClassReactiveColor = CreateHelpers("bgDynamicColor0", "bgDynamicColor50")
 end
 
 -- Textured Background (Health Bar Fill cog; off by default): the bar texture on the
@@ -392,10 +402,14 @@ function ns._ApplyHealthBg(d, health, s, unit, connected, deadOrGhost)
     if s.healthColorMode == "dark" then
         br, bgr, bb, ba = EllesmereUI.GetDarkModeBg()
     else
-        -- Class-colored when bgClassColored, else custom (GetBgColor handles the secret-value
-        -- guard + alpha = bgDarkness). MUST match the layout-pass and preview paths or this
-        -- refresh clobbers the class-colored bg.
         br, bgr, bb, ba = ns.GetBgColor(unit, s)
+        -- Curve components may be secret; pass them straight to the texture.
+        local mode = ns.GetBgColorMode(s)
+        if mode == "classic" or mode == "customDynamic" or mode == "classReactive" then
+            d._bgA = nil
+            bg:SetColorTexture(br, bgr, bb, ba)
+            return
+        end
     end
     if d._bgR ~= br or d._bgG ~= bgr or d._bgB ~= bb or d._bgA ~= ba then
         d._bgR, d._bgG, d._bgB, d._bgA = br, bgr, bb, ba
@@ -570,22 +584,65 @@ local function ResolveDisplayName(unit, applyCap, s, fmt)
     return display
 end
 
--- Background color: class color when bgClassColored, else the custom bg color.
--- Returns r, g, b, a (alpha = bgDarkness). Mirrors the health-fill class option.
+-- Missing modes retain the class/custom choice of older profiles.
+function ns.GetBgColorMode(s)
+    return s.bgColorMode or (s.bgClassColored and "class" or "custom")
+end
+
 function ns.GetBgColor(unit, s)
     s = s or db.profile
     local a = (s.bgDarkness or 50) / 100
-    if s.bgClassColored and unit and UnitExists(unit) then
-        local _, classToken = UnitClass(unit)
-        -- classToken can be secret (out-of-range/uninspectable units) and indexing GetClassColor's
-        -- tables with one throws "table index is secret"; fall back to custom bg when secret/nil.
-        if classToken and not issecretvalue(classToken) then
-            local cc = EllesmereUI.GetClassColor(classToken)
-            if cc then return cc.r, cc.g, cc.b, a end
+    local mode = ns.GetBgColorMode(s)
+    if mode ~= "custom" and unit and UnitExists(unit) then
+        local curve
+        if mode == "classic" then
+            curve = GetClassicHealthCurve()
+        elseif mode == "customDynamic" then
+            curve = ns.GetBackgroundDynamicCurve(s)
+        end
+        if mode == "class" or mode == "classReactive" then
+            local _, classToken = UnitClass(unit)
+            if classToken and not issecretvalue(classToken) then
+                if mode == "classReactive" then
+                    curve = ns.GetBackgroundClassReactiveCurve(s, classToken)
+                else
+                    local cc = ns.EllesmereUI.GetClassColor(classToken)
+                    if cc then return cc.r, cc.g, cc.b, a end
+                end
+            end
+        end
+        if curve then
+            local color = UnitHealthPercent(unit, true, curve)
+            if color and color.GetRGB then
+                local r, g, b = color:GetRGB()
+                return r, g, b, a
+            end
         end
     end
-    -- Partial/imported profiles can lack the key (field report 2026-08-16).
-    local c = s.customBgColor or defaults.customBgColor
+    local c = s.customBgColor or defaults.profile.customBgColor
+    return c.r, c.g, c.b, a
+end
+
+-- Preview percentages are ordinary numbers, unlike live unit health.
+function ns.ResolveBackgroundColor(s, classToken, pct01)
+    if s.healthColorMode == "dark" then return ns.EllesmereUI.GetDarkModeBg() end
+    local mode = ns.GetBgColorMode(s)
+    local a = (s.bgDarkness or 50) / 100
+    local r, g, b
+    if mode == "classic" then
+        r = pct01 < 0.5 and 1 or (1 - (pct01 - 0.5) * 2)
+        g = pct01 > 0.5 and 1 or (pct01 * 2)
+        b = 0
+    elseif mode == "customDynamic" then
+        r, g, b = ns.ResolveBackgroundDynamicColor(s, pct01)
+    elseif mode == "classReactive" then
+        r, g, b = ns.ResolveBackgroundClassReactiveColor(s, classToken, pct01)
+    elseif mode == "class" then
+        local cc = classToken and ns.EllesmereUI.GetClassColor(classToken)
+        if cc then return cc.r, cc.g, cc.b, a end
+    end
+    if r then return r, g, b, a end
+    local c = s.customBgColor or defaults.profile.customBgColor
     return c.r, c.g, c.b, a
 end
 

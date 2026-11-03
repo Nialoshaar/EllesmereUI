@@ -427,7 +427,10 @@ local defaults = {
         dynamicColor50   = { r = 1, g = 1, b = 0 },   -- half health
         dynamicColor0    = { r = 1, g = 0, b = 0 },   -- empty health
         customBgColor    = { r = 17/255, g = 17/255, b = 17/255 },
-        bgClassColored   = false,
+        bgClassColored   = false, -- legacy fallback when bgColorMode is absent
+        bgDynamicColor100 = { r = 0, g = 1, b = 0 },
+        bgDynamicColor50  = { r = 1, g = 1, b = 0 },
+        bgDynamicColor0   = { r = 1, g = 0, b = 0 },
         bgDarkness       = 50,
         -- Fill axis: off = left-to-right, on = bottom-to-top. Party can hold its own (key is in the healthBar override section).
         healthVerticalFill = false,
