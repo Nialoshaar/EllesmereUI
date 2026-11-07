@@ -1856,8 +1856,8 @@ initFrame:SetScript("OnEvent", function(self)
             });  y = y - h
 
             -- Camp Benefits | Well Fed
-            local wellFedRow
-            wellFedRow, h = W:DualRow(parent, y,
+            local campRow
+            campRow, h = W:DualRow(parent, y,
                 { type="toggle", text="Camp Benefits",
                   tooltip="Reminds you when the Camp Benefits campfire buff is missing.",
                   getValue=function() local f = FDB(); return not f or f.camp ~= false end,
@@ -1876,7 +1876,18 @@ initFrame:SetScript("OnEvent", function(self)
             );  y = y - h
 
             if not EllesmereUI._prebuilding then
-                EllesmereUI.BuildInlineCog(wellFedRow._rightRegion, {
+                EllesmereUI.BuildInlineCog(campRow._leftRegion, {
+                    title = "Camp Benefits",
+                    disabled = function() local f = FDB(); return not (f and f.camp ~= false) end,
+                    disabledTooltip = "Camp Benefits",
+                    rows = {
+                        { type="toggle", label="Left-Click to Build Campfire",
+                          tooltip="Left-click to place a campfire kit outdoors and out of combat. Near a campfire, right-click to pick a camp add-on from your bags and left-click to place it.",
+                          get=function() local f = FDB(); return f and f.campfireKit == true end,
+                          set=function(v) local f = FDB(); if f then f.campfireKit = v; RefreshAll() end end },
+                    },
+                })
+                EllesmereUI.BuildInlineCog(campRow._rightRegion, {
                     title = _G._EABR_SpellName(19705, "Well Fed"),
                     disabled = function() local f = FDB(); return not (f and f.wellFed) end,
                     disabledTooltip = _G._EABR_SpellName(19705, "Well Fed"),

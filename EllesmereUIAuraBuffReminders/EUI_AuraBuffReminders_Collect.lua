@@ -170,6 +170,7 @@ local function ShowIcon(iconIdx, m)
     local btn = GetOrCreateIcon(iconIdx)
     btn._dismissKey = m.dismissKey or nil
     btn._petCycleTotal = m.petCycleTotal or nil
+    btn._campfireAddonPicker = m.campfireAddonPicker
     btn._foreverGroup = m.foreverGroup
     btn._foreverItemPicker = m.foreverItemPicker
     btn._requestKey = m.requestKey or nil
@@ -182,7 +183,7 @@ local function ShowIcon(iconIdx, m)
     -- same as the attribute writes below, so this only ever runs OOC.
     local receiver = EABR.IsReceiverRaidBuff(m) and not m.requestKey
     if not InCombat() then
-        local pass = (receiver and 1 or 0) + ((m.petCycleTotal or m.foreverItemPicker or m.foreverGroup) and 0 or 2)
+        local pass = (receiver and 1 or 0) + ((m.petCycleTotal or m.foreverItemPicker or m.foreverGroup or m.campfireAddonPicker) and 0 or 2)
         if btn._passButtons ~= pass then
             btn._passButtons = pass
             if pass == 3 then
