@@ -1315,6 +1315,11 @@ local function SetIconMacro(btn, macrotext, texture, spellID)
 end
 
 
+function EABR.ForeverSelfCastMacro(spellName)
+    -- A faded pooled button can still receive clicks during lockdown.
+    return "/cast [@player,nocombat] " .. spellName
+end
+
 -------------------------------------------------------------------------------
 --  Data-driven setup: eliminates per-refresh closure + table allocations
 -------------------------------------------------------------------------------

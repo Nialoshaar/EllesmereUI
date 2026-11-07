@@ -135,7 +135,7 @@ function EABR.BuildForeverFamilies()
                         if list[k] == sid then listed = true; break end
                     end
                     if not listed then list[#list + 1] = sid end
-                    known[list] = true
+                    known[list] = sid
                 end
             end
         end
@@ -287,8 +287,8 @@ end
 -- user's spell groups (EABR.CollectForeverGroups) and custom spell IDs,
 -- absence only (no expiry thresholds). A custom ID counts as up while any
 -- spell of its rank family is (EABR.ForeverFamily). Entries are display-only
--- textures carrying the spell for the tooltip, except the two trackers and the
--- mage armors, whose click casts the spell; presence goes through
+-- textures carrying the spell for the tooltip, except clickable trackers,
+-- mage armors, and custom spells the player knows. Presence goes through
 -- PlayerHasAuraByID. The section shows nothing in combat (its Where to Show
 -- offers no In Combat entry: always unchecked), and Camp Benefits, Well Fed,
 -- the mage armors and the trackers nothing in PvP either. The one-slot id
@@ -380,6 +380,13 @@ function EABR.CollectForever(missing, inInstance, inPvP)
             e.texture = Tex(id)
             e.label = ShortLabel(SpellName(id) or tostring(id))
             e.cat = "forever"; e.dismissKey = dk
+            local castSpellID = fam and EABR._fvKnownFams[fam]
+            local castName = castSpellID and SpellName(castSpellID)
+            if castName then
+                e.mode = "macro"
+                e.macro = EABR.ForeverSelfCastMacro(castName)
+                e.spellID = castSpellID
+            end
             missing[#missing+1] = e
         end
     end
