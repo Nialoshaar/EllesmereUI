@@ -135,11 +135,16 @@ function EABR.BuildForeverFamilies()
                         if list[k] == sid then listed = true; break end
                     end
                     if not listed then list[#list + 1] = sid end
-                    known[list] = true
+                    known[list] = sid
                 end
             end
         end
     end
+end
+
+function EABR.ForeverGroupCastSpell(spellID)
+    local ranks = type(spellID) == "number" and SpellName(spellID) and EABR.ForeverFamily(spellID)
+    return ranks and EABR._fvKnownFams[ranks]
 end
 
 -- WoW Forever spell groups: one reminder per group while no aura from its
@@ -149,8 +154,8 @@ end
 -- secret, so a hidden aura is not read as absent. A group shows only for a
 -- character that knows one of its spells (a rank in the spellbook): groups are
 -- profile settings, so one made on another class shows nothing here. The icon
--- is the first such spell's; the tooltip names the group (no spell on the
--- entry). Dismiss keys are per group table (weak), so removing or renaming a
+-- uses the selected cast spell or the first known member. Dismiss keys are
+-- per group table (weak), so removing or renaming a
 -- group never hands its dismissal to another.
 function EABR.CollectForeverGroups(missing, groups)
     local dismissKeys = EABR._fvGroupKeys
@@ -163,20 +168,23 @@ function EABR.CollectForeverGroups(missing, groups)
     for _, group in ipairs(groups) do
         local spellIDs = type(group) == "table" and group.ids
         if type(spellIDs) == "table" then
-            local iconSpellID, hasActiveAura
+            local castSpellID, hasActiveAura
             local allAurasReadable = true
             for _, spellID in ipairs(spellIDs) do
                 local rankSpellIDs = type(spellID) == "number" and SpellName(spellID)
                     and EABR.ForeverFamily(spellID)
                 if rankSpellIDs then
-                    if not iconSpellID and EABR._fvKnownFams[rankSpellIDs] then iconSpellID = spellID end
+                    local knownSpellID = EABR._fvKnownFams[rankSpellIDs]
+                    if knownSpellID and (not castSpellID or spellID == group.castSpellID) then
+                        castSpellID = knownSpellID
+                    end
                     if PlayerHasAuraByID(rankSpellIDs) then hasActiveAura = true; break end
                     if aurasRestricted and not EABR.FvRanksReadable(rankSpellIDs) then
                         allAurasReadable = false
                     end
                 end
             end
-            if iconSpellID and allAurasReadable and not hasActiveAura then
+            if castSpellID and allAurasReadable and not hasActiveAura then
                 local dismissKey = dismissKeys[group]
                 if not dismissKey then
                     EABR._fvGroupN = EABR._fvGroupN + 1
@@ -184,10 +192,12 @@ function EABR.CollectForeverGroups(missing, groups)
                     dismissKeys[group] = dismissKey
                 end
                 local entry = AcquireEntry()
-                entry.mode = "texture"
-                entry.texture = Tex(iconSpellID)
+                entry.mode = "macro"
+                entry.macro = EABR.ForeverSelfCastMacro(SpellName(castSpellID))
+                entry.spellID = castSpellID
+                entry.foreverGroup = group
                 entry.label = type(group.name) == "string" and group.name
-                    or ShortLabel(SpellName(iconSpellID))
+                    or ShortLabel(SpellName(castSpellID))
                 entry.cat = "forever"; entry.dismissKey = dismissKey
                 missing[#missing+1] = entry
             end
@@ -480,6 +490,13 @@ function EABR.CollectForever(missing, inInstance, inPvP)
             e.texture = Tex(id)
             e.label = ShortLabel(SpellName(id) or tostring(id))
             e.cat = "forever"; e.dismissKey = dk
+            local castSpellID = fam and EABR._fvKnownFams[fam]
+            local castName = castSpellID and SpellName(castSpellID)
+            if castName then
+                e.mode = "macro"
+                e.macro = EABR.ForeverSelfCastMacro(castName)
+                e.spellID = castSpellID
+            end
             missing[#missing+1] = e
         end
     end

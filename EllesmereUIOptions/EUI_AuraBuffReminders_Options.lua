@@ -1004,7 +1004,7 @@ initFrame:SetScript("OnEvent", function(self)
 
     ---------------------------------------------------------------------------
     --  WoW Forever spell groups: one section per group. Slots, left to right:
-    --  Add Spell ID, Rename, one per spell (Remove), Remove Group last.
+    --  Add Spell ID, Rename, one per spell, Remove Group last.
     ---------------------------------------------------------------------------
     local function BuildForeverGroupSections(parent, y)
         local f = FDB()
@@ -1012,7 +1012,7 @@ initFrame:SetScript("OnEvent", function(self)
         for groupIndex, group in ipairs(f.customGroups) do
             local slots = {
                 { type="input", text="Add Spell ID", inputStyle="popup", placeholder="Spell ID", inputWidth=110,
-                  tooltip="Type a spell ID and press Enter to add it to this group. Unknown IDs are ignored.\nThe reminder shows the icon of the first spell in the list.",
+                  tooltip="Type a spell ID and press Enter to add it to this group. Unknown IDs are ignored.",
                   getValue=function() return "" end,
                   setValue=function(text) AddSpellIDToList(group.ids, text) end },
                 { type="labeledButton", text="Rename Group", buttonText="Rename", width=90,
@@ -1025,6 +1025,7 @@ initFrame:SetScript("OnEvent", function(self)
                     tooltip="Remove this spell from the group.",
                     onClick=function()
                         table.remove(group.ids, spellIndex)
+                        if group.castSpellID == spellID then group.castSpellID = nil end
                         RefreshAll()
                         EllesmereUI:RefreshPage(true)
                     end }
@@ -1073,14 +1074,14 @@ initFrame:SetScript("OnEvent", function(self)
         local f = FDB()
         local ids = f and f.customIDs
         local newGroupSlot = { type="labeledButton", text="New Spell Group", buttonText="Create", width=90,
-            tooltip="Creates a group of spells. A reminder shows if none of the auras from the group are active.",
+            tooltip="Creates a reminder for when none of the group's auras are active. Out of combat, right-click to choose a spell you know, then left-click to cast it on yourself.",
             onClick=function() PromptSpellGroupName() end }
         local n = (first and 3 or 2) + (ids and #ids or 0)
         local W = EllesmereUI.Widgets
         local function Slot(id)
             return { type="labeledButton", buttonText="Remove", width=90,
                 text=_G._EABR_SpellName(id, tostring(id)) .. " " .. EllesmereUI.COLOR_CODES.DIM .. id .. "|r",
-                tooltip="Reminds you whenever this buff is missing. Remove stops tracking it.",
+                tooltip="Reminds you whenever this buff is missing. If you know the spell, left-click the reminder out of combat to cast it on yourself.",
                 onClick=function()
                     local fo = FDB()
                     local list = fo and fo.customIDs

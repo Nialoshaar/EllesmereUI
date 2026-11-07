@@ -19,7 +19,7 @@ local floor, max = math.floor, math.max
 local _B, DEFAULT_TEXT_COLOR, EABR = I._B, I.DEFAULT_TEXT_COLOR, I.EABR
 local GetPlayerClass, GetTextAnchorPoints = I.GetPlayerClass, I.GetTextAnchorPoints
 local InCombat, Known, ResolveFontPath = I.InCombat, I.Known, I.ResolveFontPath
-local ResolveGlowTint, SetABRFont, Tex = I.ResolveGlowTint, I.SetABRFont, I.Tex
+local ResolveGlowTint, SetABRFont, SpellName, Tex = I.ResolveGlowTint, I.SetABRFont, I.SpellName, I.Tex
 local RAID_BUFFS, _dismissedUntilLoad = I.RAID_BUFFS, I._dismissedUntilLoad
 local GLOW_VIEW, StopAllGlows = I.GLOW_VIEW, I.StopAllGlows
 
@@ -1214,6 +1214,7 @@ end
 
 local ShowForeverItemMenu
 local iconPickerStyle
+local ShowForeverGroupMenu
 
 local function GetOrCreateIcon(index)
     if iconPool[index] then return iconPool[index] end
@@ -1226,7 +1227,7 @@ local function GetOrCreateIcon(index)
     btn:Hide()
 
     -- Middle-click dismiss: hide this reminder until the next loading screen.
-    -- Right-click previews the next pet or opens a consumable picker.
+    -- Right-click previews the next pet or opens a spell or consumable picker.
     btn:HookScript("PostClick", function(self, button, down)
         if button == "MiddleButton" and self._dismissKey then
             _dismissedUntilLoad[self._dismissKey] = true
@@ -1238,6 +1239,8 @@ local function GetOrCreateIcon(index)
             if _G._EABR_RequestRefresh then _G._EABR_RequestRefresh() end
         elseif button == "RightButton" and self._foreverItemPicker and not InCombat() then
             ShowForeverItemMenu(self)
+        elseif button == "RightButton" and self._foreverGroup and not InCombat() then
+            ShowForeverGroupMenu(self)
         end
     end)
 
@@ -1318,6 +1321,37 @@ local function SetIconMacro(btn, macrotext, texture, spellID)
     btn._icon:SetTexture(texture or 134400)
     btn._tooltipSpell = spellID
     btn._tooltipItem = nil
+end
+
+function EABR.ForeverSelfCastMacro(spellName)
+    -- A faded pooled button can still receive clicks during lockdown.
+    return "/cast [@player,nocombat] " .. spellName
+end
+
+ShowForeverGroupMenu = function(btn)
+    if not (MenuUtil and MenuUtil.CreateContextMenu) then return end
+    local group = btn._foreverGroup
+    EABR.HideIconTooltip(btn)
+    MenuUtil.CreateContextMenu(btn, function(_, root)
+        root:CreateTitle(btn._tooltipLabel)
+        local seen = {}
+        for _, spellID in ipairs(group.ids) do
+            local castSpellID = EABR.ForeverGroupCastSpell(spellID)
+            if castSpellID and not seen[castSpellID] then
+                seen[castSpellID] = true
+                root:CreateRadio(SpellName(castSpellID), function()
+                    return btn._tooltipSpell == castSpellID
+                end, function()
+                    if InCombat() or btn._foreverGroup ~= group
+                        or not btn:IsVisible() or not tContains(group.ids, spellID) then return end
+                    local currentSpellID = EABR.ForeverGroupCastSpell(spellID)
+                    if not currentSpellID then return end
+                    group.castSpellID = spellID
+                    SetIconMacro(btn, EABR.ForeverSelfCastMacro(SpellName(currentSpellID)), Tex(currentSpellID), currentSpellID)
+                end)
+            end
+        end
+    end)
 end
 
 
@@ -1465,6 +1499,7 @@ do
         e.requestKey = nil; e.requestName = nil
         e.foreverItemPicker = nil
         e.noCompatibleEnhancement = nil
+        e.foreverGroup = nil
         return e
     end
 
