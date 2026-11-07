@@ -1054,13 +1054,28 @@ initFrame:SetScript("OnEvent", function(self)
     --  last slot. The page rebuilds on add and remove, so the slots never need
     --  in-place updates.
     ---------------------------------------------------------------------------
-    local function BuildForeverCustomRows(parent, y, lead)
+    local function BuildEnhancementCog(region)
+        if EllesmereUI._prebuilding then return end
+        EllesmereUI.BuildInlineCog(region, {
+            title = "Item Enhancements",
+            disabled = function() local f = FDB(); return not (f and f.itemEnhancements) end,
+            disabledTooltip = "Item Enhancements",
+            rows = {
+                { type="toggle", label="Show With Incompatible Items",
+                  tooltip="Show the reminder for an unenhanced weapon when you have an enhancement in your bags, even if it cannot be applied to that weapon.",
+                  get=function() local f = FDB(); return f and f.showIncompatibleEnhancements == true end,
+                  set=function(v) local f = FDB(); if f then f.showIncompatibleEnhancements = v; RefreshAll() end end },
+            },
+        })
+    end
+
+    local function BuildForeverCustomRows(parent, y, lead, first)
         local f = FDB()
         local ids = f and f.customIDs
         local newGroupSlot = { type="labeledButton", text="New Spell Group", buttonText="Create", width=90,
             tooltip="Creates a group of spells. A reminder shows if none of the auras from the group are active.",
             onClick=function() PromptSpellGroupName() end }
-        local n = 2 + (ids and #ids or 0)
+        local n = (first and 3 or 2) + (ids and #ids or 0)
         local W = EllesmereUI.Widgets
         local function Slot(id)
             return { type="labeledButton", buttonText="Remove", width=90,
@@ -1078,13 +1093,18 @@ initFrame:SetScript("OnEvent", function(self)
                 end }
         end
         local function SlotAt(k)
+            if first then
+                if k == 1 then return first end
+                k = k - 1
+            end
             if k == 1 then return lead end
             if k == 2 then return newGroupSlot end
             local id = ids and ids[k - 2]
             return id and Slot(id) or EllesmereUI.BlankRowCfg()
         end
         for k = 1, n, 2 do
-            local _, h = W:DualRow(parent, y, SlotAt(k), SlotAt(k + 1))
+            local row, h = W:DualRow(parent, y, SlotAt(k), SlotAt(k + 1))
+            if k == 1 and first then BuildEnhancementCog(row._leftRegion) end
             y = y - h
         end
         return y
@@ -1893,11 +1913,13 @@ initFrame:SetScript("OnEvent", function(self)
                 })
             end
 
-            -- Mage Armors | (empty): built for a Mage only, so no other class
-            -- sees a row or a shift. Its own row, so the custom spells below
-            -- (packed from their own first slot) never land in the empty one.
+            local enhancementSlot = { type="toggle", text="Item Enhancements",
+                tooltip="Reminds you when an equipped weapon is missing a temporary enhancement and you have a compatible item. Right-click to choose it, then left-click to apply it out of combat.",
+                getValue=function() local f = FDB(); return f and f.itemEnhancements == true end,
+                setValue=function(v) local f = FDB(); if f then f.itemEnhancements = v; RefreshAll() end end }
             if MAGE then
-                _, h = W:DualRow(parent, y,
+                local row
+                row, h = W:DualRow(parent, y,
                     { type="toggle", text="Mage Armors",
                       tooltip="Reminds you when no Frost Armor, Ice Armor or Mage Armor is up.\nThe icon is the one you last had on; click it to cast it.",
                       getValue=function() local f = FDB(); return f and f.mageArmor == true end,
@@ -1905,8 +1927,10 @@ initFrame:SetScript("OnEvent", function(self)
                           local f = FDB(); if not f then return end; f.mageArmor = v
                           RefreshAll()
                       end },
-                    EllesmereUI.BlankRowCfg()
+                    enhancementSlot
                 );  y = y - h
+                BuildEnhancementCog(row._rightRegion)
+                enhancementSlot = nil
             end
 
             -- Add Custom Spell, paired with the tracked spells
@@ -1919,7 +1943,7 @@ initFrame:SetScript("OnEvent", function(self)
                       if not f then return end
                       f.customIDs = f.customIDs or {}
                       AddSpellIDToList(f.customIDs, text)
-                  end })
+                  end }, enhancementSlot)
             y = BuildForeverGroupSections(parent, y)
 
             -- No preview header here, so no click-to-scroll mappings to wire.

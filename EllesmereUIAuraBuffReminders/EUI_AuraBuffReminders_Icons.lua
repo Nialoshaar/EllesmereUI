@@ -883,7 +883,11 @@ function EABR.ShowIconTooltip(f)
         if not ok then GameTooltip:Hide() end
     elseif f._tooltipLabel and f._tooltipLabel ~= "" then
         -- Plain-text reminders use the suite tooltip, never GameTooltip.
-        EllesmereUI.ShowWidgetTooltip(f, tostring(f._tooltipLabel))
+        local label = tostring(f._tooltipLabel)
+        if f._noCompatibleEnhancement then
+            label = label .. "\n|cffff4040" .. EllesmereUI.L("No compatible Weapon Enhancement item in bags") .. "|r"
+        end
+        EllesmereUI.ShowWidgetTooltip(f, label)
     end
 end
 
@@ -1208,7 +1212,7 @@ function EABR.ApplyEatingVisual(f, m)
     f:SetScript("OnUpdate", EABR.EatingTick)
 end
 
-local ShowForeverFoodMenu
+local ShowForeverItemMenu
 
 local function GetOrCreateIcon(index)
     if iconPool[index] then return iconPool[index] end
@@ -1221,7 +1225,7 @@ local function GetOrCreateIcon(index)
     btn:Hide()
 
     -- Middle-click dismiss: hide this reminder until the next loading screen.
-    -- Right-click previews the next pet or opens the Well Fed food picker.
+    -- Right-click previews the next pet or opens a consumable picker.
     btn:HookScript("PostClick", function(self, button, down)
         if button == "MiddleButton" and self._dismissKey then
             _dismissedUntilLoad[self._dismissKey] = true
@@ -1231,8 +1235,8 @@ local function GetOrCreateIcon(index)
         elseif button == "RightButton" and self._petCycleTotal then
             EABR._petCycleIndex = ((EABR._petCycleIndex or 1) % self._petCycleTotal) + 1
             if _G._EABR_RequestRefresh then _G._EABR_RequestRefresh() end
-        elseif button == "RightButton" and self._foreverFood and not InCombat() then
-            ShowForeverFoodMenu(self)
+        elseif button == "RightButton" and self._foreverItemPicker and not InCombat() then
+            ShowForeverItemMenu(self)
         end
     end)
 
@@ -1316,37 +1320,51 @@ local function SetIconMacro(btn, macrotext, texture, spellID)
 end
 
 
-function EABR.ForeverFoodMacro(itemID)
+function EABR.ForeverItemMacro(itemID, slot)
     -- A faded pooled button can still receive clicks during lockdown.
-    return "/use [nocombat] item:" .. itemID
+    local macro = "/use [nocombat] item:" .. itemID
+    if slot then macro = macro .. "\n/use [nocombat] " .. slot end
+    return macro
 end
 
-ShowForeverFoodMenu = function(btn)
+ShowForeverItemMenu = function(btn)
     if not (MenuUtil and MenuUtil.CreateContextMenu) then return end
     local fo = db.profile.forever
-    if not (fo and fo.wellFed and fo.wellFedInventory) then return end
-    local foods = EABR.GetForeverFood()
+    local picker = btn._foreverItemPicker
+    local slot = type(picker) == "number" and picker or nil
+    local function GetItems()
+        if db.profile.forever ~= fo or not fo then return end
+        if slot then
+            if fo.itemEnhancements and EABR.ForeverWeaponNeedsEnhancement(slot) then
+                return EABR.GetForeverEnhancements(slot)
+            end
+        elseif fo.wellFed and fo.wellFedInventory then
+            return EABR.GetForeverFood()
+        end
+    end
+    local items = GetItems()
+    if not items then return end
     local ids = {}
-    for id in pairs(foods) do ids[#ids + 1] = id end
+    for id in pairs(items) do ids[#ids + 1] = id end
     if #ids == 0 then return end
     table.sort(ids)
     EABR.HideIconTooltip(btn)
     MenuUtil.CreateContextMenu(btn, function(_, root)
         root:CreateTitle(btn._tooltipLabel)
         local function IsSelected(id) return btn._tooltipItem == id end
-        local function SelectFood(id)
-            if InCombat() or not btn:IsVisible() or not btn._foreverFood
-                or db.profile.forever ~= fo or not fo.wellFed or not fo.wellFedInventory then return end
-            local count = EABR.GetForeverFood()[id]
+        local function SelectItem(id)
+            if InCombat() or not btn:IsVisible() or btn._foreverItemPicker ~= picker then return end
+            local currentItems = GetItems()
+            local count = currentItems and currentItems[id]
             if not count then return end
-            fo.wellFedItem = id
-            SetIconMacro(btn, EABR.ForeverFoodMacro(id), C_Item.GetItemIconByID(id))
+            if slot then fo.enhancementItems[slot] = id else fo.wellFedItem = id end
+            SetIconMacro(btn, EABR.ForeverItemMacro(id, slot), C_Item.GetItemIconByID(id))
             btn._tooltipItem = id
             EABR.ApplyIconBagCount(btn, count)
         end
         for _, id in ipairs(ids) do
             local name = C_Item.GetItemNameByID(id) or tostring(id)
-            root:CreateRadio(name .. " (" .. foods[id] .. ")", IsSelected, SelectFood, id)
+            root:CreateRadio(name .. " (" .. items[id] .. ")", IsSelected, SelectItem, id)
         end
     end)
 end
@@ -1378,7 +1396,8 @@ do
         e.groupHave = nil
         e.groupTotal = nil
         e.requestKey = nil; e.requestName = nil
-        e.foreverFood = nil
+        e.foreverItemPicker = nil
+        e.noCompatibleEnhancement = nil
         return e
     end
 
@@ -1405,6 +1424,17 @@ do
         btn._text:SetText(m.label or "")
         btn._icon:SetDesaturated(m.desaturated or false)
         btn._tooltipLabel = m.label or nil
+        if m.noCompatibleEnhancement then
+            local color = CooldownViewerConstants and CooldownViewerConstants.ITEM_NOT_IN_RANGE_COLOR
+            if color then
+                btn._icon:SetVertexColor(color:GetRGBA())
+            else
+                btn._icon:SetVertexColor(1, 0.4, 0.4)
+            end
+        elseif btn._noCompatibleEnhancement then
+            btn._icon:SetVertexColor(1, 1, 1)
+        end
+        btn._noCompatibleEnhancement = m.noCompatibleEnhancement
     end
 end
 

@@ -352,6 +352,15 @@ do
     end
 end
 
+local function SetForeverItemEntry(e, id, count, slot)
+    e.mode = "macro"
+    e.macro = EABR.ForeverItemMacro(id, slot)
+    e.spellID = nil
+    e.tooltipItem = id
+    e.texture = C_Item.GetItemIconByID(id) or e.texture
+    e.bagCount = count
+end
+
 -- WoW Forever reminders track absence only. Custom spells check their rank
 -- families. The section is hidden in combat, and the built-in special
 -- reminders are also hidden in PvP.
@@ -418,18 +427,35 @@ function EABR.CollectForever(missing, inInstance, inPvP)
             e.cat = "forever"; e.dismissKey = "forever:wellfed"
             if fo.wellFedInventory then
                 local foods = EABR.GetForeverFood()
-                e.foreverFood = next(foods) ~= nil
+                e.foreverItemPicker = next(foods) ~= nil
                 local id = fo.wellFedItem
                 if id and foods[id] then
-                    e.mode = "macro"
-                    e.macro = EABR.ForeverFoodMacro(id)
-                    e.spellID = nil
-                    e.tooltipItem = id
-                    e.texture = C_Item.GetItemIconByID(id) or e.texture
-                    e.bagCount = foods[id]
+                    SetForeverItemEntry(e, id, foods[id])
                 end
             end
             missing[#missing+1] = e
+        end
+    end
+    if fo.itemEnhancements and open then
+        for slot = INVSLOT_MAINHAND, INVSLOT_OFFHAND do
+            if EABR.ForeverWeaponNeedsEnhancement(slot) then
+                local items, hasBagItems = EABR.GetForeverEnhancements(slot)
+                local hasCompatible = items and next(items) ~= nil
+                if hasCompatible or (fo.showIncompatibleEnhancements and hasBagItems) then
+                    local e = AcquireEntry()
+                    e.mode = "texture"
+                    e.texture = GetInventoryItemTexture("player", slot)
+                    e.label = EllesmereUI.L(slot == INVSLOT_MAINHAND and "Main Hand" or "Off Hand")
+                    e.cat = "forever"; e.dismissKey = "forever:enhancement:" .. slot
+                    e.noCompatibleEnhancement = not hasCompatible
+                    if hasCompatible then
+                        e.foreverItemPicker = slot
+                        local id = fo.enhancementItems[slot]
+                        if id and items[id] then SetForeverItemEntry(e, id, items[id], slot) end
+                    end
+                    missing[#missing+1] = e
+                end
+            end
         end
     end
     if fo.mageArmor and open and GetPlayerClass() == "MAGE" then
@@ -679,6 +705,8 @@ local function Refresh()
     if EABR.FOREVER then
         local fo = db.profile.forever
         EABR.SyncForeverFoodWatch(fo and fo.wellFed and fo.wellFedInventory == true
+            and db.profile.display.remindersEnabled ~= false)
+        EABR.SyncForeverEnhancementWatch(fo and fo.itemEnhancements == true
             and db.profile.display.remindersEnabled ~= false)
     end
     -- WoW Forever: the returns below show nothing, so the Raid Buffs group

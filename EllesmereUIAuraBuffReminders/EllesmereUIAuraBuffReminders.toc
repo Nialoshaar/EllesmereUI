@@ -16,6 +16,7 @@ EUI_AuraBuffReminders_Data.lua
 EUI_AuraBuffReminders_Defaults.lua
 EUI_AuraBuffReminders_Icons.lua
 EUI_AuraBuffReminders_Collect.lua
+EUI_AuraBuffReminders_Enhancements.lua
 EUI_AuraBuffReminders_Refresh.lua
 EUI_AuraBuffReminders_Unlock.lua
 EUI_AuraBuffReminders_Beacon.lua
