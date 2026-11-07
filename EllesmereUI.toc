@@ -119,3 +119,5 @@ EUI_SpecOverrides_Hooks.lua
 # Conditional Overrides engine (Dungeon/Raid/Arena/BG/Solo/Keybind conditions;
 # override integration lives in EUI_SpecOverrides_Conditional.lua)
 EllesmereUI_Conditions.lua
+
+EllesmereUI_LocaleDev.lua
