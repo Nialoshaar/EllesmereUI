@@ -1759,7 +1759,7 @@ initFrame:SetScript("OnEvent", function(self)
         if FOREVER then
             _, h = W:DualRow(parent, y,
                 { type="dropdown", text="Right-Click Picker Layout",
-                  tooltip="Choose how the Well Fed and Item Enhancements pickers display your items.",
+                  tooltip="Choose how spell groups, Well Fed, and Item Enhancements display their right-click choices.",
                   values={ list="Name List", icons="Icon Row" }, order={ "list", "icons" },
                   getValue=function() local d = DDB(); return d and d.pickerLayout or "list" end,
                   setValue=function(v) local d = DDB(); if d then d.pickerLayout = v end end },
