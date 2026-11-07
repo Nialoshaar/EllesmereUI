@@ -82,6 +82,7 @@ local defaults = {
             yOffset = 200,
             showText = true,
             showTooltips = true,
+            pickerLayout = "list",
             textColor = {r=1, g=1, b=1},
             textSize = 12,
             textXOffset = 0,

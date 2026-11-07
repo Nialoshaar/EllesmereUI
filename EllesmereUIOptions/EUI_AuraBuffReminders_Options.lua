@@ -1755,6 +1755,17 @@ initFrame:SetScript("OnEvent", function(self)
               end }
         );  y = y - h
 
+        if FOREVER then
+            _, h = W:DualRow(parent, y,
+                { type="dropdown", text="Right-Click Picker Layout",
+                  tooltip="Choose how the Well Fed and Item Enhancements pickers display your items.",
+                  values={ list="Name List", icons="Icon Row" }, order={ "list", "icons" },
+                  getValue=function() local d = DDB(); return d and d.pickerLayout or "list" end,
+                  setValue=function(v) local d = DDB(); if d then d.pickerLayout = v end end },
+                EllesmereUI.BlankRowCfg()
+            );  y = y - h
+        end
+
         _, h = W:Spacer(parent, y, 20);  y = y - h
 
         -----------------------------------------------------------------------

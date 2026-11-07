@@ -1213,6 +1213,7 @@ function EABR.ApplyEatingVisual(f, m)
 end
 
 local ShowForeverItemMenu
+local iconPickerStyle
 
 local function GetOrCreateIcon(index)
     if iconPool[index] then return iconPool[index] end
@@ -1349,8 +1350,35 @@ ShowForeverItemMenu = function(btn)
     if #ids == 0 then return end
     table.sort(ids)
     EABR.HideIconTooltip(btn)
-    MenuUtil.CreateContextMenu(btn, function(_, root)
-        root:CreateTitle(btn._tooltipLabel)
+    local iconView = db.profile.display.pickerLayout == "icons"
+        and MenuConstants and MenuConstants.HorizontalGridDirection and MenuVariants
+    local previousStyle = btn.menuMixin
+    if iconView then
+        if not iconPickerStyle then
+            local inset = { left = 4, right = 4, top = 4, bottom = 4 }
+            local padding = { width = 0, height = 0 }
+            iconPickerStyle = CreateFromMixins(MenuVariants.GetDefaultContextMenuMixin(), {
+                GetInset = function() return inset end,
+                GetChildExtentPadding = function() return padding end,
+                Generate = function(frame)
+                    local background = frame:AttachTexture()
+                    background:SetAtlas("common-dropdown-bg")
+                    background:SetAllPoints()
+                    background:SetAlpha(0.925)
+                end,
+            })
+        end
+        btn.menuMixin = iconPickerStyle
+    end
+    local menu = MenuUtil.CreateContextMenu(btn, function(_, root)
+        if iconView then
+            local columns = math.min(#ids, max(1, floor((UIParent:GetWidth() - 32) / 42)))
+            root:SetGridMode(MenuConstants.HorizontalGridDirection, columns, 2)
+            -- The context menu otherwise applies a minimum width meant for text rows.
+            root:SetMaximumWidth(columns * 38 + 8)
+        else
+            root:CreateTitle(btn._tooltipLabel)
+        end
         local function IsSelected(id) return btn._tooltipItem == id end
         local function SelectItem(id)
             if InCombat() or not btn:IsVisible() or btn._foreverItemPicker ~= picker then return end
@@ -1363,10 +1391,49 @@ ShowForeverItemMenu = function(btn)
             EABR.ApplyIconBagCount(btn, count)
         end
         for _, id in ipairs(ids) do
-            local name = C_Item.GetItemNameByID(id) or tostring(id)
-            root:CreateRadio(name .. " (" .. items[id] .. ")", IsSelected, SelectItem, id)
+            if iconView then
+                local button = root:CreateButton("", SelectItem, id)
+                button:AddInitializer(function(frame, description)
+                    local itemID = description:GetData()
+                    if IsSelected(itemID) then
+                        local border = frame:AttachTexture()
+                        border:SetSize(38, 38)
+                        border:SetPoint("CENTER")
+                        border:SetColorTexture(1, 0.82, 0, 1)
+                    end
+                    local icon = frame:AttachTexture()
+                    icon:SetDrawLayer("ARTWORK", 1)
+                    icon:SetSize(34, 34)
+                    icon:SetPoint("CENTER")
+                    icon:SetTexture(C_Item.GetItemIconByID(itemID) or 134400)
+                    local count = frame:AttachFontString()
+                    count:SetFontObject(NumberFontNormalSmall)
+                    count:SetDrawLayer("OVERLAY", 7)
+                    count:SetWidth(30)
+                    count:SetJustifyH("RIGHT")
+                    count:SetPoint("CENTER", frame, "CENTER", 0, -10)
+                    count:SetText(tostring(items[itemID]))
+                    return 38, 38
+                end)
+                button:SetTooltip(function(tooltip, description)
+                    local owner = tooltip:GetOwner()
+                    tooltip:SetOwner(owner, "ANCHOR_NONE")
+                    tooltip:ClearAllPoints()
+                    tooltip:SetPoint("BOTTOMLEFT", owner, "TOPRIGHT", 4, 4)
+                    tooltip:SetItemByID(description:GetData())
+                end)
+            else
+                local name = C_Item.GetItemNameByID(id) or tostring(id)
+                root:CreateRadio(name .. " (" .. items[id] .. ")", IsSelected, SelectItem, id)
+            end
         end
     end)
+    if iconView then btn.menuMixin = previousStyle end
+    if menu and not InputUtil.IsGamepadUIEnabled() then
+        local point = menu:GetPoint()
+        menu:ClearAllPoints()
+        InputUtil.AnchorRegionToCursor(menu, point == "BOTTOMLEFT" and "BOTTOM" or "TOP")
+    end
 end
 
 -------------------------------------------------------------------------------
