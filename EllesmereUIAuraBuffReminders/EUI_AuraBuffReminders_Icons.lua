@@ -1208,6 +1208,8 @@ function EABR.ApplyEatingVisual(f, m)
     f:SetScript("OnUpdate", EABR.EatingTick)
 end
 
+local ShowForeverFoodMenu
+
 local function GetOrCreateIcon(index)
     if iconPool[index] then return iconPool[index] end
     -- SecureActionButtonTemplate for click-to-cast in combat
@@ -1219,10 +1221,7 @@ local function GetOrCreateIcon(index)
     btn:Hide()
 
     -- Middle-click dismiss: hide this reminder until the next loading screen.
-    -- Right-click on a multi-pet-cycle reminder previews the next pet without
-    -- casting (ShowIcon's pass-through toggle decides whether this reminder
-    -- claims the click at all, vs letting it fall through like every other
-    -- reminder does).
+    -- Right-click previews the next pet or opens the Well Fed food picker.
     btn:HookScript("PostClick", function(self, button, down)
         if button == "MiddleButton" and self._dismissKey then
             _dismissedUntilLoad[self._dismissKey] = true
@@ -1232,6 +1231,8 @@ local function GetOrCreateIcon(index)
         elseif button == "RightButton" and self._petCycleTotal then
             EABR._petCycleIndex = ((EABR._petCycleIndex or 1) % self._petCycleTotal) + 1
             if _G._EABR_RequestRefresh then _G._EABR_RequestRefresh() end
+        elseif button == "RightButton" and self._foreverFood and not InCombat() then
+            ShowForeverFoodMenu(self)
         end
     end)
 
@@ -1315,6 +1316,41 @@ local function SetIconMacro(btn, macrotext, texture, spellID)
 end
 
 
+function EABR.ForeverFoodMacro(itemID)
+    -- A faded pooled button can still receive clicks during lockdown.
+    return "/use [nocombat] item:" .. itemID
+end
+
+ShowForeverFoodMenu = function(btn)
+    if not (MenuUtil and MenuUtil.CreateContextMenu) then return end
+    local fo = db.profile.forever
+    if not (fo and fo.wellFed and fo.wellFedInventory) then return end
+    local foods = EABR.GetForeverFood()
+    local ids = {}
+    for id in pairs(foods) do ids[#ids + 1] = id end
+    if #ids == 0 then return end
+    table.sort(ids)
+    EABR.HideIconTooltip(btn)
+    MenuUtil.CreateContextMenu(btn, function(_, root)
+        root:CreateTitle(btn._tooltipLabel)
+        local function IsSelected(id) return btn._tooltipItem == id end
+        local function SelectFood(id)
+            if InCombat() or not btn:IsVisible() or not btn._foreverFood
+                or db.profile.forever ~= fo or not fo.wellFed or not fo.wellFedInventory then return end
+            local count = EABR.GetForeverFood()[id]
+            if not count then return end
+            fo.wellFedItem = id
+            SetIconMacro(btn, EABR.ForeverFoodMacro(id), C_Item.GetItemIconByID(id))
+            btn._tooltipItem = id
+            EABR.ApplyIconBagCount(btn, count)
+        end
+        for _, id in ipairs(ids) do
+            local name = C_Item.GetItemNameByID(id) or tostring(id)
+            root:CreateRadio(name .. " (" .. foods[id] .. ")", IsSelected, SelectFood, id)
+        end
+    end)
+end
+
 -------------------------------------------------------------------------------
 --  Data-driven setup: eliminates per-refresh closure + table allocations
 -------------------------------------------------------------------------------
@@ -1342,6 +1378,7 @@ do
         e.groupHave = nil
         e.groupTotal = nil
         e.requestKey = nil; e.requestName = nil
+        e.foreverFood = nil
         return e
     end
 

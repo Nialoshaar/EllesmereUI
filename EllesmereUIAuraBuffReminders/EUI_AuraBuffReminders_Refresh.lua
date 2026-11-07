@@ -281,19 +281,80 @@ function EABR.CollectMageArmor(missing, auraLock, ids)
     if id then EABR.FvSpellEntry(missing, id, "forever:magearmor", EllesmereUI.L("Armor")) end
 end
 
--- WoW Forever collector: the Camp Benefits campfire buff, Well Fed (any food
--- buff: the shared Well Fed name, or one of EABR.FOOD_BUFFS), the gathering
--- and Find Treasure trackers, a Mage's armors (EABR.CollectMageArmor), the
--- user's spell groups (EABR.CollectForeverGroups) and custom spell IDs,
--- absence only (no expiry thresholds). A custom ID counts as up while any
--- spell of its rank family is (EABR.ForeverFamily). Entries are display-only
--- textures carrying the spell for the tooltip, except the two trackers and the
--- mage armors, whose click casts the spell; presence goes through
--- PlayerHasAuraByID. The section shows nothing in combat (its Where to Show
--- offers no In Combat entry: always unchecked), and Camp Benefits, Well Fed,
--- the mage armors and the trackers nothing in PvP either. The one-slot id
--- table, the cached families, the kept minimap answer and the dismiss-key
--- memo keep the pass allocation-free.
+do
+    -- Use the client's localized name for the food family, shared by many spell IDs.
+    local NUTRITIOUS_FOOD = 1248377
+    local watch, watching, foods, pending
+
+    function EABR.GetForeverFood()
+        if foods then return foods end
+        foods = {}
+        local name = SpellName(NUTRITIOUS_FOOD)
+        if not name then
+            C_Spell.RequestLoadSpellData(NUTRITIOUS_FOOD)
+            return foods
+        end
+        wipe(pending)
+        for bag = 0, NUM_BAG_SLOTS do
+            for slot = 1, C_Container.GetContainerNumSlots(bag) do
+                local info = C_Container.GetContainerItemInfo(bag, slot)
+                local id = info and info.itemID
+                if id and not pending[id] then
+                    if foods[id] then
+                        foods[id] = foods[id] + info.stackCount
+                    elseif select(6, C_Item.GetItemInfoInstant(id)) == Enum.ItemClass.Consumable then
+                        if not C_Item.IsItemDataCachedByID(id) then
+                            pending[id] = true
+                            C_Item.RequestLoadItemDataByID(id)
+                        elseif C_Item.GetItemSpell(id) == name then
+                            foods[id] = info.stackCount
+                        end
+                    end
+                end
+            end
+        end
+        return foods
+    end
+
+    function EABR.SyncForeverFoodWatch(want)
+        if want == watching then return end
+        watching = want
+        foods = nil
+        if not want then
+            if watch then watch:UnregisterAllEvents(); wipe(pending) end
+            return
+        end
+        if not watch then
+            pending = {}
+            watch = CreateFrame("Frame")
+            watch:SetScript("OnEvent", function(_, event, id, success)
+                if event == "BAG_UPDATE_DELAYED" or (success and
+                    ((event == "ITEM_DATA_LOAD_RESULT" and pending[id]) or
+                     (event == "SPELL_DATA_LOAD_RESULT" and id == NUTRITIOUS_FOOD))) then
+                    foods = nil
+                    if _G._EABR_RequestRefresh then _G._EABR_RequestRefresh() end
+                end
+            end)
+        end
+        watch:RegisterEvent("BAG_UPDATE_DELAYED")
+        watch:RegisterEvent("ITEM_DATA_LOAD_RESULT")
+        watch:RegisterEvent("SPELL_DATA_LOAD_RESULT")
+    end
+
+    _G._EABR_RepopulateForeverFood = function()
+        local fo = db and db.profile.forever
+        if not (fo and fo.wellFed and fo.wellFedInventory
+            and db.profile.display.remindersEnabled ~= false) then return end
+        EABR.SyncForeverFoodWatch(true)
+        foods = nil
+        if not InCombat() then EABR.GetForeverFood() end
+        if _G._EABR_RequestRefresh then _G._EABR_RequestRefresh() end
+    end
+end
+
+-- WoW Forever reminders track absence only. Custom spells check their rank
+-- families. The section is hidden in combat, and the built-in special
+-- reminders are also hidden in PvP.
 function EABR.CollectForever(missing, inInstance, inPvP)
     local fo = db.profile.forever
     local shows = fo and not InCombat() and EABR.SectionShows(fo.whereToShow, inInstance)
@@ -355,6 +416,19 @@ function EABR.CollectForever(missing, inInstance, inPvP)
             e.texture = Tex(EABR.WELL_FED)
             e.label = name
             e.cat = "forever"; e.dismissKey = "forever:wellfed"
+            if fo.wellFedInventory then
+                local foods = EABR.GetForeverFood()
+                e.foreverFood = next(foods) ~= nil
+                local id = fo.wellFedItem
+                if id and foods[id] then
+                    e.mode = "macro"
+                    e.macro = EABR.ForeverFoodMacro(id)
+                    e.spellID = nil
+                    e.tooltipItem = id
+                    e.texture = C_Item.GetItemIconByID(id) or e.texture
+                    e.bagCount = foods[id]
+                end
+            end
             missing[#missing+1] = e
         end
     end
@@ -602,6 +676,11 @@ local function Refresh()
     -- Pooled reminder buttons are children of iconAnchor, built in OnEnable (PLAYER_LOGIN). File-scope events (SPELLS_CHANGED, PLAYER_TALENT_UPDATE,
     -- TRAIT_CONFIG_UPDATED, ...) can fire DURING loading before OnEnable runs; a reminder created then via GetOrCreateIcon gets a nil parent and renders oversized forever (scale 1.0, not UIParent scale -- pooled buttons are never re-parented). Wait for the anchor; OnEnable fires its own refresh.
     if not iconAnchor then return end
+    if EABR.FOREVER then
+        local fo = db.profile.forever
+        EABR.SyncForeverFoodWatch(fo and fo.wellFed and fo.wellFedInventory == true
+            and db.profile.display.remindersEnabled ~= false)
+    end
     -- WoW Forever: the returns below show nothing, so the Raid Buffs group
     -- watch and the tracking event stand down with them (EABR.FvStandDown);
     -- the event that ends each state (panel close, vehicle exit, alive, rest

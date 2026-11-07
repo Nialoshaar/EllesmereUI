@@ -1824,7 +1824,8 @@ initFrame:SetScript("OnEvent", function(self)
             });  y = y - h
 
             -- Camp Benefits | Well Fed
-            _, h = W:DualRow(parent, y,
+            local wellFedRow
+            wellFedRow, h = W:DualRow(parent, y,
                 { type="toggle", text="Camp Benefits",
                   tooltip="Reminds you when the Camp Benefits campfire buff is missing.",
                   getValue=function() local f = FDB(); return not f or f.camp ~= false end,
@@ -1841,6 +1842,23 @@ initFrame:SetScript("OnEvent", function(self)
                       RefreshAll()
                   end }
             );  y = y - h
+
+            if not EllesmereUI._prebuilding then
+                EllesmereUI.BuildInlineCog(wellFedRow._rightRegion, {
+                    title = _G._EABR_SpellName(19705, "Well Fed"),
+                    disabled = function() local f = FDB(); return not (f and f.wellFed) end,
+                    disabledTooltip = _G._EABR_SpellName(19705, "Well Fed"),
+                    rows = {
+                        { type="toggle", label="Get Food from Inventory",
+                          tooltip="Right-click the Well Fed reminder to pick food from your bags. Left-click to eat it out of combat.",
+                          get=function() local f = FDB(); return f and f.wellFedInventory == true end,
+                          set=function(v) local f = FDB(); if f then f.wellFedInventory = v; RefreshAll() end end },
+                        { type="button", label="Repopulate",
+                          hidden=function() local f = FDB(); return not (f and f.wellFedInventory) end,
+                          action=function() if _G._EABR_RepopulateForeverFood then _G._EABR_RepopulateForeverFood() end end },
+                    },
+                })
+            end
 
             -- Gathering Tracking (+ class tracking cog) | Find Treasure
             local gatherRow
