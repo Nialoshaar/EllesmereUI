@@ -595,6 +595,30 @@ if EllesmereUI.IS_FOREVER then
             break
         end
     end
+
+    -- Keep each Minor potion as the saved key while showing the strongest eligible tier.
+    local healingPotion = {
+        key = "forever_healing_potion",
+        name = "Healing Potion",
+        icon = (C_Item and C_Item.GetItemIconByID and C_Item.GetItemIconByID(118)) or 134400,
+        itemID = 118,
+        altItemIDs = { 13446, 3928, 1710, 929, 858 },
+        displayOrder = { 13446, 3928, 1710, 929, 858, 118 },
+        minLevels = { [13446] = 45, [3928] = 35, [1710] = 21, [929] = 12, [858] = 3, [118] = 1 },
+    }
+    local manaPotion = {
+        key = "forever_mana_potion",
+        name = "Mana Potion",
+        icon = (C_Item and C_Item.GetItemIconByID and C_Item.GetItemIconByID(2455)) or 134400,
+        itemID = 2455,
+        altItemIDs = { 13444, 13443, 6149, 3827, 3385 },
+        displayOrder = { 13444, 13443, 6149, 3827, 3385, 2455 },
+        minLevels = { [13444] = 49, [13443] = 41, [6149] = 31, [3827] = 22, [3385] = 14, [2455] = 5 },
+    }
+    ns.ForeverPotionPresets = { healingPotion, manaPotion }
+    for _, preset in ipairs(ns.ForeverPotionPresets) do
+        CDM_ITEM_PRESETS[#CDM_ITEM_PRESETS + 1] = preset
+    end
 end
 
 -- Pandemic Glow is the Anti-Clip Glow (EUI_CDM_ForeverAntiClip.lua) where auras
