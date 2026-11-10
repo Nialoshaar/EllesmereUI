@@ -772,7 +772,7 @@ do
     assert(not FindWellFed() and EABR._nextDurationRefreshTime == aura.expirationTime - 120)
     aura.expirationTime = GetTime() + 119
     entry = FoodEntry()
-    assert(entry.expireAt == aura.expirationTime and entry.expireTotal == 120 and entry.expireSwipe)
+    assert(entry.expireAt == aura.expirationTime and entry.expireTotal == 120 and entry.expireSwipe == "reverse")
     assert(entry.mode == "texture")
     local now = GetTime()
     GetTime = function() return now + 30 end

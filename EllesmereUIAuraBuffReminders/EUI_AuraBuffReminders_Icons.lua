@@ -1223,6 +1223,7 @@ function EABR.ApplyIconExpiry(f, m)
             swipe:SetDrawBling(false)
             f._expirySwipe = swipe
         end
+        swipe:SetReverse(m.expireSwipe == "reverse")
         swipe:SetCooldown(expireAt - m.expireTotal, m.expireTotal)
         swipe:Show()
     elseif swipe then

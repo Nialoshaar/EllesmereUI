@@ -943,7 +943,7 @@ function EABR.CollectForever(missing, inInstance, inPvP)
             e.texture = Tex(EABR.WELL_FED)
             e.label = name
             e.cat = "forever"; e.dismissKey = "forever:wellfed"
-            if expireAt then e.expireAt, e.expireTotal, e.expireSwipe = expireAt, warnSec, true end
+            if expireAt then e.expireAt, e.expireTotal, e.expireSwipe = expireAt, warnSec, "reverse" end
             if watchFood then
                 local foods = EABR.GetForeverFood()
                 e.foreverFood = next(foods) and foods or nil
