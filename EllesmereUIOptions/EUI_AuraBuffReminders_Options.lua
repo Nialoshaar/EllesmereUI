@@ -1953,8 +1953,19 @@ initFrame:SetScript("OnEvent", function(self)
                     rows = {
                         { type="toggle", label="Get Food from Inventory",
                           tooltip="Right-click the Well Fed reminder to pick food from your bags. Left-click to eat it out of combat.",
+                          disabled=function() local f = FDB(); return not (f and f.pickerEnabled == true) end,
+                          disabledTooltip="Action Picker",
                           get=function() local f = FDB(); return f and f.wellFedInventory == true end,
-                          set=function(v) local f = FDB(); if f then f.wellFedInventory = v and true or nil; RefreshAll() end end },
+                          set=function(v)
+                              local f = FDB()
+                              if not (f and f.wellFed and f.pickerEnabled == true) then return end
+                              f.wellFedInventory = v and true or nil
+                              RefreshAll()
+                          end },
+                        { type="slider", label="Show Below (Minutes)", min=0, max=10, step=1,
+                          tooltip="Show the reminder before Well Fed expires. Set to 0 to show it only after the buff expires.",
+                          get=function() local f = FDB(); return f and f.wellFedShowBelow or 0 end,
+                          set=function(v) local f = FDB(); if f then f.wellFedShowBelow = v ~= 0 and v or nil; RefreshAll() end end },
                     },
                 })
                 EllesmereUI.BuildInlineCog(gatherRow._rightRegion, {

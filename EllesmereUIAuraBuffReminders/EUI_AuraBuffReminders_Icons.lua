@@ -1213,6 +1213,21 @@ end
 
 function EABR.ApplyIconExpiry(f, m)
     local expireAt = m and m.expireAt
+    local swipe = f._expirySwipe
+    if expireAt and m.expireSwipe then
+        if not swipe then
+            swipe = CreateFrame("Cooldown", nil, f, "CooldownFrameTemplate")
+            swipe:SetAllPoints(f._icon)
+            swipe:SetHideCountdownNumbers(true)
+            swipe:SetDrawEdge(false)
+            swipe:SetDrawBling(false)
+            f._expirySwipe = swipe
+        end
+        swipe:SetCooldown(expireAt - m.expireTotal, m.expireTotal)
+        swipe:Show()
+    elseif swipe then
+        swipe:Hide()
+    end
     local binding = f._expiryBinding
     if not expireAt then
         if binding then binding:SetEnabled(false) end
@@ -1559,8 +1574,8 @@ ShowForeverFoodMenu = function(btn)
     local foods = btn._foreverFood
     local function IsCurrent()
         return not InCombat() and db.profile == profile and profile.forever == fo
-            and fo and fo.wellFed and fo.wellFedInventory == true
-            and foods and btn._foreverFood == foods and btn:IsVisible()
+            and fo and fo.pickerEnabled == true and fo.wellFed and fo.wellFedInventory == true
+            and foods and EABR.IsForeverFoodCurrent(foods) and btn._foreverFood == foods and btn:IsVisible()
     end
     if not IsCurrent() then return end
     local ids = {}
@@ -1619,7 +1634,7 @@ do
         e.tooltipItem = nil
         e.cat = nil; e.data = nil; e.dismissKey = nil; e.petCycleTotal = nil
         e.isEating = nil; e.eatingExpirationTime = nil
-        e.expireAt = nil; e.expireTotal = nil
+        e.expireAt = nil; e.expireTotal = nil; e.expireSwipe = nil
         e.qualityAtlas = nil
         e.bagCount = nil
         e.substitute = nil

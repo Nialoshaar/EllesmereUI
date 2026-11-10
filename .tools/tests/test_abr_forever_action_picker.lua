@@ -606,26 +606,191 @@ local toggle = OPTIONS_SRC:match('{ type="toggle", text="Action Picker",.-Refres
 assert(toggle and toggle:find("FDB()", 1, true) and not toggle:find("DDB()", 1, true),
     "the options toggle does not use the WoW Forever settings")
 
--- Well Fed uses the same grid, including when there is only one food.
-fo.wellFed, fo.wellFedInventory = true, true
-local foodID, count = 9001, 3
-C_Item.GetItemCount = function() return count end
-C_Item.GetItemIconByID = function(id) return id + 100 end
-local foodButton = Button({})
-foodButton._foreverFood = { [foodID] = count }
-ShowForeverFoodMenu(foodButton)
-rec = MENU.last
-assert(rec.owner == foodButton and rec.direction == MenuConstants.HorizontalGridDirection)
-assert(rec.columns == 1 and #rec.buttons == 1 and CellFrame(rec.buttons[1]).badge == count)
-count = 0
-Pick(rec, foodID)
-assert(not fo.wellFedItem, "an item that ran out was accepted")
-count = 2
-Pick(rec, foodID)
-assert(fo.wellFedItem == foodID and foodButton._tooltipItem == foodID)
-assert(foodButton.macro == "/use [nocombat] item:" .. foodID and foodButton.texture == foodID + 100)
-foodButton._foreverFood = { [foodID] = count }
-EABR.ValidateOpenPicker()
-assert(rec.isClosed, "the picker kept a stale inventory snapshot")
+-- Well Fed exercises the actual collector and the watcher, with refresh held until Collect().
+do
+    local foodID, otherID, spellID = 9001, 9002, 1248377
+    EABR.WELL_FED = 19705
+    EABR.FOOD_BUFFS = { EABR.WELL_FED }
+    fo.wellFed, fo.wellFedInventory, fo.pickerEnabled = true, true, false
+    local watch, onFoodEvent
+    CreateFrame = function()
+        assert(not watch, "food watcher was built more than once")
+        watch = { events = {} }
+        function watch:SetScript(_, handler) onFoodEvent = handler end
+        function watch:RegisterEvent(event) self.events[event] = true end
+        function watch:UnregisterAllEvents() wipe(self.events) end
+        return watch
+    end
+    local function Fire(event, ...)
+        assert(watch.events[event], "food event is not registered")
+        onFoodEvent(watch, event, ...)
+    end
+    local scans, refreshes, itemLoads, spellLoads = 0, 0, 0, 0
+    _G._EABR_RequestRefresh = function() refreshes = refreshes + 1 end
+    local bag = { { itemID = foodID, stackCount = 1 }, { itemID = foodID, stackCount = 2 },
+        { itemID = otherID, stackCount = 5 } }
+    local cached = { [foodID] = true }
+    NUM_BAG_SLOTS = 0
+    Enum.ItemClass = { Consumable = 0 }
+    C_Container = {
+        GetContainerNumSlots = function() scans = scans + 1; return #bag end,
+        GetContainerItemInfo = function(_, slot) return bag[slot] end,
+    }
+    C_Spell.RequestLoadSpellData = function(id)
+        assert(id == spellID)
+        spellLoads = spellLoads + 1
+    end
+    C_Item.GetItemInfoInstant = function(id) return id, nil, nil, nil, nil, Enum.ItemClass.Consumable end
+    C_Item.GetItemSpell = function() return "Nourriture nutritive" end
+    C_Item.IsItemDataCachedByID = function(id) return cached[id] end
+    C_Item.RequestLoadItemDataByID = function(id)
+        assert(id == otherID)
+        itemLoads = itemLoads + 1
+    end
+    C_Item.GetItemCount = function(id)
+        local count = 0
+        for _, slot in ipairs(bag) do
+            if slot.itemID == id then count = count + slot.stackCount end
+        end
+        return count
+    end
+    C_Item.GetItemIconByID = function(id) return id + 100 end
+    local function FoodEntry() return assert(Entry(Collect(), "forever:wellfed")) end
+    assert(FoodEntry().mode == "texture" and not watch and scans == 0)
+    fo.pickerEnabled = true
+    assert(not FoodEntry().foreverFood and watch.events.SPELL_DATA_LOAD_RESULT and spellLoads == 1)
+    assert(not FoodEntry().foreverFood and spellLoads == 1 and scans == 0)
+    NAMES[spellID] = "Nourriture nutritive"
+    Fire("SPELL_DATA_LOAD_RESULT", spellID, true)
+    local entry = FoodEntry()
+    assert(refreshes == 1 and scans == 1 and itemLoads == 1 and entry.foreverFood[foodID] == 3)
+    assert(FoodEntry().foreverFood == entry.foreverFood and scans == 1)
+    local foodButton = Button(entry)
+    foodButton._foreverFood = entry.foreverFood
+    ShowForeverFoodMenu(foodButton)
+    rec = MENU.last
+    assert(rec.owner == foodButton and rec.direction == MenuConstants.HorizontalGridDirection)
+    assert(rec.columns == 1 and #rec.buttons == 1 and CellFrame(rec.buttons[1]).badge == 3)
+
+    Fire("ITEM_DATA_LOAD_RESULT", otherID, false)
+    assert(refreshes == 1 and not rec.isClosed and itemLoads == 1)
+    bag[1].stackCount = 2
+    Fire("BAG_UPDATE_DELAYED")
+    assert(rec.isClosed and refreshes == 2 and scans == 1, "bag change must close before refresh")
+    Pick(rec, foodID)
+    ShowForeverFoodMenu(foodButton)
+    assert(MENU.last == rec and not fo.wellFedItem, "invalidated reminder still accepted input")
+    foodButton._foreverFood = FoodEntry().foreverFood
+    assert(foodButton._foreverFood[foodID] == 4 and itemLoads == 2)
+    ShowForeverFoodMenu(foodButton)
+    rec = MENU.last
+    Fire("ITEM_DATA_LOAD_RESULT", 9999, true)
+    assert(not rec.isClosed and refreshes == 2)
+    cached[otherID] = true
+    Fire("ITEM_DATA_LOAD_RESULT", otherID, true)
+    assert(rec.isClosed and refreshes == 3, "loaded item must invalidate the menu before refresh")
+    entry = FoodEntry()
+    assert(entry.foreverFood[otherID] == 5)
+    foodButton._foreverFood = entry.foreverFood
+    ShowForeverFoodMenu(foodButton)
+    rec = MENU.last
+    assert(rec.columns == 2 and #rec.buttons == 2)
+
+    TEST.combat = true
+    Pick(rec, foodID)
+    assert(not fo.wellFedItem, "food selection changed during combat")
+    EABR.ValidateOpenPicker()
+    assert(rec.isClosed)
+    TEST.combat = false
+    ShowForeverFoodMenu(foodButton)
+    rec = MENU.last
+    local profile = db.profile
+    db.profile = { forever = fo }
+    Pick(rec, foodID)
+    assert(not fo.wellFedItem, "the old menu wrote into another profile")
+    EABR.ValidateOpenPicker()
+    assert(rec.isClosed)
+    db.profile = profile
+
+    ShowForeverFoodMenu(foodButton)
+    rec = MENU.last
+    bag[1].stackCount, bag[2].stackCount = 0, 0
+    Pick(rec, foodID)
+    assert(not fo.wellFedItem, "an item that ran out was accepted")
+    Pick(rec, otherID)
+    assert(fo.wellFedItem == otherID and foodButton._tooltipItem == otherID)
+    assert(foodButton.macro == "/use [nocombat] item:" .. otherID and foodButton.texture == otherID + 100)
+
+    fo.pickerEnabled = false
+    fo.wellFedItem = nil
+    Pick(rec, otherID)
+    assert(not fo.wellFedItem, "the old menu accepted a selection while Action Picker was off")
+    fo.wellFedItem = otherID
+    assert(FoodEntry().mode == "texture" and not next(watch.events) and fo.wellFedItem == otherID)
+    EABR.ValidateOpenPicker()
+    assert(rec.isClosed)
+    fo.pickerEnabled = true
+    assert(FoodEntry().tooltipItem == otherID and watch.events.BAG_UPDATE_DELAYED)
+    fo.wellFedInventory = nil
+    assert(FoodEntry().mode == "texture" and not next(watch.events) and fo.wellFedItem == otherID)
+    db.profile.forever = { wellFed = true, pickerEnabled = true, wellFedItem = otherID, classBuffActions = {} }
+    assert(FoodEntry().mode == "texture" and not next(watch.events), "a saved selection alone enabled the feature")
+    db.profile.forever.wellFedInventory = true
+    bag = {}
+    assert(not FoodEntry().foreverFood and FoodEntry().mode == "texture")
+
+    local foodCog = Cut(OPTIONS_SRC, "EllesmereUI.BuildInlineCog(gatherRow._leftRegion",
+        "EllesmereUI.BuildInlineCog(gatherRow._rightRegion", "Well Fed cog")
+    local cog
+    local ui = { BuildInlineCog = function(_, config) cog = config end }
+    _G._EABR_SpellName = function(_, fallback) return fallback end
+    assert(loadstring("local EllesmereUI, gatherRow, FDB, RefreshAll = ...\n" .. foodCog, "=Well Fed cog"))(
+        ui, {}, function() return fo end, function() end)
+    fo.pickerEnabled = false
+    local foodToggle = cog.rows[1]
+    assert(not cog.disabled() and foodToggle.disabled() and foodToggle.disabledTooltip == "Action Picker")
+    foodToggle.set(true)
+    assert(fo.wellFedInventory == nil)
+    fo.pickerEnabled = true
+    assert(not cog.disabled() and not foodToggle.disabled())
+    foodToggle.set(true)
+    assert(foodToggle.get() and fo.wellFedInventory == true)
+    foodToggle.set(false)
+    assert(fo.wellFedInventory == nil and fo.wellFedItem == otherID)
+
+    local threshold = cog.rows[2]
+    assert(threshold.get() == 0 and threshold.min == 0 and threshold.max == 10)
+    db.profile.forever = fo
+    fo.pickerEnabled = false
+    EABR.ShowUnderThresholdApplies = function() return true end
+    local aura = { expirationTime = GetTime() + 180 }
+    C_UnitAuras.GetAuraDataBySpellName = function() return aura end
+    local function FindWellFed() return Entry(Collect(), "forever:wellfed") end
+    assert(not FindWellFed(), "the default showed a reminder for an active buff")
+    threshold.set(2)
+    EABR._nextDurationRefreshTime = nil
+    assert(not FindWellFed() and EABR._nextDurationRefreshTime == aura.expirationTime - 120)
+    aura.expirationTime = GetTime() + 119
+    entry = FoodEntry()
+    assert(entry.expireAt == aura.expirationTime and entry.expireTotal == 120 and entry.expireSwipe)
+    assert(entry.mode == "texture")
+    local now = GetTime()
+    GetTime = function() return now + 30 end
+    assert(FoodEntry().expireTotal == 120, "refresh must preserve the swipe start time")
+
+    C_UnitAuras.GetAuraDataBySpellName = function() return nil end
+    EABR.FOOD_BUFFS = { 9101, 9102 }
+    C_UnitAuras.GetPlayerAuraBySpellID = function(id)
+        if id == 9101 then return { expirationTime = GetTime() + 15 } end
+        if id == 9102 then return aura end
+    end
+    assert(FoodEntry().expireAt == aura.expirationTime, "the fallback must use the latest food expiry")
+    threshold.set(0)
+    assert(fo.wellFedShowBelow == nil and not FindWellFed())
+    C_UnitAuras.GetPlayerAuraBySpellID = function() return nil end
+    assert(not FoodEntry().expireSwipe, "the missing-buff reminder should have no swipe")
+    fo.wellFed = false
+    assert(cog.disabled() and cog.disabledTooltip == "Well Fed")
+end
 
 print("aurabuff reminders forever action picker harness: ok")

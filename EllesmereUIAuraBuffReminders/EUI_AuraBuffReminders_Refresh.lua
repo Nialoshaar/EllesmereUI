@@ -439,6 +439,10 @@ do
     local NUTRITIOUS_FOOD = 1248377
     local watch, watching, foods, pending
 
+    function EABR.IsForeverFoodCurrent(snapshot)
+        return snapshot == foods
+    end
+
     function EABR.GetForeverFood()
         if foods then return foods end
         foods = {}
@@ -485,6 +489,7 @@ do
                     ((event == "ITEM_DATA_LOAD_RESULT" and pending[id]) or
                      (event == "SPELL_DATA_LOAD_RESULT" and id == NUTRITIOUS_FOOD))) then
                     foods = nil
+                    if EABR.ValidateOpenPicker then EABR.ValidateOpenPicker() end
                     if _G._EABR_RequestRefresh then _G._EABR_RequestRefresh() end
                 end
             end)
@@ -716,6 +721,26 @@ local function FvNeeds(left, warnSec)
     return false
 end
 
+local function FvAuraExpiration(aura)
+    if isSecret(aura) or not aura then return end
+    local expiration = aura.expirationTime
+    if not isSecret(expiration) and expiration and expiration > 0 then return expiration end
+end
+
+local function FvFoodExpiration()
+    local latest
+    for _, id in ipairs(EABR.FOOD_BUFFS) do
+        local ok, aura = pcall(C_UnitAuras.GetPlayerAuraBySpellID, id)
+        if not ok or isSecret(aura) then return end
+        if aura then
+            local expiration = FvAuraExpiration(aura)
+            if not expiration then return end
+            if not latest or expiration > latest then latest = expiration end
+        end
+    end
+    return latest
+end
+
 local function FvWeaponEntry(missing, hand, label, dismissKey, buff, spellID, itemID, hideNoItem, left)
     if buff.spells and not spellID then return end
     if buff.items and not itemID and hideNoItem then return end
@@ -834,7 +859,8 @@ function EABR.CollectForever(missing, inInstance, inPvP)
     if watchPickerSpells ~= (EABR._fvPickerSpellEvents or false) then
         EABR.FvSyncPickerSpellEvents(watchPickerSpells)
     end
-    EABR.SyncForeverFoodWatch(shows and not inPvP and fo.wellFed and fo.wellFedInventory == true or false)
+    local watchFood = watchPickerSpells and not inPvP and fo.wellFed and fo.wellFedInventory == true or false
+    EABR.SyncForeverFoodWatch(watchFood)
     if not shows then return end
     local open = not inPvP
     -- Under the aura lock a secret aura reads absent, so an aura reminder
@@ -898,13 +924,27 @@ function EABR.CollectForever(missing, inInstance, inPvP)
     if fo.wellFed and open then
         local name = SpellName(EABR.WELL_FED) or "Well Fed"
         local ok, aura = pcall(C_UnitAuras.GetAuraDataBySpellName, "player", name, "HELPFUL")
-        if ok and not isSecret(aura) and not aura and not PlayerHasAuraByID(EABR.FOOD_BUFFS) then
+        local show, expireAt
+        local warnSec = (fo.wellFedShowBelow or 0) * 60
+        if ok and not isSecret(aura) then
+            local fallback = not aura and PlayerHasAuraByID(EABR.FOOD_BUFFS)
+            show = not aura and not fallback
+            if not show and warnSec > 0 and EABR.ShowUnderThresholdApplies() then
+                expireAt = aura and FvAuraExpiration(aura) or (fallback and FvFoodExpiration())
+                if expireAt then
+                    local remaining = expireAt - GetTime()
+                    show = remaining > 0 and FvNeeds(remaining, warnSec)
+                end
+            end
+        end
+        if show then
             local e = AcquireEntry()
             e.mode = "texture"; e.spellID = EABR.WELL_FED
             e.texture = Tex(EABR.WELL_FED)
             e.label = name
             e.cat = "forever"; e.dismissKey = "forever:wellfed"
-            if fo.wellFedInventory then
+            if expireAt then e.expireAt, e.expireTotal, e.expireSwipe = expireAt, warnSec, true end
+            if watchFood then
                 local foods = EABR.GetForeverFood()
                 e.foreverFood = next(foods) and foods or nil
                 local id = fo.wellFedItem
