@@ -1933,6 +1933,7 @@ initFrame:SetScript("OnEvent", function(self)
                   setValue=function(v)
                       local f = FDB(); if not f then return end; f.wellFed = v
                       RefreshAll()
+                      EllesmereUI:RefreshPage()
                   end },
                 { type="toggle", text="Gathering Tracking",
                   tooltip="Reminds you when no gathering tracking is on.",
@@ -1945,6 +1946,17 @@ initFrame:SetScript("OnEvent", function(self)
             );  y = y - h
 
             if not EllesmereUI._prebuilding then
+                EllesmereUI.BuildInlineCog(gatherRow._leftRegion, {
+                    title = _G._EABR_SpellName(19705, "Well Fed"),
+                    disabled = function() local f = FDB(); return not (f and f.wellFed) end,
+                    disabledTooltip = _G._EABR_SpellName(19705, "Well Fed"),
+                    rows = {
+                        { type="toggle", label="Get Food from Inventory",
+                          tooltip="Right-click the Well Fed reminder to pick food from your bags. Left-click to eat it out of combat.",
+                          get=function() local f = FDB(); return f and f.wellFedInventory == true end,
+                          set=function(v) local f = FDB(); if f then f.wellFedInventory = v and true or nil; RefreshAll() end end },
+                    },
+                })
                 EllesmereUI.BuildInlineCog(gatherRow._rightRegion, {
                     title = "Gathering Tracking",
                     disabled = function() local f = FDB(); return not (f and f.gather == true) end,

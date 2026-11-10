@@ -147,7 +147,7 @@ MenuUtil = {
         local rec = { owner = owner, style = owner.menuMixin, buttons = {}, released = {}, closed = 0 }
         local root = {}
         function root:AddMenuReleasedCallback(fn) rec.released[#rec.released + 1] = fn end
-        function root:SetGridMode() end
+        function root:SetGridMode(direction, columns) rec.direction, rec.columns = direction, columns end
         function root:SetMaximumWidth() end
         function root:CreateButton(_, handler, data)
             local b = { handler = handler, data = data, inits = {}, resetters = {} }
@@ -254,11 +254,11 @@ local ICONS_CUT = Cut(ICONS_SRC, "local pickerSpellData = {}",
 local function SetIconMacroStub(btn, macro, texture, spellID)
     btn.macro, btn.texture, btn._tooltipSpell = macro, texture, spellID
 end
-local ShowForeverGroupMenu
+local ShowForeverGroupMenu, ShowForeverFoodMenu
 local function LoadIcons()
-    ShowForeverGroupMenu = assert(loadstring("local EABR, db, InCombat, SpellName, Tex, SetIconMacro = ...\n"
-        .. "local floor, max = math.floor, math.max\nlocal ShowForeverGroupMenu\nlocal iconPickerStyle\n"
-        .. ICONS_CUT .. "\nreturn ShowForeverGroupMenu\n", "=Icons picker"))(
+    ShowForeverGroupMenu, ShowForeverFoodMenu = assert(loadstring("local EABR, db, InCombat, SpellName, Tex, SetIconMacro = ...\n"
+        .. "local floor, max = math.floor, math.max\nlocal ShowForeverGroupMenu, ShowForeverFoodMenu\nlocal iconPickerStyle\n"
+        .. ICONS_CUT .. "\nreturn ShowForeverGroupMenu, ShowForeverFoodMenu\n", "=Icons picker"))(
         EABR, db, I.InCombat, I.SpellName, I.Tex, SetIconMacroStub)
 end
 LoadIcons()
@@ -605,5 +605,27 @@ assert(forever and forever:find("pickerEnabled = false,", 1, true), "the option'
 local toggle = OPTIONS_SRC:match('{ type="toggle", text="Action Picker",.-RefreshAll%(%)')
 assert(toggle and toggle:find("FDB()", 1, true) and not toggle:find("DDB()", 1, true),
     "the options toggle does not use the WoW Forever settings")
+
+-- Well Fed uses the same grid, including when there is only one food.
+fo.wellFed, fo.wellFedInventory = true, true
+local foodID, count = 9001, 3
+C_Item.GetItemCount = function() return count end
+C_Item.GetItemIconByID = function(id) return id + 100 end
+local foodButton = Button({})
+foodButton._foreverFood = { [foodID] = count }
+ShowForeverFoodMenu(foodButton)
+rec = MENU.last
+assert(rec.owner == foodButton and rec.direction == MenuConstants.HorizontalGridDirection)
+assert(rec.columns == 1 and #rec.buttons == 1 and CellFrame(rec.buttons[1]).badge == count)
+count = 0
+Pick(rec, foodID)
+assert(not fo.wellFedItem, "an item that ran out was accepted")
+count = 2
+Pick(rec, foodID)
+assert(fo.wellFedItem == foodID and foodButton._tooltipItem == foodID)
+assert(foodButton.macro == "/use [nocombat] item:" .. foodID and foodButton.texture == foodID + 100)
+foodButton._foreverFood = { [foodID] = count }
+EABR.ValidateOpenPicker()
+assert(rec.isClosed, "the picker kept a stale inventory snapshot")
 
 print("aurabuff reminders forever action picker harness: ok")
