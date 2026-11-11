@@ -1947,6 +1947,17 @@ initFrame:SetScript("OnEvent", function(self)
             );  y = y - h
 
             if not EllesmereUI._prebuilding then
+                EllesmereUI.BuildInlineCog(campRow._leftRegion, {
+                    title = "Camp Benefits",
+                    disabled = function() local f = FDB(); return not (f and f.camp ~= false) end,
+                    disabledTooltip = "Camp Benefits",
+                    rows = {
+                        { type="toggle", label="Left-Click to Build Campfire",
+                          tooltip="Left-click to place a campfire kit outdoors and out of combat. Near a campfire, right-click to pick a camp add-on from your bags and left-click to place it.",
+                          get=function() local f = FDB(); return f and f.campfireKit == true end,
+                          set=function(v) local f = FDB(); if f then f.campfireKit = v; RefreshAll() end end },
+                    },
+                })
                 local sleepingBagPopup
                 local sleepingBagOptions = {
                     title = "Sleeping Bag",

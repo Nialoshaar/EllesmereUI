@@ -844,6 +844,57 @@ end
 -- table, the cached families, the kept minimap answer and the dismiss-key memo
 -- keep the pass allocation-free; the weapon pass reads the game's enchant
 -- lists, a table per weapon.
+local CAMPFIRE_KIT = 279981
+local CAMPFIRE_NEARBY = { 1283391 }
+local WELCOMING_CAMPFIRE = 1229739
+local campfireWatch, watchingCampfire, campfireAddons
+
+-- Forever 1.60.1.70790: on-use items whose spells require Camping Fire
+-- (SpellCastingRequirements.RequiresSpellFocus 2341, joined through ItemEffect).
+local CAMPFIRE_ADDON_IDS = {
+    278030, 279938, 279940, 279941, 279943, 279944, 279945, 279947,
+    279948, 279949, 279950, 279951, 279952, 279955, 279956, 279957,
+    279959, 279960, 279962, 279964, 279965, 279966, 279967, 279968,
+    279969, 279970, 279972, 279973, 279976, 279978, 279979, 279982,
+    279985, 279987, 279988, 279989, 279990,
+}
+
+function EABR.HasCampfireNearby()
+    return (not EllesmereUI.AuraKit.AurasRestricted() or EABR.FvRanksReadable(CAMPFIRE_NEARBY))
+        and PlayerHasAuraByID(CAMPFIRE_NEARBY)
+end
+
+function EABR.GetCampfireAddons()
+    if not campfireAddons then
+        campfireAddons = {}
+        for _, id in ipairs(CAMPFIRE_ADDON_IDS) do
+            local count = C_Item.GetItemCount(id)
+            if count > 0 then campfireAddons[id] = count end
+        end
+    end
+    return campfireAddons
+end
+
+local function SyncCampfireWatch(want)
+    if watchingCampfire == want then return end
+    watchingCampfire = want
+    if not want then
+        campfireAddons = nil
+        if campfireWatch then campfireWatch:UnregisterAllEvents() end
+        return
+    end
+    if not campfireWatch then
+        campfireWatch = CreateFrame("Frame")
+        campfireWatch:SetScript("OnEvent", function(_, event)
+            if event == "BAG_UPDATE_DELAYED" then campfireAddons = nil end
+            if _G._EABR_RequestRefresh then _G._EABR_RequestRefresh() end
+        end)
+    end
+    campfireWatch:RegisterEvent("BAG_UPDATE_DELAYED")
+    campfireWatch:RegisterEvent("ZONE_CHANGED")
+    campfireWatch:RegisterEvent("ZONE_CHANGED_INDOORS")
+end
+
 function EABR.CollectForever(missing, inInstance, inPvP)
     local fo = db.profile.forever
     local shows = fo and not InCombat() and EABR.SectionShows(fo.whereToShow, inInstance)
@@ -851,6 +902,8 @@ function EABR.CollectForever(missing, inInstance, inPvP)
     -- is listened to only while a reminder that reads it can show.
     EABR.FvSyncTrackingEvent(shows and not inPvP
         and ((fo.gather == true and fo.gatherClassTrack ~= false) or fo.treasure == true) or false)
+    local campfireEnabled = shows and not inPvP and fo.camp ~= false and fo.campfireKit == true
+    SyncCampfireWatch(campfireEnabled)
     local weaponEnabled = shows and fo.weapon == true or false
     EABR.FvSyncWeaponEvents(weaponEnabled)
     local sleepBag = SyncSleepingBag(shows and fo.sleepingBag == true and not inPvP, weaponEnabled,
@@ -874,6 +927,43 @@ function EABR.CollectForever(missing, inInstance, inPvP)
             e.texture = Tex(EABR.CAMP_BENEFITS)
             e.label = EllesmereUI.L("Camp")
             e.cat = "forever"; e.dismissKey = "forever:camp"
+            if campfireEnabled then
+                local nearby = EABR.HasCampfireNearby()
+                local ok, aura = pcall(C_UnitAuras.GetPlayerAuraBySpellID, WELCOMING_CAMPFIRE)
+                if ok and not isSecret(aura) and aura then
+                    e.spellID = WELCOMING_CAMPFIRE
+                    e.texture = Tex(WELCOMING_CAMPFIRE)
+                    local instanceID = aura.auraInstanceID
+                    if not isSecret(instanceID) and instanceID then
+                        local readable, duration = pcall(C_UnitAuras.GetAuraDuration, "player", instanceID)
+                        if readable then e.campfireDuration = duration end
+                    end
+                elseif nearby then
+                    e.spellID = CAMPFIRE_NEARBY[1]
+                    e.texture = Tex(e.spellID)
+                elseif not (auraLock and not EABR.FvRanksReadable(CAMPFIRE_NEARBY))
+                    and ok and not isSecret(aura) and IsOutdoors() and C_Item.GetItemCount(CAMPFIRE_KIT) > 0 then
+                    e.mode = "macro"
+                    e.spellID = nil
+                    e.texture = C_Item.GetItemIconByID(CAMPFIRE_KIT) or 7808148
+                    e.tooltipItem = CAMPFIRE_KIT
+                    e.macro = "/use [outdoors,nocombat] item:" .. CAMPFIRE_KIT
+                end
+                if nearby then
+                    local items = EABR.GetCampfireAddons()
+                    e.campfireAddonPicker = next(items) ~= nil
+                    local id = fo.campfireAddonItem
+                    if id and items[id] then
+                        e.mode = "macro"
+                        e.macro = EABR.CampfireAddonMacro(id)
+                        if e.spellID == CAMPFIRE_NEARBY[1] then
+                            e.spellID = nil
+                            e.texture = C_Item.GetItemIconByID(id) or e.texture
+                            e.tooltipItem = id
+                        end
+                    end
+                end
+            end
             missing[#missing+1] = e
         end
     end
@@ -1221,6 +1311,7 @@ end
 -- watch and the minimap, weapon and bag events); the next pass that can show
 -- re-arms them.
 function EABR.FvStandDown(keepSleepingBag, keepSleepProgress)
+    SyncCampfireWatch(false)
     EABR.FvSyncGroupWatch(nil, false)
     EABR.FvSyncTrackingEvent(false)
     EABR.FvSyncWeaponEvents(false)

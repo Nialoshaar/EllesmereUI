@@ -195,6 +195,7 @@ local defaults = {
 if EABR.FOREVER then
     defaults.profile.forever = {
         camp = false,       -- Camp Benefits reminder; opt-in, it shows whenever the buff is missing
+        campfireKit = false,
         sleepingBag = false, -- Sleeping Bag reminder; opt-in, below max level with a Cozy Sleeping Bag in the bags
         sleepingBagShowBelow = 0,
         sleepingBagShowWhileRested = false,
