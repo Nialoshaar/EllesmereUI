@@ -1969,6 +1969,10 @@ initFrame:SetScript("OnEvent", function(self)
                           tooltip="Show the countdown in rested areas while Well-Rested is active and below your Show Below threshold. Step outside the rested area to use the Sleeping Bag.",
                           get=function() local f = FDB(); return f and f.sleepingBagShowWhileRested == true end,
                           set=function(v) local f = FDB(); if f and (f.sleepingBagShowBelow or 0) > 0 then f.sleepingBagShowWhileRested = v and true or nil; RefreshAll() end end },
+                        { type="toggle", label="Show Time to Next Stack",
+                          tooltip="Show a countdown to the next Well-Rested stack while sleeping in a bag.",
+                          get=function() local f = FDB(); return f and f.sleepingBagShowProgress == true end,
+                          set=function(v) local f = FDB(); if f then f.sleepingBagShowProgress = v and true or nil; RefreshAll() end end },
                     },
                 }
                 _, sleepingBagPopup = EllesmereUI.BuildCogPopup(sleepingBagOptions)
