@@ -434,6 +434,72 @@ local function CollectLines(missing, auraLock, ids, lines, last, dismissKey, lab
     if id then return nil, EABR.FvSpellEntry(missing, id, dismissKey, label) end
 end
 
+do
+    -- Use the client's localized name for the food family, shared by many spell IDs.
+    local NUTRITIOUS_FOOD = 1248377
+    local watch, watching, foods, pending
+
+    function EABR.IsForeverFoodCurrent(snapshot)
+        return snapshot == foods
+    end
+
+    function EABR.GetForeverFood()
+        if foods then return foods end
+        foods = {}
+        local name = SpellName(NUTRITIOUS_FOOD)
+        if not name then
+            C_Spell.RequestLoadSpellData(NUTRITIOUS_FOOD)
+            return foods
+        end
+        wipe(pending)
+        for bag = 0, NUM_BAG_SLOTS do
+            for slot = 1, C_Container.GetContainerNumSlots(bag) do
+                local info = C_Container.GetContainerItemInfo(bag, slot)
+                local id = info and info.itemID
+                if id and not pending[id] then
+                    if foods[id] then
+                        foods[id] = foods[id] + info.stackCount
+                    elseif select(6, C_Item.GetItemInfoInstant(id)) == Enum.ItemClass.Consumable then
+                        if not C_Item.IsItemDataCachedByID(id) then
+                            pending[id] = true
+                            C_Item.RequestLoadItemDataByID(id)
+                        elseif C_Item.GetItemSpell(id) == name then
+                            foods[id] = info.stackCount
+                        end
+                    end
+                end
+            end
+        end
+        return foods
+    end
+
+    function EABR.SyncForeverFoodWatch(want)
+        if want == watching then return end
+        watching = want
+        foods = nil
+        if not want then
+            if watch then watch:UnregisterAllEvents(); wipe(pending) end
+            return
+        end
+        if not watch then
+            pending = {}
+            watch = CreateFrame("Frame")
+            watch:SetScript("OnEvent", function(_, event, id, success)
+                if event == "BAG_UPDATE_DELAYED" or (success and
+                    ((event == "ITEM_DATA_LOAD_RESULT" and pending[id]) or
+                     (event == "SPELL_DATA_LOAD_RESULT" and id == NUTRITIOUS_FOOD))) then
+                    foods = nil
+                    if EABR.ValidateOpenPicker then EABR.ValidateOpenPicker() end
+                    if _G._EABR_RequestRefresh then _G._EABR_RequestRefresh() end
+                end
+            end)
+        end
+        watch:RegisterEvent("BAG_UPDATE_DELAYED")
+        watch:RegisterEvent("ITEM_DATA_LOAD_RESULT")
+        watch:RegisterEvent("SPELL_DATA_LOAD_RESULT")
+    end
+end
+
 local function CharStore(field)
     local store = EllesmereUIDB[field]
     local keys = EABR._fvCharKeys
@@ -912,6 +978,8 @@ function EABR.CollectForever(missing, inInstance, inPvP)
     if watchPickerSpells ~= (EABR._fvPickerSpellEvents or false) then
         EABR.FvSyncPickerSpellEvents(watchPickerSpells)
     end
+    local watchFood = watchPickerSpells and not inPvP and fo.wellFed and fo.wellFedInventory == true or false
+    EABR.SyncForeverFoodWatch(watchFood)
     if not shows then return end
     local open = not inPvP
     -- Under the aura lock a secret aura reads absent, so an aura reminder
@@ -1020,7 +1088,20 @@ function EABR.CollectForever(missing, inInstance, inPvP)
             e.texture = Tex(EABR.WELL_FED)
             e.label = name
             e.cat = "forever"; e.dismissKey = "forever:wellfed"
-            if expireAt then e.expireAt, e.expireTotal = expireAt, warnSec end
+            if expireAt then e.expireAt, e.expireTotal, e.expireSwipe = expireAt, warnSec, "reverse" end
+            if watchFood then
+                local foods = EABR.GetForeverFood()
+                e.foreverFood = next(foods) and foods or nil
+                local id = fo.wellFedItem
+                if id and foods[id] then
+                    e.mode = "macro"
+                    e.macro = EABR.ForeverFoodMacro(id)
+                    e.spellID = nil
+                    e.tooltipItem = id
+                    e.texture = C_Item.GetItemIconByID(id) or e.texture
+                    e.bagCount = foods[id]
+                end
+            end
             missing[#missing+1] = e
         end
     end
@@ -1312,6 +1393,7 @@ end
 -- re-arms them.
 function EABR.FvStandDown(keepSleepingBag, keepSleepProgress)
     SyncCampfireWatch(false)
+    EABR.SyncForeverFoodWatch(false)
     EABR.FvSyncGroupWatch(nil, false)
     EABR.FvSyncTrackingEvent(false)
     EABR.FvSyncWeaponEvents(false)
