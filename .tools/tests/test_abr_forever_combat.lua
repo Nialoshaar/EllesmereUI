@@ -163,6 +163,10 @@ assert(loadstring(REFRESH_SRC, "=EUI_AuraBuffReminders_Refresh.lua"))("Ellesmere
 assert(rawget(I, "broken") == false, "the collectors did not load")
 -- the class buff table, cut from the main file and loaded over this EABR
 do
+    local presetEnv = setmetatable({ EllesmereUI = { IS_FOREVER = true } }, { __index = _G })
+    local loadPresets = assert(loadstring(ReadSource("EllesmereUI_BuffPresets.lua"), "=BuffPresets"))
+    setfenv(loadPresets, presetEnv)()
+    EllesmereUI.FOREVER_PALADIN_AURA_RANKS = presetEnv.EllesmereUI.FOREVER_PALADIN_AURA_RANKS
     local s = MAIN_SRC:find("    function EABR.FvClassBuffs()", 1, true)
     local e = s and select(2, MAIN_SRC:find("        return t\n    end\n", s, true))
     assert(s and e, "EABR.FvClassBuffs not found in the main file")

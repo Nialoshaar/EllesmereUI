@@ -577,6 +577,14 @@ EllesmereUI.BUFF_PRESET_OTHER_FILTERS = OTHER.filters
 -- item casts, i.e. every spell of those names on the client). Built on WoW
 -- Forever only.
 if EllesmereUI.IS_FOREVER == true then
+    EllesmereUI.FOREVER_PALADIN_AURA_RANKS = {
+        { 19891, 19899, 19900 },  -- Fire Resistance Aura
+        { 19888, 19897, 19898 },  -- Frost Resistance Aura
+        { 19876, 19895, 19896 },  -- Shadow Resistance Aura
+        { 19746 },  -- Concentration Aura
+        { 7294, 10298, 10299, 10300, 10301 },  -- Retribution Aura
+        { 465, 10290, 643, 10291, 1032, 10292, 10293 },  -- Devotion Aura
+    }
     EllesmereUI.FOREVER_BUFF_FAMILIES = {
         fort = { names = { 1243, 21562 },
             single = { 1243, 1244, 1245, 2791, 10937, 10938 }, group = { 21562, 21564 },

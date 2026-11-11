@@ -95,14 +95,8 @@ if EABR.FOREVER then
                     { 20217 },
                     { 19740, 19834, 19835, 19836, 19837, 19838, 25291 },
                 }, also = { { 25894, 25918 }, { 25898 }, { 25782, 25916 } } },
-                { key = "paladinaura", label = EllesmereUI.L("Aura"), menu = EllesmereUI.L("Important Auras"), on = true, own = true, lines = {
-                    { 19891, 19899, 19900 },
-                    { 19888, 19897, 19898 },
-                    { 19876, 19895, 19896 },
-                    { 19746 },
-                    { 7294, 10298, 10299, 10300, 10301 },
-                    { 465, 10290, 643, 10291, 1032, 10292, 10293 },
-                } },
+                { key = "paladinaura", label = EllesmereUI.L("Aura"), menu = EllesmereUI.L("Important Auras"), on = true, own = true,
+                    lines = EllesmereUI.FOREVER_PALADIN_AURA_RANKS },
                 { key = "rfury", lines = { { 25780 } } },
             },
             PRIEST = {

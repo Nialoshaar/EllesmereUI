@@ -580,6 +580,50 @@ do
         if keyByName[def.name] == nil then keyByName[def.name] = def.key end
         if not offered[def.key] then otherOnly[def.name] = true end
     end
+    local classBuffsName = "Class Buffs"
+    local classBuffsKey = "foreverClassBuffs"
+    keyByName[classBuffsName] = classBuffsKey
+    local families = EllesmereUI.FOREVER_BUFF_FAMILIES
+    if EllesmereUI.IS_FOREVER and families then
+        local classes = {
+            fort = "PRIEST", spirit = "PRIEST", mark = "DRUID", ai = "MAGE",
+            might = "PALADIN", wisdom = "PALADIN", kings = "PALADIN",
+        }
+        local enabled = {}
+        local function AddClassBuffs(ids, class)
+            for _, id in ipairs(ids) do
+                enabled[#enabled + 1] = id
+                SPELL_CLASS_HINTS[id] = class
+            end
+        end
+        for family, class in pairs(classes) do
+            AddClassBuffs(families[family].ids, class)
+        end
+        for _, ranks in ipairs(EllesmereUI.FOREVER_PALADIN_AURA_RANKS) do
+            AddClassBuffs(ranks, "PALADIN")
+        end
+        AddClassBuffs({ 20218 }, "PALADIN")  -- Sanctity Aura
+        -- Player aura IDs from the Forever spell data.
+        AddClassBuffs({
+            8076, 8162, 8163, 10441, 25362,  -- Strength of Earth
+            8836, 10626, 25360,  -- Grace of Air
+            8072, 8156, 8157, 10403, 10404, 10405,  -- Stoneskin
+            8185, 10534, 10535,  -- Fire Resistance
+            8182, 10476, 10477,  -- Frost Resistance
+            10596, 10598, 10599,  -- Nature Resistance
+            8178,  -- Grounding Totem
+            5672, 6371, 6372, 10460, 10461,  -- Healing Stream
+            5677, 10491, 10493, 10494, 24853,  -- Mana Spring
+            16191, 17355, 17360, 1325257,  -- Mana Tide
+            8230, 8250, 10521, 15036,  -- Flametongue Totem
+            8515,  -- Windfury Totem
+        }, "SHAMAN")
+        table.sort(enabled)
+        BM2_FILTER_SEED[#BM2_FILTER_SEED + 1] =
+            { key = classBuffsKey, name = classBuffsName, enabled = enabled, disabled = {} }
+    else
+        otherOnly[classBuffsName] = true
+    end
     ns.PAB_PRESET_KEY = keyByName
     ns.PAB_OTHER_ONLY_PRESETS = otherOnly
 end
