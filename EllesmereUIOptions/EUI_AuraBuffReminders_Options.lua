@@ -1900,13 +1900,14 @@ initFrame:SetScript("OnEvent", function(self)
             -- Where to Show | Reminder Sound
             _, h = SectionControlRow(parent, y, {
                 whereStore = FWhere, whereItems = FOREVER_SECTION_WHERE_ITEMS,
-                whereTooltip = "Pick which content the WoW Forever reminders appear in.\nRested areas (cities and inns) always stay hidden.",
+                whereTooltip = "Pick which content the WoW Forever reminders appear in.",
                 soundSec = FDB, soundField = "sectionSound",
                 onChange = RefreshAll,
             });  y = y - h
 
             -- Camp Benefits | Sleeping Bag
-            _, h = W:DualRow(parent, y,
+            local campRow
+            campRow, h = W:DualRow(parent, y,
                 { type="toggle", text="Camp Benefits",
                   tooltip="Reminds you when the Camp Benefits campfire buff is missing.",
                   getValue=function() local f = FDB(); return not f or f.camp ~= false end,
@@ -1946,6 +1947,38 @@ initFrame:SetScript("OnEvent", function(self)
             );  y = y - h
 
             if not EllesmereUI._prebuilding then
+                local sleepingBagPopup
+                local sleepingBagOptions = {
+                    title = "Sleeping Bag",
+                    disabled = function() local f = FDB(); return not (f and f.sleepingBag) end,
+                    disabledTooltip = "Sleeping Bag",
+                    rows = {
+                        { type="slider", label="Show Below (Minutes)", min=0, max=10, step=1,
+                          tooltip="Show the Sleeping Bag reminder with a countdown before Well-Rested expires. Set to 0 to only remind when the buff is missing or below 3 stacks.",
+                          get=function() local f = FDB(); return f and f.sleepingBagShowBelow or 0 end,
+                          set=function(v)
+                              local f = FDB(); if not f then return end
+                              local wasEnabled = (f.sleepingBagShowBelow or 0) > 0
+                              f.sleepingBagShowBelow = v > 0 and v or nil
+                              RefreshAll()
+                              local popup = sleepingBagPopup._popupFrame
+                              if wasEnabled ~= (v > 0) and popup and popup:IsShown() then popup._refresh() end
+                          end },
+                        { type="toggle", label="Show in Rested Areas",
+                          disabled=function() local f = FDB(); return not f or (f.sleepingBagShowBelow or 0) <= 0 end,
+                          disabledTooltip="Set Show Below (Minutes) above 0",
+                          tooltip="Show the countdown in rested areas while Well-Rested is active and below your Show Below threshold. Step outside the rested area to use the Sleeping Bag.",
+                          get=function() local f = FDB(); return f and f.sleepingBagShowWhileRested == true end,
+                          set=function(v) local f = FDB(); if f and (f.sleepingBagShowBelow or 0) > 0 then f.sleepingBagShowWhileRested = v and true or nil; RefreshAll() end end },
+                        { type="toggle", label="Show Time to Next Stack",
+                          tooltip="Show a countdown to the next Well-Rested stack while sleeping in a bag.",
+                          get=function() local f = FDB(); return f and f.sleepingBagShowProgress == true end,
+                          set=function(v) local f = FDB(); if f then f.sleepingBagShowProgress = v and true or nil; RefreshAll() end end },
+                    },
+                }
+                _, sleepingBagPopup = EllesmereUI.BuildCogPopup(sleepingBagOptions)
+                sleepingBagOptions.show = sleepingBagPopup
+                EllesmereUI.BuildInlineCog(campRow._rightRegion, sleepingBagOptions)
                 EllesmereUI.BuildInlineCog(gatherRow._leftRegion, {
                     title = _G._EABR_SpellName(19705, "Well Fed"),
                     disabled = function() local f = FDB(); return not (f and f.wellFed) end,
