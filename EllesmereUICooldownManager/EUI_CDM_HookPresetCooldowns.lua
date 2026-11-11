@@ -129,6 +129,19 @@ do
         return chain
     end
 
+    function PotSwap.ResolveOwned(preset, itemID)
+        local chain = PotSwap.Chain(preset, itemID)
+        local minLevels = preset.minLevels
+        local level = minLevels and UnitLevel("player")
+        for i = 1, #chain do
+            local id = chain[i]
+            if not minLevels or level >= minLevels[id] then
+                local count = C_Item.GetItemCount(id, false, true) or 0
+                if count > 0 then return id, count end
+            end
+        end
+    end
+
     -- Resolve + stamp a pot-preset frame's display variant. Returns the display
     -- item id, or nil when the frame is not a resolving pot preset (every other
     -- item preset and user-added custom items -- their paths are untouched).
@@ -145,12 +158,7 @@ do
             return f._displayItemID
         end
         f._potResolveGen, f._potResolveSwap, f._potResolveOrder = PotSwap.gen, swap, orderStr
-        local chain = PotSwap.Chain(preset, f._presetItemID)
-        local id, count
-        for i = 1, #chain do
-            local c = C_Item.GetItemCount(chain[i], false, true) or 0
-            if c > 0 then id, count = chain[i], c; break end
-        end
+        local id, count = PotSwap.ResolveOwned(preset, f._presetItemID)
         if not id then id, count = preset.itemID, 0 end
         f._displayCount = count
         if f._displayItemID ~= id then
@@ -202,11 +210,9 @@ function ns.ItemEntryPreview(barKey, key)
     end
     local pr = PotSwap.ByPrimary(itemID)
     if pr then
-        local chain = PotSwap.Chain(pr, itemID)
-        for i = 1, #chain do
-            if (C_Item.GetItemCount(chain[i], false, true) or 0) > 0 then
-                return C_Item.GetItemIconByID(chain[i]) or C_Item.GetItemIconByID(itemID), chain[i]
-            end
+        local id = PotSwap.ResolveOwned(pr, itemID)
+        if id then
+            return C_Item.GetItemIconByID(id) or C_Item.GetItemIconByID(itemID), id
         end
     end
     return C_Item.GetItemIconByID(itemID), itemID
@@ -334,6 +340,20 @@ _racialCdListener:RegisterEvent("ENCOUNTER_END")
 _racialCdListener:RegisterEvent("CHALLENGE_MODE_START")
 _racialCdListener:RegisterUnitEvent("UNIT_SPELLCAST_SUCCEEDED", "player")
 _racialCdListener:RegisterEvent("PLAYER_REGEN_ENABLED")
+
+if ns.ForeverPotionPresets then
+    function ns.SyncPotionLevelWatch()
+        for _, preset in ipairs(ns.ForeverPotionPresets) do
+            local barKey = ns._divertedItemCD[-preset.itemID]
+            local bar = barKey and barDataByKey[barKey]
+            if bar and not bar.isGhostBar then
+                _racialCdListener:RegisterEvent("PLAYER_LEVEL_CHANGED")
+                return
+            end
+        end
+        _racialCdListener:UnregisterEvent("PLAYER_LEVEL_CHANGED")
+    end
+end
 
 -- Combat lockout spellID -> itemID map (built once from presets)
 local _combatLockoutSpells = {}
@@ -796,6 +816,10 @@ ns._pcBagFlushTimerFn = function()
 end
 
 _racialCdListener:SetScript("OnEvent", function(_, event, a1, a2, a3, a4)
+    if event == "PLAYER_LEVEL_CHANGED" then
+        ns._pcBagFlush()
+        return
+    end
     if ns._pcBagPend and GetTime() >= (ns._pcBagNext or 0) then
         ns._pcBagFlush()
     end

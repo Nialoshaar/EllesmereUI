@@ -962,6 +962,7 @@ function ns.RebuildSpellRouteMap()
         end
     end
 
+    if ns.SyncPotionLevelWatch then ns.SyncPotionLevelWatch() end
     _routeMapBuilt = true
 end
 
