@@ -7,16 +7,22 @@ I.broken = true
 
 local EABR = I.EABR
 local KEY = "EABR_Restock"
+local FOOD_DRINK = Enum.ItemConsumableSubclass.Fooddrink
+local POTION = Enum.ItemConsumableSubclass.Potion
+local HEALING_POTION_TIERS = { 45, 35, 21, 12, 3 }
 local bagSpace = { key = "bagSpace", minimum = "bagSpaceMinimum", texture = 133633,
     label = function() return EllesmereUI.L("Bag Space") end }
 local junk = { key = "junk", texture = 133784, label = function() return EllesmereUI.L("Junk") end }
 local reminders = {
-    { key = "healthFood", minimum = "healthFoodMinimum", closest = "healthFoodClosestLevel",
+    { key = "healthFood", minimum = "healthFoodMinimum", closest = "healthFoodClosestLevel", subclass = FOOD_DRINK,
       spell = EABR.FOREVER and 433 or 1290925, otherSpell = EABR.FOREVER and 1131 or nil,
       texture = 133995, label = function() return EllesmereUI.L("Health Food") end },
-    { key = "manaDrink", minimum = "manaDrinkMinimum", closest = "manaDrinkClosestLevel",
+    { key = "manaDrink", minimum = "manaDrinkMinimum", closest = "manaDrinkClosestLevel", subclass = FOOD_DRINK,
       spell = EABR.FOREVER and 430 or 1290929, otherSpell = EABR.FOREVER and 1137 or 430,
       texture = 132794, label = function() return EllesmereUI.L("Mana Drink") end },
+    { key = "healthPotion", minimum = "healthPotionMinimum", closest = "healthPotionClosestLevel", subclass = POTION,
+      spell = EABR.FOREVER and 17534 or 1234768, otherSpell = 439,
+      texture = 134829, label = function() return EllesmereUI.L("Health Potions") end },
     bagSpace,
     junk,
 }
@@ -77,7 +83,7 @@ local function RegisterUnlockElement()
             getSize = function() return GetAnchorSize(GetIconSize()) end,
             isHidden = function()
                 local restock = db.profile.restock
-                return not (restock.healthFood or restock.manaDrink or restock.bagSpace or restock.junk)
+                return not (restock.healthFood or restock.manaDrink or restock.healthPotion or restock.bagSpace or restock.junk)
             end,
             savePos = function(_, point, relPoint, x, y)
                 db.profile.restockPos = { point = point, relPoint = relPoint, x = x, y = y }
@@ -90,7 +96,7 @@ local function RegisterUnlockElement()
     }, "EllesmereUIAuraBuffReminders")
 end
 
-local function GetFoodDescription(spellID)
+local function GetSupplyDescription(spellID)
     if not spellID then return end
     local description = C_Spell.GetSpellDescription(spellID)
     if issecretvalue(description) then return end
@@ -131,32 +137,46 @@ local function CountJunkSlot(info, id)
     end
 end
 
+local function GetMinimumTier(reminder)
+    if not reminder.closestLevel or not EABR.FOREVER then return 0 end
+    -- Keep the current tier as the minimum even when its bags are empty.
+    if reminder.subclass == POTION then
+        for _, level in ipairs(HEALING_POTION_TIERS) do
+            if playerLevel >= level then return level end
+        end
+    elseif playerLevel >= 5 then
+        return math.min(55, 5 + 10 * math.floor((playerLevel - 5) / 10))
+    end
+    return 0
+end
+
 local function CountBagItems()
     waitingForSpellText = false
     wipe(descriptionKinds)
+    local countFood, countPotions = false, false
     for _, reminder in ipairs(reminders) do
         if reminder.spell and reminder.enabled then
             -- Reference spells supply the localized wording for the whole effect.
-            local plain = GetFoodDescription(reminder.spell)
-            local second = GetFoodDescription(reminder.otherSpell)
+            local plain = GetSupplyDescription(reminder.spell)
+            local second = GetSupplyDescription(reminder.otherSpell)
             if plain then descriptionKinds[plain] = reminder end
             if second then descriptionKinds[second] = reminder end
-            reminder.count, reminder.incomplete, reminder.bestLevel = 0, not (plain or second), 0
-            reminder.badgeDirty = true
-            if reminder.closestLevel and EABR.FOREVER and playerLevel >= 5 then
-                -- Keep the current tier as the minimum even when its bags are empty.
-                reminder.bestLevel = math.min(55, 5 + 10 * math.floor((playerLevel - 5) / 10))
+            local hasReference = plain ~= nil or second ~= nil
+            if hasReference then
+                if reminder.subclass == POTION then countPotions = true else countFood = true end
             end
+            reminder.count, reminder.incomplete, reminder.bestLevel = 0, not hasReference, GetMinimumTier(reminder)
+            reminder.badgeDirty = true
         end
     end
-    local countSupplies = next(descriptionKinds) ~= nil
+    local countSupplies = countFood or countPotions
     if junk.enabled then
         junk.count, junk.incomplete, junk.badgeDirty = 0, false, true
     elseif not countSupplies then
         return
     end
 
-    local incomplete = false
+    local incompleteFood, incompletePotions = false, false
     for bag = 0, NUM_BAG_SLOTS do
         for slot = 1, C_Container.GetContainerNumSlots(bag) do
             local info = C_Container.GetContainerItemInfo(bag, slot)
@@ -164,15 +184,17 @@ local function CountBagItems()
             if id and junk.enabled then CountJunkSlot(info, id) end
             if id and countSupplies then
                 local class, subclass = select(6, C_Item.GetItemInfoInstant(id))
-                if class == Enum.ItemClass.Consumable and subclass == Enum.ItemConsumableSubclass.Fooddrink then
+                if class == Enum.ItemClass.Consumable
+                    and ((countFood and subclass == FOOD_DRINK) or (countPotions and subclass == POTION)) then
+                    local unresolved = false
                     if not C_Item.IsItemDataCachedByID(id) then
-                        incomplete = true
+                        unresolved = true
                         RequestItemData(id)
                     else
                         local _, spellID = C_Item.GetItemSpell(id)
-                        local description = GetFoodDescription(spellID)
+                        local description = GetSupplyDescription(spellID)
                         local reminder = description and descriptionKinds[description]
-                        if reminder then
+                        if reminder and reminder.subclass == subclass then
                             local requiredLevel = 0
                             if reminder.closestLevel then requiredLevel = select(5, C_Item.GetItemInfo(id)) end
                             if not requiredLevel then
@@ -185,16 +207,22 @@ local function CountBagItems()
                                 reminder.count = reminder.count + info.stackCount
                             end
                         elseif spellID and not description then
-                            incomplete = true
+                            unresolved = true
                         end
+                    end
+                    if unresolved then
+                        if subclass == POTION then incompletePotions = true else incompleteFood = true end
                     end
                 end
             end
         end
     end
-    if incomplete then
+    if incompleteFood or incompletePotions then
         for _, reminder in ipairs(reminders) do
-            if reminder.spell and reminder.enabled then reminder.incomplete = true end
+            if reminder.enabled and ((incompleteFood and reminder.subclass == FOOD_DRINK)
+                or (incompletePotions and reminder.subclass == POTION)) then
+                reminder.incomplete = true
+            end
         end
     end
 end
@@ -292,7 +320,7 @@ local function RenderReminder(reminder, p, w, h, x)
         reminder.badgeDirty = true
     end
     if reminder.badgeDirty then
-        local texture = (reminder.spell and I.Tex(reminder.spell)) or reminder.texture
+        local texture = (reminder.subclass == FOOD_DRINK and I.Tex(reminder.spell)) or reminder.texture
         if texture ~= reminder.iconTexture then
             reminder.iconTexture = texture
             icon._icon:SetTexture(texture)
@@ -314,7 +342,7 @@ end
 function I.RefreshRestock()
     local profile = db.profile
     local restock = profile.restock
-    local wantSupplies = restock.healthFood or restock.manaDrink
+    local wantSupplies = restock.healthFood or restock.manaDrink or restock.healthPotion
     local wantItems = wantSupplies or restock.junk
     if not (wantItems or restock.bagSpace) then
         if I.restockWatching then

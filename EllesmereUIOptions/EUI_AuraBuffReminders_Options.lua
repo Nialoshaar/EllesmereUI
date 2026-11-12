@@ -3816,6 +3816,7 @@ initFrame:SetScript("OnEvent", function(self)
         end
         AddSupplyRow("healthFood", "Health Food", "Show a restock reminder in rested areas for food that only restores health.")
         AddSupplyRow("manaDrink", "Mana Drink", "Show a restock reminder in rested areas for drinks that only restore mana.")
+        AddSupplyRow("healthPotion", "Health Potions", "Show a restock reminder in rested areas for potions that only restore health.")
         _, h = W:DualRow(parent, y,
             RestockToggle("bagSpace", "Bag Space", "Show free general-purpose bag slots in rested areas."),
             RestockMinimum("bagSpace", "Minimum Free Slots", "Show the reminder when free bag slots fall below this number."))
