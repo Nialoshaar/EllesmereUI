@@ -73,6 +73,11 @@ end
 
 local defaults = {
     profile = {
+        restock = {
+            healthFood = false,
+            healthFoodMinimum = 5,
+            healthFoodClosestLevel = true,
+        },
         display = {
             iconShape = "none",
             remindersEnabled = true,

@@ -280,8 +280,8 @@ function EABR.GetIconTextOverlay(f)
     return overlay
 end
 
-local function BuildCombatIcon(name)
-    local f = CreateFrame("Frame", name, combatAnchor)
+local function BuildVisualIcon(name, parent)
+    local f = CreateFrame("Frame", name, parent)
     f:SetSize(ICON_SIZE, ICON_SIZE)
     f:SetFrameStrata(GetStrata())
     f:SetFrameLevel(120)
@@ -300,6 +300,11 @@ local function BuildCombatIcon(name)
     EABR.CreateIconBagCountOverlay(f)
     EABR.AttachIconHover(f)
     EABR.AttachIconTooltip(f)
+    return f
+end
+
+local function BuildCombatIcon(name)
+    local f = BuildVisualIcon(name, combatAnchor)
     EABR.AttachCombatClickHint(f)
     return f
 end
@@ -369,6 +374,27 @@ local function HideCombatIcons()
     if combatAnchor then EllesmereUI.SetElementVisibility(combatAnchor, false) end
 end
 
+local function SetVisualIconText(f, label, hideText)
+    local p = db and db.profile.display
+    if p and p.showText and not hideText then
+        local tc = p.textColor or DEFAULT_TEXT_COLOR
+        local fontPath = ResolveFontPath(p.nameFont)
+        local textSize = p.textSize or 11
+        local xOff = p.textXOffset or 0
+        local yOff = p.textYOffset or -2
+        SetABRFont(f._text, fontPath, textSize)
+        f._text:ClearAllPoints()
+        local tp, ip = GetTextAnchorPoints(p)
+        f._text:SetPoint(tp, f, ip, xOff, yOff)
+        f._text:SetTextColor(tc.r, tc.g, tc.b, 1)
+        f._text:SetText(label or "")
+        f._text:Show()
+    else
+        f._text:SetText("")
+        f._text:Hide()
+    end
+end
+
 local function ShowCombatIcon(m)
     local f
     if EABR.IsReceiverRaidBuff(m) then
@@ -381,24 +407,7 @@ local function ShowCombatIcon(m)
     f._dismissKey = m.dismissKey or nil
     local spellID = m.spellID or (m.data and m.data.castSpell)
     f._icon:SetTexture(m.texture or (spellID and Tex(spellID)) or 134400)
-    local p = db and db.profile.display
-    if p and p.showText and not m.isEating then
-        local tc = p.textColor or DEFAULT_TEXT_COLOR
-        local fontPath = ResolveFontPath(p.nameFont)
-        local textSize = p.textSize or 11
-        local xOff = p.textXOffset or 0
-        local yOff = p.textYOffset or -2
-        SetABRFont(f._text, fontPath, textSize)
-        f._text:ClearAllPoints()
-        local tp, ip = GetTextAnchorPoints(p)
-        f._text:SetPoint(tp, f, ip, xOff, yOff)
-        f._text:SetTextColor(tc.r, tc.g, tc.b, 1)
-        f._text:SetText(m.label or "")
-        f._text:Show()
-    else
-        f._text:SetText("")
-        f._text:Hide()
-    end
+    SetVisualIconText(f, m.label, m.isEating)
     EABR.ApplyEatingVisual(f, m)
     EABR.ApplyIconExpiry(f, m)
     EABR.ApplyIconTooltipData(f, m)
@@ -1726,6 +1735,7 @@ do
 end
 
 I.AcquireEntry, I.activeIcons, I.ApplyGlow = AcquireEntry, activeIcons, ApplyGlow
+I.BuildVisualIcon, I.SetVisualIconText = BuildVisualIcon, SetVisualIconText
 I.ApplySetup, I.combatActiveIcons = ApplySetup, combatActiveIcons
 I.combatIconPool, I.cursorActiveIcons = combatIconPool, cursorActiveIcons
 I.receiverIconPool = receiverIconPool

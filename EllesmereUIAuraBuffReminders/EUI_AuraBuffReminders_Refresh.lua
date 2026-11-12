@@ -1446,6 +1446,7 @@ local function Refresh()
     -- Pooled reminder buttons are children of iconAnchor, built in OnEnable (PLAYER_LOGIN). File-scope events (SPELLS_CHANGED, PLAYER_TALENT_UPDATE,
     -- TRAIT_CONFIG_UPDATED, ...) can fire DURING loading before OnEnable runs; a reminder created then via GetOrCreateIcon gets a nil parent and renders oversized forever (scale 1.0, not UIParent scale -- pooled buttons are never re-parented). Wait for the anchor; OnEnable fires its own refresh.
     if not iconAnchor then return end
+    if db.profile.restock.healthFood or I.restockWatching then I.RefreshRestock() end
     -- WoW Forever: the returns below show nothing, so the Raid Buffs group
     -- watch and the tracking event stand down with them (EABR.FvStandDown);
     -- the event that ends each state (panel close, vehicle exit, alive, rest

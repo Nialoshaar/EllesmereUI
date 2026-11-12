@@ -174,7 +174,10 @@ function EABR:OnEnable()
 
     -- Talent reminder migration handled by EllesmereUIABR_TalentReminders.lua
 
-    _G._EABR_RequestRefresh = RequestRefresh
+    _G._EABR_RequestRefresh = function()
+        if I.restockWatching then I.InvalidateRestockStyle() end
+        RequestRefresh()
+    end
     _G._EABR_ApplyIconBorder = EABR.ApplyIconBorder
     _G._EABR_ApplyAllIconBorders = EABR.ApplyAllIconBorders
     _G._EABR_HideAllIcons = HideAllIcons
