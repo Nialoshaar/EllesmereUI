@@ -80,6 +80,8 @@ local defaults = {
             manaDrink = false,
             manaDrinkMinimum = 5,
             manaDrinkClosestLevel = true,
+            bagSpace = false,
+            bagSpaceMinimum = 5,
         },
         display = {
             iconShape = "none",

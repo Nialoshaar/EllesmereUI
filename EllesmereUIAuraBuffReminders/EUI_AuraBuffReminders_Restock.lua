@@ -7,6 +7,8 @@ I.broken = true
 
 local EABR = I.EABR
 local KEY = "EABR_Restock"
+local bagSpace = { key = "bagSpace", minimum = "bagSpaceMinimum", texture = 133633,
+    label = function() return EllesmereUI.L("Bag Space") end }
 local reminders = {
     { key = "healthFood", minimum = "healthFoodMinimum", closest = "healthFoodClosestLevel",
       spell = EABR.FOREVER and 433 or 1290925, otherSpell = EABR.FOREVER and 1131 or nil,
@@ -14,9 +16,10 @@ local reminders = {
     { key = "manaDrink", minimum = "manaDrinkMinimum", closest = "manaDrinkClosestLevel",
       spell = EABR.FOREVER and 430 or 1290929, otherSpell = EABR.FOREVER and 1137 or 430,
       texture = 132794, label = function() return EllesmereUI.L("Mana Drink") end },
+    bagSpace,
 }
 local db, anchor, appliedPos, panelOpen
-local countDirty, waitingForSpellText, watchLevel, playerLevel
+local countDirty, bagSpaceDirty, waitingForSpellText, watchSupplies, watchLevel, playerLevel
 local pendingItems, failedItems, spellRequests, descriptionKinds
 local wasResting, sleepingBagRest, lastProfile
 local styleDirty
@@ -39,10 +42,12 @@ end
 
 local function GetAnchorSize(w, h)
     local p = db.profile
-    if p.restock.healthFood and p.restock.manaDrink then
-        w = w * 2 + (p.display.iconSpacing or 8)
+    local count = 0
+    for _, reminder in ipairs(reminders) do
+        if p.restock[reminder.key] then count = count + 1 end
     end
-    return w, h
+    count = math.max(count, 1)
+    return count * w + (count - 1) * (p.display.iconSpacing or 8), h
 end
 
 local function ApplyPosition()
@@ -70,7 +75,7 @@ local function RegisterUnlockElement()
             getSize = function() return GetAnchorSize(GetIconSize()) end,
             isHidden = function()
                 local restock = db.profile.restock
-                return not (restock.healthFood or restock.manaDrink)
+                return not (restock.healthFood or restock.manaDrink or restock.bagSpace)
             end,
             savePos = function(_, point, relPoint, x, y)
                 db.profile.restockPos = { point = point, relPoint = relPoint, x = x, y = y }
@@ -103,7 +108,7 @@ local function CountSupplies()
     waitingForSpellText = false
     wipe(descriptionKinds)
     for _, reminder in ipairs(reminders) do
-        if reminder.enabled then
+        if reminder.spell and reminder.enabled then
             -- Reference spells supply the localized wording for the whole effect.
             local plain = GetFoodDescription(reminder.spell)
             local second = GetFoodDescription(reminder.otherSpell)
@@ -159,8 +164,20 @@ local function CountSupplies()
     end
     if incomplete then
         for _, reminder in ipairs(reminders) do
-            if reminder.enabled then reminder.incomplete = true end
+            if reminder.spell and reminder.enabled then reminder.incomplete = true end
         end
+    end
+end
+
+local function CountFreeSlots()
+    local free = 0
+    for bag = 0, NUM_BAG_SLOTS do
+        local slots, family = C_Container.GetContainerNumFreeSlots(bag)
+        if not family or family == 0 then free = free + (slots or 0) end
+    end
+    if bagSpace.count ~= free then
+        bagSpace.count = free
+        bagSpace.badgeDirty = true
     end
 end
 
@@ -177,6 +194,7 @@ I.panelOpenSetters[#I.panelOpenSetters + 1] = function(open)
 end
 
 local function RetryFailedData()
+    if not watchSupplies then return end
     wipe(failedItems)
     for spellID, pending in pairs(spellRequests) do
         if pending == false then spellRequests[spellID] = nil end
@@ -193,6 +211,7 @@ local function OnEvent(_, event, id, success)
         return
     elseif event == "PLAYER_ENTERING_WORLD" then
         sleepingBagRest = nil
+        countDirty, bagSpaceDirty = true, true
         return
     elseif event == "PLAYER_UPDATE_RESTING" then
         if not IsResting() then sleepingBagRest = nil end
@@ -211,6 +230,7 @@ local function OnEvent(_, event, id, success)
     elseif event == "PLAYER_LEVEL_UP" then
         playerLevel = id
     elseif event == "BAG_UPDATE_DELAYED" then
+        bagSpaceDirty = true
         RetryFailedData()
     end
     countDirty = true
@@ -242,14 +262,16 @@ local function RenderReminder(reminder, p, w, h, x)
         reminder.badgeDirty = true
     end
     if reminder.badgeDirty then
-        local texture = I.Tex(reminder.spell) or reminder.texture
+        local texture = (reminder.spell and I.Tex(reminder.spell)) or reminder.texture
         if texture ~= reminder.iconTexture then
             reminder.iconTexture = texture
             icon._icon:SetTexture(texture)
         end
         local count, incomplete = reminder.count, reminder.incomplete
         local badge
-        if incomplete and p.showCount ~= false then
+        if reminder == bagSpace then
+            badge = tostring(count)
+        elseif incomplete and p.showCount ~= false then
             badge = count > 0 and (count .. "+") or "?"
         end
         EABR.ApplyIconBagCount(icon, count, not incomplete and count == 0, nil, badge)
@@ -261,13 +283,14 @@ end
 function I.RefreshRestock()
     local profile = db.profile
     local restock = profile.restock
-    if not (restock.healthFood or restock.manaDrink) then
+    local wantSupplies = restock.healthFood or restock.manaDrink
+    if not (wantSupplies or restock.bagSpace) then
         if I.restockWatching then
             anchor:UnregisterAllEvents()
             HideIcons()
             I.restockWatching = false
-            countDirty, waitingForSpellText = true, nil
-            watchLevel, playerLevel = nil, nil
+            countDirty, bagSpaceDirty, waitingForSpellText = true, true, nil
+            watchSupplies, watchLevel, playerLevel = nil, nil, nil
             wasResting, sleepingBagRest, lastProfile = nil, nil, nil
             wipe(pendingItems)
             wipe(failedItems)
@@ -294,14 +317,25 @@ function I.RefreshRestock()
     if not I.restockWatching then
         I.restockWatching = true
         anchor:RegisterEvent("BAG_UPDATE_DELAYED")
+        anchor:RegisterEvent("PLAYER_UPDATE_RESTING")
+        anchor:RegisterEvent("PLAYER_ENTERING_WORLD")
+        if EABR.FOREVER then
+            anchor:RegisterEvent("SPELL_UPDATE_COOLDOWN")
+        end
+    end
+    if wantSupplies and not watchSupplies then
+        watchSupplies = true
         anchor:RegisterEvent("ITEM_DATA_LOAD_RESULT")
         anchor:RegisterEvent("SPELL_DATA_LOAD_RESULT")
         anchor:RegisterEvent("SPELL_TEXT_UPDATE")
-        anchor:RegisterEvent("PLAYER_UPDATE_RESTING")
-        if EABR.FOREVER then
-            anchor:RegisterEvent("SPELL_UPDATE_COOLDOWN")
-            anchor:RegisterEvent("PLAYER_ENTERING_WORLD")
-        end
+    elseif watchSupplies and not wantSupplies then
+        watchSupplies, waitingForSpellText = nil, nil
+        anchor:UnregisterEvent("ITEM_DATA_LOAD_RESULT")
+        anchor:UnregisterEvent("SPELL_DATA_LOAD_RESULT")
+        anchor:UnregisterEvent("SPELL_TEXT_UPDATE")
+        wipe(pendingItems)
+        wipe(failedItems)
+        wipe(spellRequests)
     end
 
     if profile ~= lastProfile then
@@ -316,10 +350,14 @@ function I.RefreshRestock()
     local wantLevel = false
     for _, reminder in ipairs(reminders) do
         local enabled = restock[reminder.key] == true
-        local closest = enabled and restock[reminder.closest] ~= false
+        local closest = enabled and reminder.closest ~= nil and restock[reminder.closest] ~= false
         if enabled ~= reminder.enabled or closest ~= reminder.closestLevel then
             reminder.enabled, reminder.closestLevel = enabled, closest
-            countDirty = true
+            if reminder == bagSpace then
+                bagSpaceDirty = true
+            else
+                countDirty = true
+            end
         end
         if closest then wantLevel = true end
     end
@@ -345,8 +383,12 @@ function I.RefreshRestock()
     wasResting = true
     if panelOpen then return end
     if countDirty then
-        CountSupplies()
+        if watchSupplies then CountSupplies() end
         countDirty = false
+    end
+    if bagSpaceDirty and bagSpace.enabled then
+        CountFreeSlots()
+        bagSpaceDirty = false
     end
     local visible = 0
     for _, reminder in ipairs(reminders) do

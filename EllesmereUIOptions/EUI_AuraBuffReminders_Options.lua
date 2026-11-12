@@ -3762,30 +3762,37 @@ initFrame:SetScript("OnEvent", function(self)
         parent._showRowDivider = true
         local _, h = W:SectionHeader(parent, "RESTOCK", y)
         y = y - h
+        local function RestockToggle(key, name, tooltip)
+            return { type="toggle", text=name, tooltip=tooltip,
+                     getValue=function() local p = DB(); return p and p.restock[key] end,
+                     setValue=function(v)
+                         local p = DB(); if not p then return end; p.restock[key] = v
+                         RefreshAll()
+                         EllesmereUI:RefreshPage()
+                     end }
+        end
+        local function RestockMinimum(key, label, tooltip)
+            local minimum = key .. "Minimum"
+            return { type="slider", text=label, min=1, max=100, step=1, tooltip=tooltip,
+                     disabled=function() local p = DB(); return not (p and p.restock[key]) end,
+                     getValue=function() local p = DB(); return p and p.restock[minimum] or 5 end,
+                     setValue=function(v)
+                         local p = DB()
+                         if not (p and p.restock[key]) then return end
+                         p.restock[minimum] = v
+                         RefreshAll()
+                     end }
+        end
         local function AddSupplyRow(key, name, tooltip)
-            local minimum, closest = key .. "Minimum", key .. "ClosestLevel"
-            local function Enabled()
+            local closest = key .. "ClosestLevel"
+            local function Disabled()
                 local p = DB()
-                return p and p.restock[key]
+                return not (p and p.restock[key])
             end
-            local function Disabled() return not Enabled() end
 
             local row, rowHeight = W:DualRow(parent, y,
-                { type="toggle", text=name, tooltip=tooltip,
-                  getValue=Enabled,
-                  setValue=function(v)
-                      local p = DB(); if not p then return end; p.restock[key] = v
-                      RefreshAll()
-                      EllesmereUI:RefreshPage()
-                  end },
-                { type="slider", text="Minimum Count", min=1, max=100, step=1,
-                  tooltip="Show the reminder when your bag count falls below this number.",
-                  disabled=Disabled,
-                  getValue=function() local p = DB(); return p and p.restock[minimum] or 5 end,
-                  setValue=function(v)
-                      local p = DB(); if not p then return end; p.restock[minimum] = v
-                      RefreshAll()
-                  end }
+                RestockToggle(key, name, tooltip),
+                RestockMinimum(key, "Minimum Count", "Show the reminder when your bag count falls below this number.")
             )
             EllesmereUI.BuildInlineCog(row._leftRegion, {
                 title = name,
@@ -3809,7 +3816,10 @@ initFrame:SetScript("OnEvent", function(self)
         end
         AddSupplyRow("healthFood", "Health Food", "Show a restock reminder in rested areas for food that only restores health.")
         AddSupplyRow("manaDrink", "Mana Drink", "Show a restock reminder in rested areas for drinks that only restore mana.")
-        return math.abs(y)
+        _, h = W:DualRow(parent, y,
+            RestockToggle("bagSpace", "Bag Space", "Show free general-purpose bag slots in rested areas."),
+            RestockMinimum("bagSpace", "Minimum Free Slots", "Show the reminder when free bag slots fall below this number."))
+        return math.abs(y - h)
     end
 
     ---------------------------------------------------------------------------
