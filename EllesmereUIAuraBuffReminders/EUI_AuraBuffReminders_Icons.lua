@@ -1587,7 +1587,7 @@ ShowForeverFoodMenu = function(btn)
     local foods = btn._foreverFood
     local function IsCurrent()
         return not InCombat() and db.profile == profile and profile.forever == fo
-            and fo and fo.pickerEnabled == true and fo.wellFed and fo.wellFedInventory == true
+            and fo and fo.pickerEnabled == true and fo.wellFed
             and foods and EABR.IsForeverFoodCurrent(foods) and btn._foreverFood == foods and btn:IsVisible()
     end
     if not IsCurrent() then return end

@@ -978,7 +978,7 @@ function EABR.CollectForever(missing, inInstance, inPvP)
     if watchPickerSpells ~= (EABR._fvPickerSpellEvents or false) then
         EABR.FvSyncPickerSpellEvents(watchPickerSpells)
     end
-    local watchFood = watchPickerSpells and not inPvP and fo.wellFed and fo.wellFedInventory == true or false
+    local watchFood = watchPickerSpells and not inPvP and fo.wellFed or false
     EABR.SyncForeverFoodWatch(watchFood)
     if not shows then return end
     local open = not inPvP

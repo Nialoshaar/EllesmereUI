@@ -1806,7 +1806,7 @@ initFrame:SetScript("OnEvent", function(self)
         if FOREVER then
             _, h = W:DualRow(parent, y,
                 { type="toggle", text="Action Picker",
-                  tooltip="Right-click a spell group or Class Buffs reminder that has more than one spell to choose the spell its left click casts. Scroll over a spell in the picker to choose its rank.",
+                  tooltip="Right-click a spell group or Class Buffs reminder that has more than one spell to choose the spell its left click casts. Scroll over a spell in the picker to choose its rank. Right-click the Well Fed reminder to choose food from your bags.",
                   getValue=function() local f = FDB(); return f and f.pickerEnabled == true end,
                   setValue=function(v)
                       local f = FDB(); if not f then return end; f.pickerEnabled = v
@@ -1995,17 +1995,6 @@ initFrame:SetScript("OnEvent", function(self)
                     disabled = function() local f = FDB(); return not (f and f.wellFed) end,
                     disabledTooltip = _G._EABR_SpellName(19705, "Well Fed"),
                     rows = {
-                        { type="toggle", label="Get Food from Inventory",
-                          tooltip="Right-click the Well Fed reminder to pick food from your bags. Left-click to eat it out of combat.",
-                          disabled=function() local f = FDB(); return not (f and f.pickerEnabled == true) end,
-                          disabledTooltip="Action Picker",
-                          get=function() local f = FDB(); return f and f.wellFedInventory == true end,
-                          set=function(v)
-                              local f = FDB()
-                              if not (f and f.wellFed and f.pickerEnabled == true) then return end
-                              f.wellFedInventory = v and true or nil
-                              RefreshAll()
-                          end },
                         { type="slider", label="Show Below (Minutes)", min=0, max=10, step=1,
                           tooltip="Show the reminder before Well Fed expires. Set to 0 to show it only after the buff expires.",
                           get=function() local f = FDB(); return f and f.wellFedShowBelow or 0 end,

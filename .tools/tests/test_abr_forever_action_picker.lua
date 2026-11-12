@@ -615,7 +615,7 @@ do
     local foodID, otherID, spellID = 9001, 9002, 1248377
     EABR.WELL_FED = 19705
     EABR.FOOD_BUFFS = { EABR.WELL_FED }
-    fo.wellFed, fo.wellFedInventory, fo.pickerEnabled = true, true, false
+    fo.wellFed, fo.pickerEnabled = true, false
     local watch, onFoodEvent
     CreateFrame = function()
         assert(not watch, "food watcher was built more than once")
@@ -735,11 +735,9 @@ do
     assert(rec.isClosed)
     fo.pickerEnabled = true
     assert(FoodEntry().tooltipItem == otherID and watch.events.BAG_UPDATE_DELAYED)
-    fo.wellFedInventory = nil
-    assert(FoodEntry().mode == "texture" and not next(watch.events) and fo.wellFedItem == otherID)
-    db.profile.forever = { wellFed = true, pickerEnabled = true, wellFedItem = otherID, classBuffActions = {} }
+    db.profile.forever = { wellFed = true, wellFedItem = otherID, classBuffActions = {} }
     assert(FoodEntry().mode == "texture" and not next(watch.events), "a saved selection alone enabled the feature")
-    db.profile.forever.wellFedInventory = true
+    db.profile.forever.pickerEnabled = true
     bag = {}
     assert(not FoodEntry().foreverFood and FoodEntry().mode == "texture")
 
@@ -750,19 +748,8 @@ do
     _G._EABR_SpellName = function(_, fallback) return fallback end
     assert(loadstring("local EllesmereUI, gatherRow, FDB, RefreshAll = ...\n" .. foodCog, "=Well Fed cog"))(
         ui, {}, function() return fo end, function() end)
-    fo.pickerEnabled = false
-    local foodToggle = cog.rows[1]
-    assert(not cog.disabled() and foodToggle.disabled() and foodToggle.disabledTooltip == "Action Picker")
-    foodToggle.set(true)
-    assert(fo.wellFedInventory == nil)
-    fo.pickerEnabled = true
-    assert(not cog.disabled() and not foodToggle.disabled())
-    foodToggle.set(true)
-    assert(foodToggle.get() and fo.wellFedInventory == true)
-    foodToggle.set(false)
-    assert(fo.wellFedInventory == nil and fo.wellFedItem == otherID)
-
-    local threshold = cog.rows[2]
+    local threshold = cog.rows[1]
+    assert(#cog.rows == 1 and threshold.type == "slider")
     assert(threshold.get() == 0 and threshold.min == 0 and threshold.max == 10)
     db.profile.forever = fo
     fo.pickerEnabled = false
