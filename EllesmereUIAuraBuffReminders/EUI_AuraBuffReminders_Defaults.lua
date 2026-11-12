@@ -77,6 +77,9 @@ local defaults = {
             healthFood = false,
             healthFoodMinimum = 5,
             healthFoodClosestLevel = true,
+            manaDrink = false,
+            manaDrinkMinimum = 5,
+            manaDrinkClosestLevel = true,
         },
         display = {
             iconShape = "none",

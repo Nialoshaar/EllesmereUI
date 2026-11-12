@@ -7,14 +7,19 @@ I.broken = true
 
 local EABR = I.EABR
 local KEY = "EABR_Restock"
-local PLAIN_FOOD = EABR.FOREVER and 433 or 1290925
-local SECOND_PLAIN_FOOD = EABR.FOREVER and 1131 or nil
-local db, anchor, icon, label, appliedPos
-local count, incomplete, waitingForSpellText
-local closestLevel, playerLevel
-local pendingItems, failedItems, spellRequests
+local reminders = {
+    { key = "healthFood", minimum = "healthFoodMinimum", closest = "healthFoodClosestLevel",
+      spell = EABR.FOREVER and 433 or 1290925, otherSpell = EABR.FOREVER and 1131 or nil,
+      texture = 133995, label = function() return EllesmereUI.L("Health Food") end },
+    { key = "manaDrink", minimum = "manaDrinkMinimum", closest = "manaDrinkClosestLevel",
+      spell = EABR.FOREVER and 430 or 1290929, otherSpell = EABR.FOREVER and 1137 or 430,
+      texture = 132794, label = function() return EllesmereUI.L("Mana Drink") end },
+}
+local db, anchor, appliedPos, panelOpen
+local countDirty, waitingForSpellText, watchLevel, playerLevel
+local pendingItems, failedItems, spellRequests, descriptionKinds
 local wasResting, sleepingBagRest, lastProfile
-local styleDirty, badgeDirty, iconTexture
+local styleDirty
 
 I.restockWatching = false
 I.dbSetters[#I.dbSetters + 1] = function(v) db = v end
@@ -30,6 +35,14 @@ local function GetIconSize()
         return ns.IconDimensions(size, p)
     end
     return size, size
+end
+
+local function GetAnchorSize(w, h)
+    local p = db.profile
+    if p.restock.healthFood and p.restock.manaDrink then
+        w = w * 2 + (p.display.iconSpacing or 8)
+    end
+    return w, h
 end
 
 local function ApplyPosition()
@@ -54,8 +67,11 @@ local function RegisterUnlockElement()
             noResize = true,
             noSizeMatchTarget = true,
             getFrame = function() return anchor end,
-            getSize = GetIconSize,
-            isHidden = function() return not db.profile.restock.healthFood end,
+            getSize = function() return GetAnchorSize(GetIconSize()) end,
+            isHidden = function()
+                local restock = db.profile.restock
+                return not (restock.healthFood or restock.manaDrink)
+            end,
             savePos = function(_, point, relPoint, x, y)
                 db.profile.restockPos = { point = point, relPoint = relPoint, x = x, y = y }
                 if not EllesmereUI._unlockActive then ApplyPosition() end
@@ -83,20 +99,27 @@ local function GetFoodDescription(spellID)
     if spellRequests[spellID] then waitingForSpellText = true end
 end
 
-local function CountHealthFood()
+local function CountSupplies()
     waitingForSpellText = false
-    -- The reference spells supply localized wording, not a list of eligible spells or items.
-    local plain = GetFoodDescription(PLAIN_FOOD)
-    local second = GetFoodDescription(SECOND_PLAIN_FOOD)
-    if not plain and not second then
-        return 0, true
+    wipe(descriptionKinds)
+    for _, reminder in ipairs(reminders) do
+        if reminder.enabled then
+            -- Reference spells supply the localized wording for the whole effect.
+            local plain = GetFoodDescription(reminder.spell)
+            local second = GetFoodDescription(reminder.otherSpell)
+            if plain then descriptionKinds[plain] = reminder end
+            if second then descriptionKinds[second] = reminder end
+            reminder.count, reminder.incomplete, reminder.bestLevel = 0, not (plain or second), 0
+            reminder.badgeDirty = true
+            if reminder.closestLevel and EABR.FOREVER and playerLevel >= 5 then
+                -- Keep the current tier as the minimum even when its bags are empty.
+                reminder.bestLevel = math.min(55, 5 + 10 * math.floor((playerLevel - 5) / 10))
+            end
+        end
     end
+    if not next(descriptionKinds) then return end
 
-    local total, incomplete, bestLevel = 0, false, 0
-    if closestLevel and EABR.FOREVER and playerLevel >= 5 then
-        -- Keep the current tier as the minimum even when its bags are empty.
-        bestLevel = math.min(55, 5 + 10 * math.floor((playerLevel - 5) / 10))
-    end
+    local incomplete = false
     for bag = 0, NUM_BAG_SLOTS do
         for slot = 1, C_Container.GetContainerNumSlots(bag) do
             local info = C_Container.GetContainerItemInfo(bag, slot)
@@ -113,16 +136,18 @@ local function CountHealthFood()
                     else
                         local _, spellID = C_Item.GetItemSpell(id)
                         local description = GetFoodDescription(spellID)
-                        if description and (description == plain or description == second) then
+                        local reminder = description and descriptionKinds[description]
+                        if reminder then
                             local requiredLevel = 0
-                            if closestLevel then requiredLevel = select(5, C_Item.GetItemInfo(id)) end
+                            if reminder.closestLevel then requiredLevel = select(5, C_Item.GetItemInfo(id)) end
                             if not requiredLevel then
-                                incomplete = true
-                            elseif requiredLevel >= bestLevel and (not closestLevel or requiredLevel <= playerLevel) then
-                                if requiredLevel > bestLevel then
-                                    bestLevel, total = requiredLevel, 0
+                                reminder.incomplete = true
+                            elseif requiredLevel >= reminder.bestLevel
+                                and (not reminder.closestLevel or requiredLevel <= playerLevel) then
+                                if requiredLevel > reminder.bestLevel then
+                                    reminder.bestLevel, reminder.count = requiredLevel, 0
                                 end
-                                total = total + info.stackCount
+                                reminder.count = reminder.count + info.stackCount
                             end
                         elseif spellID and not description then
                             incomplete = true
@@ -132,7 +157,23 @@ local function CountHealthFood()
             end
         end
     end
-    return total, incomplete
+    if incomplete then
+        for _, reminder in ipairs(reminders) do
+            if reminder.enabled then reminder.incomplete = true end
+        end
+    end
+end
+
+local function HideIcons()
+    for _, reminder in ipairs(reminders) do
+        local icon = reminder.icon
+        if icon and icon:IsShown() then icon:Hide() end
+    end
+end
+
+I.panelOpenSetters[#I.panelOpenSetters + 1] = function(open)
+    panelOpen = open
+    if open and I.restockWatching then HideIcons() end
 end
 
 local function RetryFailedData()
@@ -147,7 +188,7 @@ local function OnEvent(_, event, id, success)
         -- Forever reports the hidden tracking aura through this event.
         if not sleepingBagRest and not I.isSecret(id) and id == EABR.SLEEPING_BAG_TRACKING and IsResting() then
             sleepingBagRest = true
-            icon:Hide()
+            HideIcons()
         end
         return
     elseif event == "PLAYER_ENTERING_WORLD" then
@@ -172,19 +213,61 @@ local function OnEvent(_, event, id, success)
     elseif event == "BAG_UPDATE_DELAYED" then
         RetryFailedData()
     end
-    count = nil
+    countDirty = true
     I.RequestRefresh()
+end
+
+local function RenderReminder(reminder, p, w, h, x)
+    local icon = reminder.icon
+    if not icon then
+        reminder.text = reminder.label()
+        icon = I.BuildVisualIcon(nil, anchor)
+        reminder.icon = icon
+        icon:SetMouseClickEnabled(false)
+        EABR.SetIconHighlight(icon, false)
+        EABR.ApplyIconTooltipData(icon, { label = reminder.text })
+    end
+    if reminder.x ~= x then
+        reminder.x = x
+        icon:ClearAllPoints()
+        icon:SetPoint("CENTER", anchor, "CENTER", x, 0)
+    end
+    if styleDirty or not icon:IsShown() then
+        icon:SetSize(w, h)
+        icon:SetFrameStrata(I.GetStrata())
+        icon:SetAlpha(p.opacity or 1)
+        I.SetVisualIconText(icon, reminder.text)
+        EABR.ApplyIconBorder(icon, false)
+        I.ApplyGlow(icon, p)
+        reminder.badgeDirty = true
+    end
+    if reminder.badgeDirty then
+        local texture = I.Tex(reminder.spell) or reminder.texture
+        if texture ~= reminder.iconTexture then
+            reminder.iconTexture = texture
+            icon._icon:SetTexture(texture)
+        end
+        local count, incomplete = reminder.count, reminder.incomplete
+        local badge
+        if incomplete and p.showCount ~= false then
+            badge = count > 0 and (count .. "+") or "?"
+        end
+        EABR.ApplyIconBagCount(icon, count, not incomplete and count == 0, nil, badge)
+        reminder.badgeDirty = false
+    end
+    if not icon:IsShown() then icon:Show() end
 end
 
 function I.RefreshRestock()
     local profile = db.profile
-    if not profile.restock.healthFood then
+    local restock = profile.restock
+    if not (restock.healthFood or restock.manaDrink) then
         if I.restockWatching then
             anchor:UnregisterAllEvents()
-            icon:Hide()
+            HideIcons()
             I.restockWatching = false
-            count, incomplete, waitingForSpellText = nil, nil, nil
-            closestLevel, playerLevel = nil, nil
+            countDirty, waitingForSpellText = true, nil
+            watchLevel, playerLevel = nil, nil
             wasResting, sleepingBagRest, lastProfile = nil, nil, nil
             wipe(pendingItems)
             wipe(failedItems)
@@ -194,16 +277,11 @@ function I.RefreshRestock()
     end
 
     local w, h = GetIconSize()
+    local anchorWidth = GetAnchorSize(w, h)
     if not anchor then
-        pendingItems, failedItems, spellRequests = {}, {}, {}
-        label = EllesmereUI.L("Health Food")
+        pendingItems, failedItems, spellRequests, descriptionKinds = {}, {}, {}, {}
         anchor = CreateFrame("Frame", "EABR_RestockAnchor", UIParent)
-        anchor:SetSize(w, h)
-        icon = I.BuildVisualIcon(nil, anchor)
-        icon:SetAllPoints(anchor)
-        icon:SetMouseClickEnabled(false)
-        EABR.SetIconHighlight(icon, false)
-        EABR.ApplyIconTooltipData(icon, { label = label })
+        anchor:SetSize(anchorWidth, h)
         anchor:SetScript("OnEvent", OnEvent)
         ApplyPosition()
         RegisterUnlockElement()
@@ -229,17 +307,25 @@ function I.RefreshRestock()
     if profile ~= lastProfile then
         lastProfile = profile
         styleDirty = true
-        count = nil
+        countDirty = true
     end
-    if anchor:GetWidth() ~= w or anchor:GetHeight() ~= h then
-        anchor:SetSize(w, h)
+    if anchor:GetWidth() ~= anchorWidth or anchor:GetHeight() ~= h then
+        anchor:SetSize(anchorWidth, h)
         styleDirty = true
     end
-    local wantClosest = profile.restock.healthFoodClosestLevel ~= false
-    if wantClosest ~= closestLevel then
-        closestLevel = wantClosest
-        count = nil
-        if wantClosest then
+    local wantLevel = false
+    for _, reminder in ipairs(reminders) do
+        local enabled = restock[reminder.key] == true
+        local closest = enabled and restock[reminder.closest] ~= false
+        if enabled ~= reminder.enabled or closest ~= reminder.closestLevel then
+            reminder.enabled, reminder.closestLevel = enabled, closest
+            countDirty = true
+        end
+        if closest then wantLevel = true end
+    end
+    if wantLevel ~= watchLevel then
+        watchLevel = wantLevel
+        if wantLevel then
             playerLevel = UnitLevel("player")
             anchor:RegisterEvent("PLAYER_LEVEL_UP")
         else
@@ -249,46 +335,39 @@ function I.RefreshRestock()
     local resting = IsResting()
     if not resting or sleepingBagRest then
         wasResting = false
-        if icon:IsShown() then icon:Hide() end
+        HideIcons()
         return
     end
     if wasResting == false then
         RetryFailedData()
-        count = nil
+        countDirty = true
     end
     wasResting = true
-    if count == nil then
-        count, incomplete = CountHealthFood()
-        badgeDirty = true
-        local texture = I.Tex(PLAIN_FOOD) or 133995
-        if texture ~= iconTexture then
-            iconTexture = texture
-            icon._icon:SetTexture(texture)
+    if panelOpen then return end
+    if countDirty then
+        CountSupplies()
+        countDirty = false
+    end
+    local visible = 0
+    for _, reminder in ipairs(reminders) do
+        reminder.visible = reminder.enabled and reminder.count < restock[reminder.minimum]
+        if reminder.visible then
+            visible = visible + 1
+        elseif reminder.icon and reminder.icon:IsShown() then
+            reminder.icon:Hide()
         end
     end
-    if count >= profile.restock.healthFoodMinimum then
-        if icon:IsShown() then icon:Hide() end
-        return
-    end
-
+    if visible == 0 then return end
     local p = profile.display
-    if styleDirty then
-        icon:SetFrameStrata(I.GetStrata())
-        icon:SetAlpha(p.opacity or 1)
-        I.SetVisualIconText(icon, label)
-        EABR.ApplyIconBorder(icon, false)
-        I.ApplyGlow(icon, p)
-        styleDirty, badgeDirty = false, true
-    end
-    if badgeDirty then
-        local badge
-        if incomplete and p.showCount ~= false then
-            badge = count > 0 and (count .. "+") or "?"
+    local step = w + (p.iconSpacing or 8)
+    local x = -(visible - 1) * step / 2
+    for _, reminder in ipairs(reminders) do
+        if reminder.visible then
+            RenderReminder(reminder, p, w, h, x)
+            x = x + step
         end
-        EABR.ApplyIconBagCount(icon, count, not incomplete and count == 0, nil, badge)
-        badgeDirty = false
     end
-    if not icon:IsShown() then icon:Show() end
+    styleDirty = false
 end
 
 I.broken = false

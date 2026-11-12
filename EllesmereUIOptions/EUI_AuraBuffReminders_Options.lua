@@ -3762,44 +3762,54 @@ initFrame:SetScript("OnEvent", function(self)
         parent._showRowDivider = true
         local _, h = W:SectionHeader(parent, "RESTOCK", y)
         y = y - h
-        local row
-        row, h = W:DualRow(parent, y,
-            { type="toggle", text="Health Food",
-              tooltip="Show a restock reminder in rested areas for food that only restores health.",
-              getValue=function() local p = DB(); return p and p.restock.healthFood end,
-              setValue=function(v)
-                  local p = DB(); if not p then return end; p.restock.healthFood = v
-                  RefreshAll()
-                  EllesmereUI:RefreshPage()
-              end },
-            { type="slider", text="Minimum Count", min=1, max=100, step=1,
-              tooltip="Show the reminder when your bag count falls below this number.",
-              disabled=function() local p = DB(); return not (p and p.restock.healthFood) end,
-              getValue=function() local p = DB(); return p and p.restock.healthFoodMinimum or 5 end,
-              setValue=function(v)
-                  local p = DB(); if not p then return end; p.restock.healthFoodMinimum = v
-                  RefreshAll()
-              end }
-        )
-        EllesmereUI.BuildInlineCog(row._leftRegion, {
-            title = "Health Food",
-            disabled = function() local p = DB(); return not (p and p.restock.healthFood) end,
-            disabledTooltip = "Health Food",
-            rows = {
-                { type="toggle", label="Closest to Your Level",
-                  tooltip=FOREVER
-                      and "Count only the highest usable food tier. Food below your current tier does not count, even when that tier is empty."
-                      or "Count only the health food in your bags with the highest level requirement you meet.",
-                  get=function() local p = DB(); return p and p.restock.healthFoodClosestLevel ~= false end,
-                  set=function(v)
-                      local p = DB()
-                      if not (p and p.restock.healthFood) then return end
-                      p.restock.healthFoodClosestLevel = v
+        local function AddSupplyRow(key, name, tooltip)
+            local minimum, closest = key .. "Minimum", key .. "ClosestLevel"
+            local function Enabled()
+                local p = DB()
+                return p and p.restock[key]
+            end
+            local function Disabled() return not Enabled() end
+
+            local row, rowHeight = W:DualRow(parent, y,
+                { type="toggle", text=name, tooltip=tooltip,
+                  getValue=Enabled,
+                  setValue=function(v)
+                      local p = DB(); if not p then return end; p.restock[key] = v
                       RefreshAll()
+                      EllesmereUI:RefreshPage()
                   end },
-            },
-        })
-        return math.abs(y - h)
+                { type="slider", text="Minimum Count", min=1, max=100, step=1,
+                  tooltip="Show the reminder when your bag count falls below this number.",
+                  disabled=Disabled,
+                  getValue=function() local p = DB(); return p and p.restock[minimum] or 5 end,
+                  setValue=function(v)
+                      local p = DB(); if not p then return end; p.restock[minimum] = v
+                      RefreshAll()
+                  end }
+            )
+            EllesmereUI.BuildInlineCog(row._leftRegion, {
+                title = name,
+                disabled = Disabled,
+                disabledTooltip = name,
+                rows = {
+                    { type="toggle", label="Closest to Your Level",
+                      tooltip=FOREVER
+                          and "Count only the highest usable tier. Supplies below your current tier do not count, even when that tier is empty."
+                          or "Count only supplies in your bags with the highest level requirement you meet.",
+                      get=function() local p = DB(); return p and p.restock[closest] ~= false end,
+                      set=function(v)
+                          local p = DB()
+                          if not (p and p.restock[key]) then return end
+                          p.restock[closest] = v
+                          RefreshAll()
+                      end },
+                },
+            })
+            y = y - rowHeight
+        end
+        AddSupplyRow("healthFood", "Health Food", "Show a restock reminder in rested areas for food that only restores health.")
+        AddSupplyRow("manaDrink", "Mana Drink", "Show a restock reminder in rested areas for drinks that only restore mana.")
+        return math.abs(y)
     end
 
     ---------------------------------------------------------------------------
