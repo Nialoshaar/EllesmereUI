@@ -3819,6 +3819,10 @@ initFrame:SetScript("OnEvent", function(self)
         _, h = W:DualRow(parent, y,
             RestockToggle("bagSpace", "Bag Space", "Show free general-purpose bag slots in rested areas."),
             RestockMinimum("bagSpace", "Minimum Free Slots", "Show the reminder when free bag slots fall below this number."))
+        y = y - h
+        _, h = W:DualRow(parent, y,
+            RestockToggle("junk", "Junk", "Show how many bag slots contain poor-quality items with a vendor sell price in rested areas."),
+            EllesmereUI.BlankRowCfg())
         return math.abs(y - h)
     end
 

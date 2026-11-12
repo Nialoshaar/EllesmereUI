@@ -9,6 +9,7 @@ local EABR = I.EABR
 local KEY = "EABR_Restock"
 local bagSpace = { key = "bagSpace", minimum = "bagSpaceMinimum", texture = 133633,
     label = function() return EllesmereUI.L("Bag Space") end }
+local junk = { key = "junk", texture = 133784, label = function() return EllesmereUI.L("Junk") end }
 local reminders = {
     { key = "healthFood", minimum = "healthFoodMinimum", closest = "healthFoodClosestLevel",
       spell = EABR.FOREVER and 433 or 1290925, otherSpell = EABR.FOREVER and 1131 or nil,
@@ -17,9 +18,10 @@ local reminders = {
       spell = EABR.FOREVER and 430 or 1290929, otherSpell = EABR.FOREVER and 1137 or 430,
       texture = 132794, label = function() return EllesmereUI.L("Mana Drink") end },
     bagSpace,
+    junk,
 }
 local db, anchor, appliedPos, panelOpen
-local countDirty, bagSpaceDirty, waitingForSpellText, watchSupplies, watchLevel, playerLevel
+local countDirty, bagSpaceDirty, waitingForSpellText, watchItems, watchSupplies, watchLevel, playerLevel
 local pendingItems, failedItems, spellRequests, descriptionKinds
 local wasResting, sleepingBagRest, lastProfile
 local styleDirty
@@ -75,7 +77,7 @@ local function RegisterUnlockElement()
             getSize = function() return GetAnchorSize(GetIconSize()) end,
             isHidden = function()
                 local restock = db.profile.restock
-                return not (restock.healthFood or restock.manaDrink or restock.bagSpace)
+                return not (restock.healthFood or restock.manaDrink or restock.bagSpace or restock.junk)
             end,
             savePos = function(_, point, relPoint, x, y)
                 db.profile.restockPos = { point = point, relPoint = relPoint, x = x, y = y }
@@ -104,7 +106,32 @@ local function GetFoodDescription(spellID)
     if spellRequests[spellID] then waitingForSpellText = true end
 end
 
-local function CountSupplies()
+local function RequestItemData(id)
+    if not pendingItems[id] and not failedItems[id] then
+        pendingItems[id] = true
+        C_Item.RequestLoadItemDataByID(id)
+    end
+end
+
+local function CountJunkSlot(info, id)
+    if info.hasNoValue then return end
+    local quality, hasNoValue = info.quality, info.hasNoValue
+    if quality == nil or (quality == Enum.ItemQuality.Poor and hasNoValue == nil) then
+        if not C_Item.IsItemDataCachedByID(id) then
+            junk.incomplete = true
+            RequestItemData(id)
+            return
+        end
+        local _, _, itemQuality, _, _, _, _, _, _, _, sellPrice = C_Item.GetItemInfo(id)
+        quality, hasNoValue = itemQuality, not sellPrice or sellPrice <= 0
+        if quality == nil then junk.incomplete = true end
+    end
+    if quality == Enum.ItemQuality.Poor and not hasNoValue then
+        junk.count = junk.count + 1
+    end
+end
+
+local function CountBagItems()
     waitingForSpellText = false
     wipe(descriptionKinds)
     for _, reminder in ipairs(reminders) do
@@ -122,22 +149,25 @@ local function CountSupplies()
             end
         end
     end
-    if not next(descriptionKinds) then return end
+    local countSupplies = next(descriptionKinds) ~= nil
+    if junk.enabled then
+        junk.count, junk.incomplete, junk.badgeDirty = 0, false, true
+    elseif not countSupplies then
+        return
+    end
 
     local incomplete = false
     for bag = 0, NUM_BAG_SLOTS do
         for slot = 1, C_Container.GetContainerNumSlots(bag) do
             local info = C_Container.GetContainerItemInfo(bag, slot)
             local id = info and info.itemID
-            if id then
+            if id and junk.enabled then CountJunkSlot(info, id) end
+            if id and countSupplies then
                 local class, subclass = select(6, C_Item.GetItemInfoInstant(id))
                 if class == Enum.ItemClass.Consumable and subclass == Enum.ItemConsumableSubclass.Fooddrink then
                     if not C_Item.IsItemDataCachedByID(id) then
                         incomplete = true
-                        if not pendingItems[id] and not failedItems[id] then
-                            pendingItems[id] = true
-                            C_Item.RequestLoadItemDataByID(id)
-                        end
+                        RequestItemData(id)
                     else
                         local _, spellID = C_Item.GetItemSpell(id)
                         local description = GetFoodDescription(spellID)
@@ -194,7 +224,7 @@ I.panelOpenSetters[#I.panelOpenSetters + 1] = function(open)
 end
 
 local function RetryFailedData()
-    if not watchSupplies then return end
+    if not watchItems then return end
     wipe(failedItems)
     for spellID, pending in pairs(spellRequests) do
         if pending == false then spellRequests[spellID] = nil end
@@ -266,11 +296,12 @@ local function RenderReminder(reminder, p, w, h, x)
         if texture ~= reminder.iconTexture then
             reminder.iconTexture = texture
             icon._icon:SetTexture(texture)
+            if reminder == junk then icon._icon:SetDesaturated(true) end
         end
         local count, incomplete = reminder.count, reminder.incomplete
         local badge
-        if reminder == bagSpace then
-            badge = tostring(count)
+        if reminder == bagSpace or reminder == junk then
+            badge = incomplete and (count .. "+") or tostring(count)
         elseif incomplete and p.showCount ~= false then
             badge = count > 0 and (count .. "+") or "?"
         end
@@ -284,13 +315,14 @@ function I.RefreshRestock()
     local profile = db.profile
     local restock = profile.restock
     local wantSupplies = restock.healthFood or restock.manaDrink
-    if not (wantSupplies or restock.bagSpace) then
+    local wantItems = wantSupplies or restock.junk
+    if not (wantItems or restock.bagSpace) then
         if I.restockWatching then
             anchor:UnregisterAllEvents()
             HideIcons()
             I.restockWatching = false
             countDirty, bagSpaceDirty, waitingForSpellText = true, true, nil
-            watchSupplies, watchLevel, playerLevel = nil, nil, nil
+            watchItems, watchSupplies, watchLevel, playerLevel = nil, nil, nil, nil
             wasResting, sleepingBagRest, lastProfile = nil, nil, nil
             wipe(pendingItems)
             wipe(failedItems)
@@ -323,18 +355,23 @@ function I.RefreshRestock()
             anchor:RegisterEvent("SPELL_UPDATE_COOLDOWN")
         end
     end
+    if wantItems and not watchItems then
+        watchItems = true
+        anchor:RegisterEvent("ITEM_DATA_LOAD_RESULT")
+    elseif watchItems and not wantItems then
+        watchItems = nil
+        anchor:UnregisterEvent("ITEM_DATA_LOAD_RESULT")
+        wipe(pendingItems)
+        wipe(failedItems)
+    end
     if wantSupplies and not watchSupplies then
         watchSupplies = true
-        anchor:RegisterEvent("ITEM_DATA_LOAD_RESULT")
         anchor:RegisterEvent("SPELL_DATA_LOAD_RESULT")
         anchor:RegisterEvent("SPELL_TEXT_UPDATE")
     elseif watchSupplies and not wantSupplies then
         watchSupplies, waitingForSpellText = nil, nil
-        anchor:UnregisterEvent("ITEM_DATA_LOAD_RESULT")
         anchor:UnregisterEvent("SPELL_DATA_LOAD_RESULT")
         anchor:UnregisterEvent("SPELL_TEXT_UPDATE")
-        wipe(pendingItems)
-        wipe(failedItems)
         wipe(spellRequests)
     end
 
@@ -383,7 +420,7 @@ function I.RefreshRestock()
     wasResting = true
     if panelOpen then return end
     if countDirty then
-        if watchSupplies then CountSupplies() end
+        if watchItems then CountBagItems() end
         countDirty = false
     end
     if bagSpaceDirty and bagSpace.enabled then
@@ -392,7 +429,9 @@ function I.RefreshRestock()
     end
     local visible = 0
     for _, reminder in ipairs(reminders) do
-        reminder.visible = reminder.enabled and reminder.count < restock[reminder.minimum]
+        local minimum = reminder.minimum
+        reminder.visible = reminder.enabled and ((minimum and reminder.count < restock[minimum])
+            or (not minimum and reminder.count > 0))
         if reminder.visible then
             visible = visible + 1
         elseif reminder.icon and reminder.icon:IsShown() then
