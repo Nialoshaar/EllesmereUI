@@ -437,6 +437,7 @@ end
 do
     -- Use the client's localized name for the food family, shared by many spell IDs.
     local NUTRITIOUS_FOOD = 1248377
+    EABR.NutritiousFoodSpellID = NUTRITIOUS_FOOD
     local watch, watching, foods, pending
 
     function EABR.IsForeverFoodCurrent(snapshot)
@@ -1452,7 +1453,7 @@ local function Refresh()
     -- TRAIT_CONFIG_UPDATED, ...) can fire DURING loading before OnEnable runs; a reminder created then via GetOrCreateIcon gets a nil parent and renders oversized forever (scale 1.0, not UIParent scale -- pooled buttons are never re-parented). Wait for the anchor; OnEnable fires its own refresh.
     if not iconAnchor then return end
     local restock = db.profile.restock
-    if restock.healthFood or restock.manaDrink or restock.healthPotion or restock.bagSpace or restock.junk
+    if restock.healthFood or restock.manaDrink or restock.healthPotion or restock.wellFedFood or restock.bagSpace or restock.junk
         or I.restockWatching then
         I.RefreshRestock()
     end

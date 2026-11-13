@@ -13,6 +13,8 @@ local HEALING_POTION_TIERS = { 45, 35, 21, 12, 3 }
 local bagSpace = { key = "bagSpace", minimum = "bagSpaceMinimum", texture = 133633,
     label = function() return EllesmereUI.L("Bag Space") end }
 local junk = { key = "junk", texture = 133784, label = function() return EllesmereUI.L("Junk") end }
+local wellFedFood = { key = "wellFedFood", minimum = "wellFedFoodMinimum", texture = 136000,
+    label = function() return EllesmereUI.L("Well Fed Food") end }
 local reminders = {
     { key = "healthFood", minimum = "healthFoodMinimum", closest = "healthFoodClosestLevel", subclass = FOOD_DRINK,
       spell = EABR.FOREVER and 433 or 1290925, otherSpell = EABR.FOREVER and 1131 or nil,
@@ -23,6 +25,7 @@ local reminders = {
     { key = "healthPotion", minimum = "healthPotionMinimum", closest = "healthPotionClosestLevel", subclass = POTION,
       spell = EABR.FOREVER and 17534 or 1234768, otherSpell = 439,
       texture = 134829, label = function() return EllesmereUI.L("Health Potions") end },
+    wellFedFood,
     bagSpace,
     junk,
 }
@@ -52,7 +55,7 @@ local function GetAnchorSize(w, h)
     local p = db.profile
     local count = 0
     for _, reminder in ipairs(reminders) do
-        if p.restock[reminder.key] then count = count + 1 end
+        if p.restock[reminder.key] and (reminder ~= wellFedFood or EABR.FOREVER) then count = count + 1 end
     end
     count = math.max(count, 1)
     return count * w + (count - 1) * (p.display.iconSpacing or 8), h
@@ -83,7 +86,8 @@ local function RegisterUnlockElement()
             getSize = function() return GetAnchorSize(GetIconSize()) end,
             isHidden = function()
                 local restock = db.profile.restock
-                return not (restock.healthFood or restock.manaDrink or restock.healthPotion or restock.bagSpace or restock.junk)
+                return not (restock.healthFood or restock.manaDrink or restock.healthPotion or (EABR.FOREVER and restock.wellFedFood)
+                    or restock.bagSpace or restock.junk)
             end,
             savePos = function(_, point, relPoint, x, y)
                 db.profile.restockPos = { point = point, relPoint = relPoint, x = x, y = y }
@@ -169,7 +173,19 @@ local function CountBagItems()
             reminder.badgeDirty = true
         end
     end
-    local countSupplies = countFood or countPotions
+    local nutritiousName
+    if wellFedFood.enabled then
+        local spellID = EABR.NutritiousFoodSpellID
+        nutritiousName = I.SpellName(spellID)
+        wellFedFood.count, wellFedFood.incomplete, wellFedFood.badgeDirty = 0, not nutritiousName, true
+        if nutritiousName then
+            spellRequests[spellID] = nil
+        elseif spellRequests[spellID] == nil then
+            spellRequests[spellID] = true
+            C_Spell.RequestLoadSpellData(spellID)
+        end
+    end
+    local countSupplies = countFood or countPotions or nutritiousName
     if junk.enabled then
         junk.count, junk.incomplete, junk.badgeDirty = 0, false, true
     elseif not countSupplies then
@@ -184,15 +200,19 @@ local function CountBagItems()
             if id and junk.enabled then CountJunkSlot(info, id) end
             if id and countSupplies then
                 local class, subclass = select(6, C_Item.GetItemInfoInstant(id))
-                if class == Enum.ItemClass.Consumable
-                    and ((countFood and subclass == FOOD_DRINK) or (countPotions and subclass == POTION)) then
+                local matchDescription = (countFood and subclass == FOOD_DRINK) or (countPotions and subclass == POTION)
+                if class == Enum.ItemClass.Consumable and (matchDescription or nutritiousName) then
                     local unresolved = false
                     if not C_Item.IsItemDataCachedByID(id) then
-                        unresolved = true
+                        if nutritiousName then wellFedFood.incomplete = true end
+                        unresolved = matchDescription
                         RequestItemData(id)
                     else
-                        local _, spellID = C_Item.GetItemSpell(id)
-                        local description = GetSupplyDescription(spellID)
+                        local spellName, spellID = C_Item.GetItemSpell(id)
+                        local isNutritious = nutritiousName and spellName == nutritiousName
+                        if isNutritious then wellFedFood.count = wellFedFood.count + info.stackCount end
+                        local description
+                        if matchDescription and not isNutritious then description = GetSupplyDescription(spellID) end
                         local reminder = description and descriptionKinds[description]
                         if reminder and reminder.subclass == subclass then
                             local requiredLevel = 0
@@ -206,7 +226,7 @@ local function CountBagItems()
                                 end
                                 reminder.count = reminder.count + info.stackCount
                             end
-                        elseif spellID and not description then
+                        elseif matchDescription and not isNutritious and spellID and not description then
                             unresolved = true
                         end
                     end
@@ -343,6 +363,7 @@ function I.RefreshRestock()
     local profile = db.profile
     local restock = profile.restock
     local wantSupplies = restock.healthFood or restock.manaDrink or restock.healthPotion
+        or (EABR.FOREVER and restock.wellFedFood)
     local wantItems = wantSupplies or restock.junk
     if not (wantItems or restock.bagSpace) then
         if I.restockWatching then
@@ -414,7 +435,7 @@ function I.RefreshRestock()
     end
     local wantLevel = false
     for _, reminder in ipairs(reminders) do
-        local enabled = restock[reminder.key] == true
+        local enabled = restock[reminder.key] == true and (reminder ~= wellFedFood or EABR.FOREVER)
         local closest = enabled and reminder.closest ~= nil and restock[reminder.closest] ~= false
         if enabled ~= reminder.enabled or closest ~= reminder.closestLevel then
             reminder.enabled, reminder.closestLevel = enabled, closest
