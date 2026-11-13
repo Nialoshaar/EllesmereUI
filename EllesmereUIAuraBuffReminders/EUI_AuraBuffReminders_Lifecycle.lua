@@ -545,14 +545,16 @@ mainFrame:SetScript("OnEvent", function(_, e, arg1, arg2, arg3)
         return
     end
     if e == "SPELL_UPDATE_COOLDOWN" then
-        if EABR._fvSleepProgressWatching and not EABR._fvSleepStartedAt and not InCombat()
+        if EABR._fvSleepProgressWatching and not InCombat()
             and not I.isSecret(arg1) and arg1 == EABR.SLEEPING_BAG_TRACKING then
             EABR._fvSleepStartedAt = GetTime()
+            EABR._fvSleepProgressEnd, EABR._fvSleepStacks = nil, nil
             RequestRefresh()
         end
         return
     end
-    if EABR._fvSleepProgressWatching and (e == "PLAYER_ENTERING_WORLD" or e == "ZONE_CHANGED_NEW_AREA"
+    if EABR._fvSleepProgressWatching and (e == "PLAYER_STARTED_MOVING"
+        or e == "PLAYER_ENTERING_WORLD" or e == "ZONE_CHANGED_NEW_AREA"
         or (e == "PLAYER_UPDATE_RESTING" and not IsResting())) then
         EABR._fvSleepStartedAt, EABR._fvSleepProgressEnd, EABR._fvSleepStacks = nil, nil, nil
     end
@@ -909,9 +911,11 @@ if EABR.FOREVER then
         if want then
             mainFrame:RegisterEvent("SPELL_UPDATE_COOLDOWN")
             mainFrame:RegisterEvent("PLAYER_LOGOUT")
+            mainFrame:RegisterEvent("PLAYER_STARTED_MOVING")
         else
             mainFrame:UnregisterEvent("SPELL_UPDATE_COOLDOWN")
             mainFrame:UnregisterEvent("PLAYER_LOGOUT")
+            mainFrame:UnregisterEvent("PLAYER_STARTED_MOVING")
             EABR._fvSleepStartedAt, EABR._fvSleepProgressEnd, EABR._fvSleepStacks = nil, nil, nil
         end
     end

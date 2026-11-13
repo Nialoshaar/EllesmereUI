@@ -852,20 +852,25 @@ local function CollectSleepingBag(showBelow, resting, auraLock)
     if resting and EABR._fvSleepStartedAt and readableStacks then
         local previousStacks = EABR._fvSleepStacks
         EABR._fvSleepStacks = stacks
-        if stacks >= EABR.SLEEPING_BAG_STACKS then
-            -- Keep the session latched until the player gets up.
-            EABR._fvSleepProgressEnd = false
-        else
-            if previousStacks ~= nil and stacks ~= previousStacks then
-                EABR._fvSleepStartedAt = GetTime()
+        local full = stacks >= EABR.SLEEPING_BAG_STACKS
+        if previousStacks ~= nil and stacks ~= previousStacks then
+            EABR._fvSleepStartedAt = GetTime()
+            -- Reaching three stacks ends the timer. Entering at three starts a refresh timer.
+            if full then
+                EABR._fvSleepProgressEnd = false
+            else
                 EABR._fvSleepProgressEnd = nil
             end
-            local progressEnd = EABR._fvSleepProgressEnd
-            if not progressEnd or progressEnd > EABR._fvSleepStartedAt + 60 then
-                progressEnd = EABR._fvSleepStartedAt + 60
-                EABR._fvSleepProgressEnd = progressEnd
+        end
+        if EABR._fvSleepProgressEnd ~= false then
+            local total = math.max(1, EABR.SLEEPING_BAG_STACKS - stacks) * 60
+            local progressEnd = EABR._fvSleepStartedAt + total
+            EABR._fvSleepProgressEnd = progressEnd
+            local left = progressEnd - GetTime()
+            if left > 0 then
+                FvNeeds(left)
+                expireAt, duration, swipe = progressEnd, total, true
             end
-            expireAt, duration, swipe = progressEnd, 60, true
         end
         stackText = stacks .. "/" .. EABR.SLEEPING_BAG_STACKS
     end
