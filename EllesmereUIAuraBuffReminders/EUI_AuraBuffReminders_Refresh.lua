@@ -818,12 +818,9 @@ function EABR.FvSleepingBagOwned()
     return owned
 end
 
-local function SyncSleepingBag(wantBag, weaponEnabled, showProgress)
+local function SyncSleepingBag(wantBag, weaponEnabled)
+    if EABR._fvSleepProgressWatching then EABR.FvSyncSleepProgress(false) end
     local sleepBag = wantBag and EABR.FvSleepingBagOwned()
-    local watchProgress = sleepBag and showProgress == true or false
-    if watchProgress ~= (EABR._fvSleepProgressWatching or false) then
-        EABR.FvSyncSleepProgress(watchProgress)
-    end
     -- The light watcher handles bag acquisition until the shared listener takes over.
     EABR.FvSyncSleepBagWatch(wantBag and not sleepBag and not EABR._fvMaxLevel
         and not weaponEnabled or false)
@@ -833,20 +830,17 @@ end
 
 local sleepStackBadges = { [0] = "0/3", "1/3", "2/3", "3/3" }
 local function CollectSleepingBag(showBelow, resting, auraLock)
-    resting = resting or EABR._fvSleepStartedAt ~= nil
     local sleepIDs = EABR._fvSleepIDs
     if not sleepIDs then sleepIDs = { EABR.SLEEPING_BAG_BUFF }; EABR._fvSleepIDs = sleepIDs end
     if auraLock and not EABR.FvRanksReadable(sleepIDs) then return end
     local ok, aura = pcall(C_UnitAuras.GetPlayerAuraBySpellID, EABR.SLEEPING_BAG_BUFF)
     local stacks = ok and not isSecret(aura) and (aura and aura.applications or 0)
     local expireAt, duration, stackText, swipe
-    if ok and showBelow > 0 and EABR.ShowUnderThresholdApplies() and not isSecret(aura) and aura then
-        local expiration = aura.expirationTime
-        if not isSecret(expiration) and expiration then
-            local left = expiration - GetTime()
-            if left > 0 and FvNeeds(left, showBelow * 60) then
-                expireAt, duration = expiration, left
-            end
+    local expiration = ok and showBelow > 0 and EABR.ShowUnderThresholdApplies() and FvAuraExpiration(aura)
+    if expiration then
+        local left = expiration - GetTime()
+        if left > 0 and FvNeeds(left, showBelow * 60) then
+            expireAt, duration = expiration, left
         end
     end
     local readableStacks = stacks and not isSecret(stacks)
@@ -927,8 +921,7 @@ function EABR.CollectForever(missing, inInstance, inPvP)
         and ((fo.gather == true and fo.gatherClassTrack ~= false) or fo.treasure == true) or false)
     local weaponEnabled = shows and fo.weapon == true or false
     EABR.FvSyncWeaponEvents(weaponEnabled)
-    local sleepBag = SyncSleepingBag(shows and fo.sleepingBag == true and not inPvP, weaponEnabled,
-        fo and fo.sleepingBagShowProgress)
+    local sleepBag = SyncSleepingBag(shows and fo.sleepingBag == true and not inPvP, weaponEnabled)
     local watchPickerSpells = shows and PickerEnabled() or false
     if watchPickerSpells ~= (EABR._fvPickerSpellEvents or false) then
         EABR.FvSyncPickerSpellEvents(watchPickerSpells)
@@ -1317,40 +1310,46 @@ end
 -- WoW Forever: what a pass that shows nothing stands down (the Raid Buffs group
 -- watch and the minimap, weapon and bag events); the next pass that can show
 -- re-arms them.
-function EABR.FvStandDown(keepSleepingBag, keepSleepProgress)
+function EABR.FvStandDown(keepSleepProgress)
     EABR.SyncForeverFoodWatch(false)
     EABR.FvSyncGroupWatch(nil, false)
     EABR.FvSyncTrackingEvent(false)
     EABR.FvSyncWeaponEvents(false)
-    if not keepSleepingBag then
-        EABR.FvSyncBagEvent(false)
-        EABR.FvSyncSleepBagWatch(false)
-        if not keepSleepProgress and EABR._fvSleepProgressWatching then EABR.FvSyncSleepProgress(false) end
-        -- Bag changes go unheard while these listeners are off.
-        EABR._fvSleepBag = nil
-    end
+    EABR.FvSyncBagEvent(false)
+    EABR.FvSyncSleepBagWatch(false)
+    if not keepSleepProgress and EABR._fvSleepProgressWatching then EABR.FvSyncSleepProgress(false) end
+    -- Bag changes go unheard while these listeners are off.
+    EABR._fvSleepBag = nil
     if EABR._fvPickerSpellEvents then EABR.FvSyncPickerSpellEvents(false) end
     if EABR.ValidateOpenPicker then EABR.ValidateOpenPicker() end
-    if not keepSleepingBag and EABR._durationTimer then
+    if EABR._durationTimer then
         EABR._durationTimer:Cancel()
         EABR._durationTimer = nil
     end
 end
 
-local function RefreshRestedSleepingBag()
-    local fo = db.profile.forever
-    local showProgress = fo and fo.sleepingBagShowProgress == true
-    local wantBag = fo and fo.sleepingBag == true and showProgress
-        and db.profile.display.remindersEnabled ~= false and not InCombat()
-    if wantBag then
+function EABR.FvSyncRestedSleepProgress()
+    local fo = db and db.profile.forever
+    local want = iconAnchor and fo and fo.sleepingBag == true and fo.sleepingBagShowProgress == true
+        and db.profile.display.remindersEnabled ~= false and not InCombat() and not UnitIsDeadOrGhost("player")
+        and (not euiPanelOpen or EABR._fvSleepStartedAt) and IsResting()
+    if want then
         CacheInstanceInfo()
-        wantBag = not InPvPInstance() and EABR.SectionShows(fo.whereToShow, InRealInstancedContent())
+        want = not InPvPInstance() and EABR.SectionShows(fo.whereToShow, InRealInstancedContent())
+            and EABR.FvSleepingBagOwned()
     end
-    EABR.FvStandDown(wantBag)
-    if not wantBag then return end
+    want = want == true
+    if want ~= (EABR._fvSleepProgressWatching or false) then EABR.FvSyncSleepProgress(want) end
+    return want
+end
+
+local function RefreshRestedSleepingBag()
+    local watching = EABR.FvSyncRestedSleepProgress()
+    EABR.FvStandDown(watching)
+    if not watching then return end
 
     local entry
-    if SyncSleepingBag(true, false, showProgress) and not _dismissedUntilLoad["forever:sleepingbag"] then
+    if EABR._fvSleepStartedAt and not _dismissedUntilLoad["forever:sleepingbag"] then
         ResetEntryPool()
         entry = CollectSleepingBag(0, true, EllesmereUI.AuraKit.AurasRestricted())
         if entry then
@@ -1384,7 +1383,7 @@ local function Refresh()
             local keepSleepProgress = EABR._fvSleepStartedAt and fo and fo.sleepingBag == true
                 and fo.sleepingBagShowProgress == true and db.profile.display.remindersEnabled ~= false
                 and not InCombat() and IsResting()
-            EABR.FvStandDown(false, keepSleepProgress)
+            EABR.FvStandDown(keepSleepProgress)
         end
         return
     end

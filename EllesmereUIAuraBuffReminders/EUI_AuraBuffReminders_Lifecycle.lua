@@ -527,6 +527,23 @@ end
 -------------------------------------------------------------------------------
 --  MAIN EVENT HANDLER (OnEvent script for runtime events)
 -------------------------------------------------------------------------------
+local function ClearSleepProgress()
+    EABR._fvSleepStartedAt, EABR._fvSleepProgressEnd, EABR._fvSleepStacks = nil, nil, nil
+    EABR._fvSleepProfile = nil
+    mainFrame:UnregisterEvent("PLAYER_STARTED_MOVING")
+    mainFrame:UnregisterEvent("PLAYER_LOGOUT")
+end
+
+local function StartSleepProgress(startedAt)
+    if not EABR._fvSleepStartedAt then
+        mainFrame:RegisterEvent("PLAYER_STARTED_MOVING")
+        mainFrame:RegisterEvent("PLAYER_LOGOUT")
+    end
+    EABR._fvSleepProfile = db.profile
+    EABR._fvSleepStartedAt = startedAt
+    EABR._fvSleepProgressEnd, EABR._fvSleepStacks = nil, nil
+end
+
 mainFrame:SetScript("OnEvent", function(_, e, arg1, arg2, arg3)
     if e == "PLAYER_LOGOUT" then
         local startedAt = EABR._fvSleepStartedAt
@@ -542,12 +559,9 @@ mainFrame:SetScript("OnEvent", function(_, e, arg1, arg2, arg3)
         return
     end
     if e == "SPELL_UPDATE_COOLDOWN" then
-        if EABR._fvSleepProgressWatching and not InCombat()
+        if EABR._fvSleepProgressWatching and IsResting() and not InCombat()
             and not I.isSecret(arg1) and arg1 == EABR.SLEEPING_BAG_TRACKING then
-            if not EABR._fvSleepStartedAt then mainFrame:RegisterEvent("PLAYER_STARTED_MOVING") end
-            EABR._fvSleepProfile = db.profile
-            EABR._fvSleepStartedAt = GetTime()
-            EABR._fvSleepProgressEnd, EABR._fvSleepStacks = nil, nil
+            StartSleepProgress(GetTime())
             RequestRefresh()
         end
         return
@@ -555,11 +569,31 @@ mainFrame:SetScript("OnEvent", function(_, e, arg1, arg2, arg3)
     if EABR._fvSleepStartedAt and (e == "PLAYER_STARTED_MOVING"
         or e == "PLAYER_ENTERING_WORLD" or e == "ZONE_CHANGED_NEW_AREA"
         or (e == "PLAYER_UPDATE_RESTING" and not IsResting())) then
-        EABR._fvSleepStartedAt, EABR._fvSleepProgressEnd, EABR._fvSleepStacks = nil, nil, nil
-        EABR._fvSleepProfile = nil
-        mainFrame:UnregisterEvent("PLAYER_STARTED_MOVING")
-    elseif e == "PLAYER_STARTED_MOVING" then
+        ClearSleepProgress()
+    end
+    if e == "PLAYER_STARTED_MOVING" then
+        RequestRefresh()
         return
+    end
+    if EABR.FOREVER and e == "PLAYER_UPDATE_RESTING" then
+        if IsResting() then
+            EABR.FvSyncRestedSleepProgress()
+            if EABR._fvSleepProgressWatching and not EABR._fvSleepStartedAt and not InCombat() then
+                local cooldown = C_Spell.GetSpellCooldown(EABR.SLEEPING_BAG_TRACKING)
+                if not I.isSecret(cooldown) and cooldown and cooldown.isEnabled then
+                    local startedAt, duration = cooldown.startTime, cooldown.duration
+                    local now = GetTime()
+                    -- An enabled cooldown with zero start/duration is also returned when idle.
+                    if not I.isSecret(startedAt) and not I.isSecret(duration)
+                        and startedAt and startedAt > 0 and startedAt <= now
+                        and duration and duration >= 60 and startedAt + duration > now then
+                        StartSleepProgress(startedAt)
+                    end
+                end
+            end
+        elseif EABR._fvSleepProgressWatching then
+            EABR.FvSyncSleepProgress(false)
+        end
     end
     if e == "ENCOUNTER_START" then
         SnapshotPlayerAuras()
@@ -667,8 +701,8 @@ mainFrame:SetScript("OnEvent", function(_, e, arg1, arg2, arg3)
             EABR._fvSleepBag = nil
             local guid = EllesmereUI.CharGUID()
             local saved = guid and EllesmereUI.CharData("sleepingBagProgress")
-            if guid then EllesmereUI.ForgetCharField(guid, "sleepingBagProgress") end
             if saved then
+                EllesmereUI.ForgetCharField(guid, "sleepingBagProgress")
                 local fo = db and db.profile.forever
                 -- Resume only a confirmed session from a UI reload. A fresh login discards it.
                 if arg2 and fo and fo.sleepingBag == true and fo.sleepingBagShowProgress == true
@@ -684,6 +718,7 @@ mainFrame:SetScript("OnEvent", function(_, e, arg1, arg2, arg3)
                         saved.startedAt, saved.endsAt, saved.stacks
                     EABR._fvSleepProfile = db.profile
                     mainFrame:RegisterEvent("PLAYER_STARTED_MOVING")
+                    mainFrame:RegisterEvent("PLAYER_LOGOUT")
                 end
             end
         end
@@ -752,7 +787,8 @@ mainFrame:SetScript("OnEvent", function(_, e, arg1, arg2, arg3)
         return
     end
 
-    -- Bag content changes invalidate item counts.
+    -- Bag CONTENT changes (BAG_UPDATE/_DELAYED) alter item counts/resolution, so re-scan. BAG_UPDATE_COOLDOWN
+    -- is intentionally NOT registered: it fires ~1/sec from cooldown ticks, changes nothing reminder-relevant, and would refresh every second and bust the resolved-item cache.
     if e == "BAG_UPDATE_DELAYED" or e == "BAG_UPDATE" then
         InvalidateItemCountCache()
         EABR._fvSleepBag = nil
@@ -914,13 +950,9 @@ if EABR.FOREVER then
         EABR._fvSleepProgressWatching = want or nil
         if want then
             mainFrame:RegisterEvent("SPELL_UPDATE_COOLDOWN")
-            mainFrame:RegisterEvent("PLAYER_LOGOUT")
         else
             mainFrame:UnregisterEvent("SPELL_UPDATE_COOLDOWN")
-            mainFrame:UnregisterEvent("PLAYER_LOGOUT")
-            mainFrame:UnregisterEvent("PLAYER_STARTED_MOVING")
-            EABR._fvSleepProfile = nil
-            EABR._fvSleepStartedAt, EABR._fvSleepProgressEnd, EABR._fvSleepStacks = nil, nil, nil
+            ClearSleepProgress()
         end
     end
 
