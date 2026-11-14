@@ -1900,7 +1900,7 @@ initFrame:SetScript("OnEvent", function(self)
             -- Where to Show | Reminder Sound
             _, h = SectionControlRow(parent, y, {
                 whereStore = FWhere, whereItems = FOREVER_SECTION_WHERE_ITEMS,
-                whereTooltip = "Pick which content the WoW Forever reminders appear in.\nRested areas (cities and inns) always stay hidden.",
+                whereTooltip = "Pick which content the WoW Forever reminders appear in.",
                 soundSec = FDB, soundField = "sectionSound",
                 onChange = RefreshAll,
             });  y = y - h
@@ -1957,6 +1957,10 @@ initFrame:SetScript("OnEvent", function(self)
                           tooltip="Also reminds you this many minutes before Well-Rested runs out. 0 = off.",
                           get=function() local f = FDB(); return f and f.sleepingBagShowBelow or 0 end,
                           set=function(v) local f = FDB(); if f then f.sleepingBagShowBelow = v > 0 and v or nil; RefreshAll() end end },
+                        { type="toggle", label="Show Sleep Timer",
+                          tooltip="Show the time to reach three Well-Rested stacks, or to refresh the buff if you enter the bag with three stacks.",
+                          get=function() local f = FDB(); return f and f.sleepingBagShowProgress == true end,
+                          set=function(v) local f = FDB(); if f then f.sleepingBagShowProgress = v and true or nil; RefreshAll() end end },
                     },
                 })
                 EllesmereUI.BuildInlineCog(gatherRow._leftRegion, {
