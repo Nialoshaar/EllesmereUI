@@ -437,8 +437,7 @@ end
 do
     -- Use the client's localized name for the food family, shared by many spell IDs.
     local NUTRITIOUS_FOOD = 1248377
-    EABR.NutritiousFoodSpellID = NUTRITIOUS_FOOD
-    local watch, watching, foods, pending
+    local watch, watching, foods, pending, invalidated
 
     function EABR.IsForeverFoodCurrent(snapshot)
         return snapshot == foods
@@ -446,32 +445,38 @@ do
 
     function EABR.GetForeverFood()
         if foods then return foods end
-        foods = {}
+        local found = {}
+        invalidated = false
         local name = SpellName(NUTRITIOUS_FOOD)
         if not name then
-            C_Spell.RequestLoadSpellData(NUTRITIOUS_FOOD)
-            return foods
-        end
-        wipe(pending)
-        for bag = 0, NUM_BAG_SLOTS do
-            for slot = 1, C_Container.GetContainerNumSlots(bag) do
-                local info = C_Container.GetContainerItemInfo(bag, slot)
-                local id = info and info.itemID
-                if id and not pending[id] then
-                    if foods[id] then
-                        foods[id] = foods[id] + info.stackCount
-                    elseif select(6, C_Item.GetItemInfoInstant(id)) == Enum.ItemClass.Consumable then
-                        if not C_Item.IsItemDataCachedByID(id) then
-                            pending[id] = true
-                            C_Item.RequestLoadItemDataByID(id)
-                        elseif C_Item.GetItemSpell(id) == name then
-                            foods[id] = info.stackCount
+            if not watch:IsEventRegistered("SPELL_DATA_LOAD_RESULT") then
+                watch:RegisterEvent("SPELL_DATA_LOAD_RESULT")
+                C_Spell.RequestLoadSpellData(NUTRITIOUS_FOOD)
+            end
+        else
+            for bag = 0, NUM_BAG_SLOTS do
+                for slot = 1, C_Container.GetContainerNumSlots(bag) do
+                    local info = C_Container.GetContainerItemInfo(bag, slot)
+                    local id = info and info.itemID
+                    if id and not pending[id] then
+                        if found[id] then
+                            found[id] = found[id] + info.stackCount
+                        elseif select(6, C_Item.GetItemInfoInstant(id)) == Enum.ItemClass.Consumable then
+                            if not C_Item.IsItemDataCachedByID(id) then
+                                if not next(pending) then watch:RegisterEvent("ITEM_DATA_LOAD_RESULT") end
+                                pending[id] = true
+                                C_Item.RequestLoadItemDataByID(id)
+                            elseif C_Item.GetItemSpell(id) == name then
+                                found[id] = info.stackCount
+                            end
                         end
                     end
                 end
             end
         end
-        return foods
+        -- A synchronous load result queues another refresh. Leave the cache empty for that pass.
+        if not invalidated then foods = found end
+        return found
     end
 
     function EABR.SyncForeverFoodWatch(want)
@@ -486,18 +491,23 @@ do
             pending = {}
             watch = CreateFrame("Frame")
             watch:SetScript("OnEvent", function(_, event, id, success)
-                if event == "BAG_UPDATE_DELAYED" or (success and
-                    ((event == "ITEM_DATA_LOAD_RESULT" and pending[id]) or
-                     (event == "SPELL_DATA_LOAD_RESULT" and id == NUTRITIOUS_FOOD))) then
-                    foods = nil
-                    if EABR.ValidateOpenPicker then EABR.ValidateOpenPicker() end
-                    if _G._EABR_RequestRefresh then _G._EABR_RequestRefresh() end
+                if event == "ITEM_DATA_LOAD_RESULT" then
+                    if not pending[id] then return end
+                    pending[id] = nil
+                    if not next(pending) then watch:UnregisterEvent(event) end
+                    if not success then return end
+                elseif event == "SPELL_DATA_LOAD_RESULT" then
+                    if id ~= NUTRITIOUS_FOOD then return end
+                    watch:UnregisterEvent(event)
+                    if not success then return end
                 end
+                invalidated = true
+                foods = nil
+                if EABR.ValidateOpenPicker then EABR.ValidateOpenPicker() end
+                if _G._EABR_RequestRefresh then _G._EABR_RequestRefresh() end
             end)
         end
         watch:RegisterEvent("BAG_UPDATE_DELAYED")
-        watch:RegisterEvent("ITEM_DATA_LOAD_RESULT")
-        watch:RegisterEvent("SPELL_DATA_LOAD_RESULT")
     end
 end
 
@@ -985,8 +995,10 @@ function EABR.CollectForever(missing, inInstance, inPvP)
         EABR.FvSyncPickerSpellEvents(watchPickerSpells)
     end
     local watchFood = watchPickerSpells and not inPvP and fo.wellFed or false
-    EABR.SyncForeverFoodWatch(watchFood)
-    if not shows then return end
+    if not shows then
+        EABR.SyncForeverFoodWatch(false)
+        return
+    end
     local open = not inPvP
     -- Under the aura lock a secret aura reads absent, so an aura reminder
     -- shows only while none of its spells is secret.
@@ -1088,6 +1100,7 @@ function EABR.CollectForever(missing, inInstance, inPvP)
                 end
             end
         end
+        EABR.SyncForeverFoodWatch(watchFood and show == true)
         if show then
             local e = AcquireEntry()
             e.mode = "texture"; e.spellID = EABR.WELL_FED
@@ -1110,6 +1123,8 @@ function EABR.CollectForever(missing, inInstance, inPvP)
             end
             missing[#missing+1] = e
         end
+    else
+        EABR.SyncForeverFoodWatch(false)
     end
     if fo.mageArmor and open and GetPlayerClass() == "MAGE" then
         EABR.CollectMageArmor(missing, auraLock, ids)

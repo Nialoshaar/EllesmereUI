@@ -622,6 +622,8 @@ do
         watch = { events = {} }
         function watch:SetScript(_, handler) onFoodEvent = handler end
         function watch:RegisterEvent(event) self.events[event] = true end
+        function watch:UnregisterEvent(event) self.events[event] = nil end
+        function watch:IsEventRegistered(event) return self.events[event] end
         function watch:UnregisterAllEvents() wipe(self.events) end
         return watch
     end
@@ -666,6 +668,7 @@ do
     assert(not FoodEntry().foreverFood and spellLoads == 1 and scans == 0)
     NAMES[spellID] = "Nourriture nutritive"
     Fire("SPELL_DATA_LOAD_RESULT", spellID, true)
+    assert(not watch.events.SPELL_DATA_LOAD_RESULT)
     local entry = FoodEntry()
     assert(refreshes == 1 and scans == 1 and itemLoads == 1 and entry.foreverFood[foodID] == 3)
     assert(FoodEntry().foreverFood == entry.foreverFood and scans == 1)
@@ -677,6 +680,7 @@ do
     assert(rec.columns == 1 and #rec.buttons == 1 and CellFrame(rec.buttons[1]).badge == 3)
 
     Fire("ITEM_DATA_LOAD_RESULT", otherID, false)
+    assert(not watch.events.ITEM_DATA_LOAD_RESULT)
     assert(refreshes == 1 and not rec.isClosed and itemLoads == 1)
     bag[1].stackCount = 2
     Fire("BAG_UPDATE_DELAYED")
@@ -692,6 +696,7 @@ do
     assert(not rec.isClosed and refreshes == 2)
     cached[otherID] = true
     Fire("ITEM_DATA_LOAD_RESULT", otherID, true)
+    assert(not watch.events.ITEM_DATA_LOAD_RESULT)
     assert(rec.isClosed and refreshes == 3, "loaded item must invalidate the menu before refresh")
     entry = FoodEntry()
     assert(entry.foreverFood[otherID] == 5)
