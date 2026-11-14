@@ -9,7 +9,6 @@ local EABR = I.EABR
 local KEY = "EABR_Restock"
 local FOOD_DRINK = Enum.ItemConsumableSubclass.Fooddrink
 local POTION = Enum.ItemConsumableSubclass.Potion
-local HEALING_POTION_TIERS = { 45, 35, 21, 12, 3 }
 local bagSpace = { key = "bagSpace", minimum = "bagSpaceMinimum", texture = 133633,
     label = function() return EllesmereUI.L("Bag Space") end }
 local junk = { key = "junk", texture = 133784, label = function() return EllesmereUI.L("Junk") end }
@@ -24,7 +23,12 @@ local reminders = {
       texture = 132794, label = function() return EllesmereUI.L("Mana Drink") end },
     { key = "healthPotion", minimum = "healthPotionMinimum", closest = "healthPotionClosestLevel", subclass = POTION,
       spell = EABR.FOREVER and 17534 or 1234768, otherSpell = 439,
+      tiers = { 45, 35, 21, 12, 3 },
       texture = 134829, label = function() return EllesmereUI.L("Health Potions") end },
+    { key = "manaPotion", minimum = "manaPotionMinimum", closest = "manaPotionClosestLevel", subclass = POTION,
+      spell = EABR.FOREVER and 17531 or 1236648, otherSpell = 437,
+      tiers = { 49, 41, 31, 22, 14, 5 },
+      texture = 134850, label = function() return EllesmereUI.L("Mana Potions") end },
     wellFedFood,
     bagSpace,
     junk,
@@ -86,7 +90,8 @@ local function RegisterUnlockElement()
             getSize = function() return GetAnchorSize(GetIconSize()) end,
             isHidden = function()
                 local restock = db.profile.restock
-                return not (restock.healthFood or restock.manaDrink or restock.healthPotion or (EABR.FOREVER and restock.wellFedFood)
+                return not (restock.healthFood or restock.manaDrink or restock.healthPotion or restock.manaPotion
+                    or (EABR.FOREVER and restock.wellFedFood)
                     or restock.bagSpace or restock.junk)
             end,
             savePos = function(_, point, relPoint, x, y)
@@ -144,8 +149,8 @@ end
 local function GetMinimumTier(reminder)
     if not reminder.closestLevel or not EABR.FOREVER then return 0 end
     -- Keep the current tier as the minimum even when its bags are empty.
-    if reminder.subclass == POTION then
-        for _, level in ipairs(HEALING_POTION_TIERS) do
+    if reminder.tiers then
+        for _, level in ipairs(reminder.tiers) do
             if playerLevel >= level then return level end
         end
     elseif playerLevel >= 5 then
@@ -362,7 +367,7 @@ end
 function I.RefreshRestock()
     local profile = db.profile
     local restock = profile.restock
-    local wantSupplies = restock.healthFood or restock.manaDrink or restock.healthPotion
+    local wantSupplies = restock.healthFood or restock.manaDrink or restock.healthPotion or restock.manaPotion
         or (EABR.FOREVER and restock.wellFedFood)
     local wantItems = wantSupplies or restock.junk
     if not (wantItems or restock.bagSpace) then

@@ -1453,7 +1453,8 @@ local function Refresh()
     -- TRAIT_CONFIG_UPDATED, ...) can fire DURING loading before OnEnable runs; a reminder created then via GetOrCreateIcon gets a nil parent and renders oversized forever (scale 1.0, not UIParent scale -- pooled buttons are never re-parented). Wait for the anchor; OnEnable fires its own refresh.
     if not iconAnchor then return end
     local restock = db.profile.restock
-    if restock.healthFood or restock.manaDrink or restock.healthPotion or restock.wellFedFood or restock.bagSpace or restock.junk
+    if restock.healthFood or restock.manaDrink or restock.healthPotion or restock.manaPotion
+        or restock.wellFedFood or restock.bagSpace or restock.junk
         or I.restockWatching then
         I.RefreshRestock()
     end

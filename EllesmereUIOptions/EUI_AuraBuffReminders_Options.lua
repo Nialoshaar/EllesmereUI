@@ -3806,6 +3806,7 @@ initFrame:SetScript("OnEvent", function(self)
         AddSupplyRow("healthFood", "Health Food", "Show a restock reminder in rested areas for food that only restores health.")
         AddSupplyRow("manaDrink", "Mana Drink", "Show a restock reminder in rested areas for drinks that only restore mana.")
         AddSupplyRow("healthPotion", "Health Potions", "Show a restock reminder in rested areas for potions that only restore health.")
+        AddSupplyRow("manaPotion", "Mana Potions", "Show a restock reminder in rested areas for potions that only restore mana.")
         if FOREVER then
             _, h = W:DualRow(parent, y,
                 RestockToggle("wellFedFood", "Well Fed Food", "Show a restock reminder for Nutritious Food in rested areas."),
