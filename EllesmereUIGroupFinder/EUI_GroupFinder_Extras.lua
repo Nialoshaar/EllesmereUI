@@ -89,7 +89,8 @@ end
 
 -- skinned dropdown button: label, grey hint, arrow
 local function ArrowButton(owner, K)
-    local btn = CreateFrame("Button", nil, owner)
+    local btn = GFNS.NewButton and GFNS.NewButton(owner) or CreateFrame("Button", nil, owner)
+    local stock = not (GFNS.SkinOn and GFNS.SkinOn())
     btn:SetNormalFontObject("GameFontHighlight")
     btn:SetText(" ")
     btn.Arrow = btn:CreateTexture(nil, "OVERLAY")
@@ -104,7 +105,8 @@ local function ArrowButton(owner, K)
     btn.Icon:Hide()
     local skin = CM._ModuleNS and CM._ModuleNS.EllesmereUIBlizzardSkin
     local S = skin and skin.WSkin
-    if S and S.Button then
+    if stock then  -- the template's rounded art
+    elseif S and S.Button then
         S.Button(btn, { "Arrow", "Label", "Hint", "Icon", "IconMask" })
     else
         local bg = btn:CreateTexture(nil, "BACKGROUND")
@@ -161,7 +163,7 @@ local function Dropdown(owner, K, modes, Get, Set, up)
     local lbg = list:CreateTexture(nil, "BACKGROUND")
     lbg:SetAllPoints()
     lbg:SetColorTexture(0, 0, 0, 1)
-    CM.MakeBorder(list, K.ThemeBorder())
+    if not (GFNS.StockBox and GFNS.StockBox(list, lbg)) then CM.MakeBorder(list, K.ThemeBorder()) end
     list.items = {}
     for i, mode in ipairs(modes) do
         local it = CreateFrame("Button", nil, list)
@@ -272,7 +274,7 @@ GFNS.ExtraRoleCounts = function(m, y, K)
     pbg:SetAllPoints()
     local fr, fg, fb = K.ThemeFill()
     pbg:SetColorTexture(fr, fg, fb, 0.98)
-    CM.MakeBorder(pop, K.ThemeBorder())
+    if not (GFNS.StockBox and GFNS.StockBox(pop, pbg)) then CM.MakeBorder(pop, K.ThemeBorder()) end
     pops[#pops + 1] = pop
 
     -- while open: veil over both columns, eats clicks
@@ -520,6 +522,7 @@ local CLASS_ROWS = {
         K.ClassLine("PALADIN", EllesmereUI.L("Intercession (Paladin)")),
         EllesmereUI.L("Engineering and other items don't count.") } end },
     { key = "extraMyClass", pick = "extraMyClassMissing", missingDefault = true,
+      raidKey = "raidMyClass", raidPick = "raidMyClassMissing",  -- the raids tab keeps its own
       has = "Has Class", missing = "No Class",  -- class name added at build
       Tip = function(K)
         local name, file = MyClass()
@@ -527,16 +530,24 @@ local CLASS_ROWS = {
       end },
 }
 
-local function Missing(c, row)
-    local v = c[row.pick]
+-- the row's keys on this tab
+local function Keys(row, raids)
+    if raids and row.raidKey then return row.raidKey, row.raidPick end
+    return row.key, row.pick
+end
+
+local function Missing(c, row, raids)
+    local _, pick = Keys(row, raids)
+    local v = c[pick]
     if v == nil then return row.missingDefault == true end
     return v == true
 end
 
 GFNS.ExtraClassRows = function(m, y, K)
-    if K.FLAG_KEYS and not tContains(K.FLAG_KEYS, "extraMyClass") then
-        K.FLAG_KEYS[#K.FLAG_KEYS + 1] = "extraMyClass"
+    for _, k in ipairs({ "extraMyClass", "raidMyClass" }) do
+        if K.FLAG_KEYS and not tContains(K.FLAG_KEYS, k) then K.FLAG_KEYS[#K.FLAG_KEYS + 1] = k end
     end
+    local raids = K.raids
     m.extraRolesEnd = y
     m.extraItemH = K.ITEM_H
     m.extraK = K
@@ -550,6 +561,7 @@ GFNS.ExtraClassRows = function(m, y, K)
             K.Tip(self, title, unpack(lines))
         end
         local inRoles = row.key == "extraMyClass"
+        local key, pick = Keys(row, raids)
         local has, missing = row.has, row.missing
         local hasBtn, missingBtn
         local icon = row.spell and C_Spell.GetSpellTexture(row.spell)
@@ -563,21 +575,21 @@ GFNS.ExtraClassRows = function(m, y, K)
         end
         local item = K.MenuItem(inRoles and roleG or miscG, inRoles and ry or my, "", function()
             local c = K.Cfg()
-            c[row.key] = (not c[row.key]) or nil
+            c[key] = (not c[key]) or nil
             K.Refilter()
             K.Paint()
         end)
-        m.items["flag_" .. row.key] = item
+        m.items["flag_" .. key] = item
         item.label:Hide()
         local btn = Dropdown(item, K, {
             { label = has, button = hasBtn, icon = icon },
             { label = missing, button = missingBtn, icon = icon },
-        }, function() return Missing(K.Cfg(), row) and 2 or 1 end,
+        }, function() return Missing(K.Cfg(), row, raids) and 2 or 1 end,
         function(i)
             -- picking turns the class row on; lust / brez leave the box alone
             local c = K.Cfg()
-            c[row.pick] = (i == 2)
-            if inRoles then c[row.key] = true end
+            c[pick] = (i == 2)
+            if inRoles then c[key] = true end
         end)
         btn:SetHeight(K.ITEM_H - 2)
         btn:SetPoint("LEFT", item, "LEFT", 8 + K.CHECK_SZ + 7, 0)
@@ -591,8 +603,9 @@ GFNS.ExtraClassRows = function(m, y, K)
 end
 
 -- false = drop the group. secret members don't count
-GFNS.ExtraClassKeep = function(id, info, c)
-    if not (c.hasLust or c.hasBrez or c.extraMyClass) then return true end
+GFNS.ExtraClassKeep = function(id, info, c, raids)
+    local mineKey = raids and "raidMyClass" or "extraMyClass"
+    if not (c.hasLust or c.hasBrez or c[mineKey]) then return true end
     local n = info and info.numMembers
     if type(n) ~= "number" or Secret(n) then return true end
     local _, mine = MyClass()
@@ -608,7 +621,7 @@ GFNS.ExtraClassKeep = function(id, info, c)
         end
     end
     for _, row in ipairs(CLASS_ROWS) do
-        if c[row.key] and have[row.key] == Missing(c, row) then return false end
+        if c[Keys(row, raids)] and have[row.key] == Missing(c, row, raids) then return false end
     end
     return true
 end

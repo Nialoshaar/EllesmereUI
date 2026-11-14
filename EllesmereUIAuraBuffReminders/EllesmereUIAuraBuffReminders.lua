@@ -6,13 +6,13 @@ if EUI_CLIENT_BLOCKED then return end -- pre-12.1 client failsafe (EllesmereUI_C
 -------------------------------------------------------------------------------
 
 local ADDON_NAME = ...
-if not (EllesmereUI and EllesmereUI._ModuleNS and EllesmereUI.NewInternals and EllesmereUI._Pool and EllesmereUI.RAID_PREP_IDS) then EUI_CLIENT_BLOCKED = true; return end -- stale-parent guard: a partially updated install (old parent, new child) goes dormant via the line-1 failsafe instead of erroring
+if not (EllesmereUI and EllesmereUI._ModuleNS and EllesmereUI.NewInternals and EllesmereUI._Pool and EllesmereUI.RAID_PREP_IDS and EllesmereUI.CharData and EllesmereUI.CharEntry) then EUI_CLIENT_BLOCKED = true; return end -- stale-parent guard: a partially updated install (old parent, new child) goes dormant via the line-1 failsafe instead of erroring (its per-character data is in the parent's roster: CharData, CharEntry)
 EllesmereUI._ModuleNS[ADDON_NAME] = select(2, ...)  -- LOD options files read this module ns via the registry
 
 local EABR = EllesmereUI.Lite.NewAddon("EllesmereUIAuraBuffReminders")
 
 -- WoW Forever runs a reduced module: the Raid Buffs section over that client's
--- four buffs (EABR.CollectForeverRaidBuffs) and one Forever-only section (the
+-- own buffs (EABR.CollectForeverRaidBuffs) and one Forever-only section (the
 -- Camp Benefits campfire buff, the Sleeping Bag's Well-Rested buff, gathering
 -- tracking, Find Treasure and custom spell IDs) collected by
 -- EABR.CollectForever, with every other retail collector, its events and its
@@ -255,6 +255,7 @@ local LABEL_OVERRIDES = {
     ["Devotion Aura"]           = "Aura",
     ["Power Word: Fortitude"]   = "Fortitude",
     ["Arcane Intellect"]        = "Intellect",
+    ["Divine Spirit"]           = "Spirit",
     ["Battle Shout"]            = "Shout",
     ["Hunter's Mark"]           = "Mark",
     ["Earth Shield (Ally)"]     = "Ally",

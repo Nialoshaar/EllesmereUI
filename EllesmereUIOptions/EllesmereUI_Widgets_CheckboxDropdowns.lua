@@ -158,7 +158,8 @@ end
 --  opts.disabled (fn) + disabledTooltip/rawTooltip/requireState (as
 --  ResolveDisabledTip): greyed and click-blocked while it answers true, the
 --  reason on hover, re-checked with the page's widgets.
---  Returns: ddBtn, refreshFn
+--  Returns: ddBtn, refreshFn. refreshFn(true) also reads a dynamic items list
+--  again while the menu is closed, for a change made outside the menu.
 -------------------------------------------------------------------------------
 function EllesmereUI.BuildVisOptsCBDropdown(parentFrame, ddW, fLevel, items, getFn, setFn, onChanged, maxVisibleItems, searchable, closeButton, onMenuClosed, opts)
     -- Search prebuild on an absorber row: the dropdown indexes nothing, so none is built.
@@ -1212,11 +1213,13 @@ function EllesmereUI.BuildVisOptsCBDropdown(parentFrame, ddW, fLevel, items, get
     end
     ddBtn:SetScript("OnEnter", function()
         ApplyHover()
+        if not (menu and menu:IsShown()) then EllesmereUI._widgetInternals.ShowDropdownTip(ddBtn, ddLbl) end
     end)
     ddBtn:SetScript("OnLeave", function()
         if not (menu and menu:IsShown()) then
             ApplyNormal()
         end
+        EllesmereUI._widgetInternals.HideDropdownTip(ddBtn)
     end)
 
     local function ShowMenu()
@@ -1290,6 +1293,7 @@ function EllesmereUI.BuildVisOptsCBDropdown(parentFrame, ddW, fLevel, items, get
             if EllesmereUI._openDropdownMenu == self then EllesmereUI._openDropdownMenu = nil end
             if ddBtn:IsMouseOver() then
                 ApplyHover()
+                EllesmereUI._widgetInternals.ShowDropdownTip(ddBtn, ddLbl)
             else
                 ApplyNormal()
             end
@@ -1300,13 +1304,19 @@ function EllesmereUI.BuildVisOptsCBDropdown(parentFrame, ddW, fLevel, items, get
         if menu._padFocus and EllesmereUI.PadCursorShown() then menu._padFocus() end
     end
 
-    ddBtn:SetScript("OnClick", function() ShowMenu() end)
+    ddBtn:SetScript("OnClick", function() EllesmereUI._widgetInternals.HideDropdownTip(ddBtn); ShowMenu() end)
     ddBtn:HookScript("OnHide", function() if menu then menu:Hide() end end)
 
-    local function RefreshAll()
+    -- RefreshAll(true), opt-in: a dynamic list is read again first, so the summary
+    -- names a change made outside the menu while it is closed (an entry typed into
+    -- a popup). A page refresh calls it with no argument and reads nothing again.
+    local function RefreshAll(reread)
         -- A caller may keep this past a page pass that dressed ddBtn (and with it
         -- the kept menu) for another build.
         if PoolGen(ddBtn) ~= dressGen then return end
+        if reread == true and itemsFn and not (menu and menu:IsShown()) then
+            items = itemsFn() or {}
+        end
         UpdateLabel()
         if menu then
             for _, r in ipairs(menu._rows or {}) do
@@ -1927,6 +1937,7 @@ function EllesmereUI.BuildReorderCBDropdown(parentFrame, ddW, fLevel, items, get
             -- Controller cursor: back onto the dropdown button before onClose, so a
             -- prompt it opens can still take the cursor (a no-op once the button is hidden).
             if EllesmereUI.PadCursorShown() then EllesmereUI.PadFocus(ddBtn) end
+            if ddBtn:IsMouseOver() then EllesmereUI._widgetInternals.ShowDropdownTip(ddBtn, ddLbl) end
             local changed = orderChanged
             orderChanged = false
             if opts.onClose then opts.onClose(changed) end
@@ -1948,9 +1959,13 @@ function EllesmereUI.BuildReorderCBDropdown(parentFrame, ddW, fLevel, items, get
         ddBrd:SetColor(1, 1, 1, EllesmereUI.DD_BRD_HA)
         ddBg:SetColorTexture(EllesmereUI.DD_BG_R, EllesmereUI.DD_BG_G, EllesmereUI.DD_BG_B, EllesmereUI.DD_BG_HA)
     end
-    ddBtn:SetScript("OnEnter", ApplyHover)
+    ddBtn:SetScript("OnEnter", function()
+        ApplyHover()
+        if not (menu and menu:IsShown()) then EllesmereUI._widgetInternals.ShowDropdownTip(ddBtn, ddLbl) end
+    end)
     ddBtn:SetScript("OnLeave", function()
         if not (menu and menu:IsShown()) then ApplyNormal() end
+        EllesmereUI._widgetInternals.HideDropdownTip(ddBtn)
     end)
 
     local function ShowMenu()
@@ -1973,7 +1988,7 @@ function EllesmereUI.BuildReorderCBDropdown(parentFrame, ddW, fLevel, items, get
         -- Controller cursor: into the opened list.
         if EllesmereUI.PadCursorShown() then EllesmereUI.PadFocus(menu) end
     end
-    ddBtn:SetScript("OnClick", ShowMenu)
+    ddBtn:SetScript("OnClick", function() EllesmereUI._widgetInternals.HideDropdownTip(ddBtn); ShowMenu() end)
     ddBtn:HookScript("OnHide", function() if menu then menu:Hide() end end)
 
     local function RefreshAll()
@@ -2128,6 +2143,7 @@ function EllesmereUI.BuildSliderDropdown(parentFrame, ddW, fLevel, items, opts)
             self:SetScript("OnUpdate", nil)
             if EllesmereUI._openDropdownMenu == self then EllesmereUI._openDropdownMenu = nil end
             Paint(ddBtn:IsMouseOver())
+            if ddBtn:IsMouseOver() then EllesmereUI._widgetInternals.ShowDropdownTip(ddBtn, ddLbl) end
             -- Controller cursor: back onto the button (a no-op once that is hidden too).
             if EllesmereUI.PadCursorShown() then EllesmereUI.PadFocus(ddBtn) end
         end)
@@ -2175,11 +2191,15 @@ function EllesmereUI.BuildSliderDropdown(parentFrame, ddW, fLevel, items, opts)
         end)
         if EllesmereUI.PadCursorShown() then EllesmereUI.PadFocus(menu) end
     end
-    ddBtn:SetScript("OnEnter", function() Paint(true) end)
+    ddBtn:SetScript("OnEnter", function()
+        Paint(true)
+        if not (menu and menu:IsShown()) then EllesmereUI._widgetInternals.ShowDropdownTip(ddBtn, ddLbl) end
+    end)
     ddBtn:SetScript("OnLeave", function()
         if not (menu and menu:IsShown()) then Paint(false) end
+        EllesmereUI._widgetInternals.HideDropdownTip(ddBtn)
     end)
-    ddBtn:SetScript("OnClick", ShowMenu)
+    ddBtn:SetScript("OnClick", function() EllesmereUI._widgetInternals.HideDropdownTip(ddBtn); ShowMenu() end)
     ddBtn:HookScript("OnHide", function() if menu then menu:Hide() end end)
 
     local function RefreshAll()

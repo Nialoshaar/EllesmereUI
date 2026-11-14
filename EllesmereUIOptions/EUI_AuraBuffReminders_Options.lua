@@ -13,7 +13,7 @@ local PAGE_TALENTS   = "Talent Reminders"
 local PAGE_UNLOCK    = "Unlock Mode"
 
 -- WoW Forever: the page keeps CORE, DISPLAY and RAID BUFFS (that client's
--- locations and four buffs) and swaps every other retail section for the one
+-- locations and its own buffs) and swaps every other retail section for the one
 -- Forever section (Camp Benefits + custom spell IDs); the Talent Reminders
 -- page does not exist there.
 local FOREVER = EllesmereUI.IS_FOREVER == true
@@ -1819,7 +1819,7 @@ initFrame:SetScript("OnEvent", function(self)
         _, h = W:Spacer(parent, y, 20);  y = y - h
 
         -----------------------------------------------------------------------
-        --  RAID BUFFS section (WoW Forever: its own locations and its four
+        --  RAID BUFFS section (WoW Forever: its own locations and its own
         --  buffs, which the module exports as the raid buff list there)
         -----------------------------------------------------------------------
         local raidBufHdr
@@ -1921,6 +1921,7 @@ initFrame:SetScript("OnEvent", function(self)
                   setValue=function(v)
                       local f = FDB(); if not f then return end; f.sleepingBag = v
                       RefreshAll()
+                      EllesmereUI:RefreshPage()
                   end }
             );  y = y - h
 
@@ -1934,6 +1935,7 @@ initFrame:SetScript("OnEvent", function(self)
                   setValue=function(v)
                       local f = FDB(); if not f then return end; f.wellFed = v
                       RefreshAll()
+                      EllesmereUI:RefreshPage()
                   end },
                 { type="toggle", text="Gathering Tracking",
                   tooltip="Reminds you when no gathering tracking is on.",
@@ -1953,7 +1955,7 @@ initFrame:SetScript("OnEvent", function(self)
                     disabledTooltip = "Sleeping Bag",
                     rows = {
                         { type="slider", label="Show Below (Minutes)", min=0, max=10, step=1,
-                          tooltip="Show the Sleeping Bag reminder with a countdown before Well-Rested expires. Set to 0 to only remind when the buff is missing or below 3 stacks.",
+                          tooltip="Also reminds you this many minutes before Well-Rested runs out. 0 = off.",
                           get=function() local f = FDB(); return f and f.sleepingBagShowBelow or 0 end,
                           set=function(v)
                               local f = FDB(); if not f then return end
@@ -1974,6 +1976,17 @@ initFrame:SetScript("OnEvent", function(self)
                 _, sleepingBagPopup = EllesmereUI.BuildCogPopup(sleepingBagOptions)
                 sleepingBagOptions.show = sleepingBagPopup
                 EllesmereUI.BuildInlineCog(campRow._rightRegion, sleepingBagOptions)
+                EllesmereUI.BuildInlineCog(gatherRow._leftRegion, {
+                    title = _G._EABR_SpellName(19705, "Well Fed"),
+                    disabled = function() local f = FDB(); return not (f and f.wellFed) end,
+                    disabledTooltip = _G._EABR_SpellName(19705, "Well Fed"),
+                    rows = {
+                        { type="slider", label="Show Below (Minutes)", min=0, max=10, step=1,
+                          tooltip="Also reminds you this many minutes before Well Fed runs out. 0 = off.",
+                          get=function() local f = FDB(); return f and f.wellFedShowBelow or 0 end,
+                          set=function(v) local f = FDB(); if f then f.wellFedShowBelow = v > 0 and v or nil; RefreshAll() end end },
+                    },
+                })
                 EllesmereUI.BuildInlineCog(gatherRow._rightRegion, {
                     title = "Gathering Tracking",
                     disabled = function() local f = FDB(); return not (f and f.gather == true) end,

@@ -19,6 +19,8 @@ local CANCEL_H = 18  -- smallest cancel square
 local GAP = 2
 local Secret = EllesmereUI.IsSecret
 local function Readable(t) return type(t) == "table" and not Secret(t) and not (canaccesstable and not canaccesstable(t)) end
+-- eui's group finder skin is on; off, our rows and buttons take blizzard's look (a reload swaps, like the skin)
+local function Skinned() return ns.SkinOn and ns.SkinOn() or false end
 
 -- display settings, in the profile (EllesmereUIGroupFinder.lua)
 local function DB() return ns.OwnListDB() end
@@ -36,10 +38,14 @@ function ns.SetOwnListSize(k, v)
 end
 -- display settings
 local DISPLAY_DEFAULTS = { iconShape = "circle", borderTexture = "solid", borderSize = 1, missingIcons = "blizzard",
+    raidRoleIcons = "ellesmere",
     appsFirst = true, signupClicks = "double", visibility = "hidden",
-    lineDelisted = false, lineAccepted = false, lineCancelled = false, lineDeclined = false }
+    lineDelisted = false, lineAccepted = false, lineCancelled = false, lineDeclined = false, delistedOpacity = 50 }
+-- signed up was part of accepted: until it's set, it follows accepted's switch and color
+local FOLLOWS = { lineSigned = "lineAccepted", color_lineSigned = "color_lineAccepted" }
 function ns.OwnListGet(k)
     local v = DB()[k]
+    if v == nil and FOLLOWS[k] then return ns.OwnListGet(FOLLOWS[k]) end
     if v == nil then return DISPLAY_DEFAULTS[k] end
     return v
 end
@@ -119,9 +125,19 @@ local function SignedUpAt(id)
     end
     return appliedAt[id]
 end
-local function Elapsed(at)
-    local s = math.max(0, math.floor(GetTime() - at))
+-- time left before the application times out, like blizzard's
+local function TimeLeft(at)
+    local s = math.max(0, APP_TIMEOUT - math.floor(GetTime() - at))
     return string.format("%d:%02d", math.floor(s / 60), s % 60)
+end
+
+-- a friend or guildmate in the group: blizzard's blue name (once per row paint: no table)
+local function FriendColor(info)
+    local bn, char, guild = info.numBNetFriends, info.numCharFriends, info.numGuildMates
+    if Secret(bn) or Secret(char) or Secret(guild) then return nil end
+    if (tonumber(bn) or 0) + (tonumber(char) or 0) + (tonumber(guild) or 0) > 0 and BATTLENET_FONT_COLOR then
+        return BATTLENET_FONT_COLOR:GetRGB()
+    end
 end
 
 -- blizzard's row check, plus the relisted case
@@ -355,6 +371,12 @@ local RR_COLORS = { TANK = { 0.16, 0.38, 0.78 }, HEALER = { 0.16, 0.62, 0.24 }, 
 ns.RaidRoleColors = RR_COLORS
 local NEED_ATLAS = { TANK = "groupfinder-icon-role-micro-tank", HEALER = "groupfinder-icon-role-micro-heal",
     DAMAGER = "groupfinder-icon-role-micro-dps" }
+-- blizzard's raid role circles, gold ring included
+local BLIZZ_RR_ATLAS = { TANK = "groupfinder-icon-role-large-tank", HEALER = "groupfinder-icon-role-large-heal",
+    DAMAGER = "groupfinder-icon-role-large-dps" }
+local BLIZZ_RR_SCALE = 1.22  -- art size over its visible ring
+-- a delisted group's text colour: the delisted row highlight colour, set on each paint
+local DR, DG, DB = 0x5B / 255, 0x5B / 255, 0x5B / 255
 local REMAINING = { TANK = "TANK_REMAINING", HEALER = "HEALER_REMAINING", DAMAGER = "DAMAGER_REMAINING" }
 local PERSON_TEX = "Interface\\AddOns\\EllesmereUI\\media\\icons\\eui-person.png"
 local PLAYERS_COLOR = { 0.4, 0.4, 0.42 }
@@ -413,12 +435,13 @@ local STATUS = {
 }
 -- underline setting + color per status
 -- each status: its switch, its own color and the key of the user's color
-local LINE_DELISTED  = { "lineDelisted", 0.6, 0.6, 0.6, "color_lineDelisted" }
+local LINE_DELISTED  = { "lineDelisted", 0x5B / 255, 0x5B / 255, 0x5B / 255, "color_lineDelisted" }
+local LINE_SIGNED    = { "lineSigned", 0.1, 0.9, 0.1, "color_lineSigned" }
 local LINE_ACCEPTED  = { "lineAccepted", 0.1, 0.9, 0.1, "color_lineAccepted" }
 local LINE_CANCELLED = { "lineCancelled", 1, 0.55, 0.1, "color_lineCancelled" }
 local LINE_DECLINED  = { "lineDeclined", 1, 0.2, 0.2, "color_lineDeclined" }
 -- by switch, for the settings page's color pickers
-ns.STATUS_LINES = { lineDelisted = LINE_DELISTED, lineAccepted = LINE_ACCEPTED,
+ns.STATUS_LINES = { lineDelisted = LINE_DELISTED, lineSigned = LINE_SIGNED, lineAccepted = LINE_ACCEPTED,
     lineCancelled = LINE_CANCELLED, lineDeclined = LINE_DECLINED }
 -- a status's color: the user's, else its own
 local function StatusColor(line)
@@ -428,7 +451,7 @@ local function StatusColor(line)
 end
 local LINE_OF = {
     [STATUS.declined_delisted] = LINE_DELISTED,
-    [STATUS.applied] = LINE_ACCEPTED, [STATUS.invited] = LINE_ACCEPTED, [STATUS.inviteaccepted] = LINE_ACCEPTED,
+    [STATUS.applied] = LINE_SIGNED, [STATUS.invited] = LINE_ACCEPTED, [STATUS.inviteaccepted] = LINE_ACCEPTED,
     [STATUS.cancelled] = LINE_CANCELLED,
     [STATUS.declined] = LINE_DECLINED, [STATUS.declined_full] = LINE_DECLINED, [STATUS.timedout] = LINE_DECLINED,
     [STATUS.invitedeclined] = LINE_DECLINED, [STATUS.failed] = LINE_DECLINED,
@@ -438,11 +461,18 @@ local LINE_OF = {
 local function MakeRow(i, parent)
     local r = CreateFrame("Button", nil, parent or body)
     r:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    local stock = not Skinned()
+    r.stock = stock
     r.bg = r:CreateTexture(nil, "BACKGROUND")
     r.bg:SetAllPoints()
-    r.bg:SetColorTexture(1, 1, 1, 0.03)
+    r.bg:SetColorTexture(1, 1, 1, stock and 0.04 or 0.03)
     r.sel = r:CreateTexture(nil, "BORDER")
     r.sel:SetAllPoints()
+    if stock then
+        r.sel:SetAtlas("groupfinder-highlightbar-yellow")
+        r.sel:SetBlendMode("ADD")
+        r.sel:Hide()
+    end
     -- status underline
     r.under = r:CreateTexture(nil, "ARTWORK", nil, 7)
     r.under:SetPoint("BOTTOMLEFT", r, "BOTTOMLEFT", 0, 0)
@@ -455,7 +485,12 @@ local function MakeRow(i, parent)
     r.stat:Hide()
     r.hl = r:CreateTexture(nil, "HIGHLIGHT")
     r.hl:SetAllPoints()
-    r.hl:SetColorTexture(1, 1, 1, 0.06)
+    if stock then
+        r.hl:SetAtlas("groupfinder-highlightbar-blue")
+        r.hl:SetBlendMode("ADD")
+    else
+        r.hl:SetColorTexture(1, 1, 1, 0.06)
+    end
     -- the row without its note: icons and counts centre on it
     r.mid = r:CreateTexture(nil, "BACKGROUND")
     r.mid:SetPoint("TOPLEFT", r, "TOPLEFT", 0, 0)
@@ -494,23 +529,43 @@ local function MakeRow(i, parent)
     r.lineH, r.lineY = {}, {}
     r.members, r.mpool, r.needs = {}, {}, {}
     -- cancel button
-    r.cancel = CreateFrame("Button", nil, r)
-    r.cancel.bg = r.cancel:CreateTexture(nil, "BACKGROUND")
-    r.cancel.bg:SetAllPoints()
-    r.cancel.bg:SetColorTexture(0.06, 0.06, 0.06, 0.95)
-    r.cancel.edge = EUI.MakeBorder(r.cancel, 0.25, 0.25, 0.25, 1, EUI.PanelPP)
-    r.cancel.tex = r.cancel:CreateTexture(nil, "OVERLAY")
-    r.cancel.tex:SetTexture(X_TEX)
-    r.cancel.tex:SetPoint("CENTER")
-    r.cancel.tex:SetVertexColor(0.8, 0.8, 0.8, 1)
+    if stock then
+        -- blizzard's red x button
+        r.cancel = CreateFrame("Button", nil, r, "UIMenuButtonStretchTemplate")
+        r.cancel.tex = r.cancel:CreateTexture(nil, "ARTWORK")
+        r.cancel.tex:SetAtlas("groupfinder-icon-redx")
+        r.cancel.tex:SetPoint("CENTER")
+        r.cancel:SetHighlightTexture("Interface\\Buttons\\UI-Common-MouseHilight", "ADD")
+        -- the template's highlight is inset and cropped; the whole glow, on the whole button
+        local hl = r.cancel:GetHighlightTexture()
+        if hl then
+            hl:ClearAllPoints()
+            hl:SetAllPoints()
+            hl:SetTexCoord(0, 1, 0, 1)
+        end
+    else
+        r.cancel = CreateFrame("Button", nil, r)
+        r.cancel.bg = r.cancel:CreateTexture(nil, "BACKGROUND")
+        r.cancel.bg:SetAllPoints()
+        r.cancel.bg:SetColorTexture(0.06, 0.06, 0.06, 0.95)
+        r.cancel.edge = EUI.MakeBorder(r.cancel, 0.25, 0.25, 0.25, 1, EUI.PanelPP)
+        r.cancel.tex = r.cancel:CreateTexture(nil, "OVERLAY")
+        r.cancel.tex:SetTexture(X_TEX)
+        r.cancel.tex:SetPoint("CENTER")
+        r.cancel.tex:SetVertexColor(0.8, 0.8, 0.8, 1)
+    end
     r.cancel:SetScript("OnEnter", function(self)
-        self.tex:SetVertexColor(1, 0.3, 0.3, 1)
-        if self.edge and self.edge.SetColor then self.edge:SetColor(1, 0.3, 0.3, 1) end
+        if not stock then
+            self.tex:SetVertexColor(1, 0.3, 0.3, 1)
+            if self.edge and self.edge.SetColor then self.edge:SetColor(1, 0.3, 0.3, 1) end
+        end
         EUI.ShowWidgetTooltip(self, CANCEL_SIGN_UP or "Cancel Sign Up")
     end)
     r.cancel:SetScript("OnLeave", function(self)
-        self.tex:SetVertexColor(0.8, 0.8, 0.8, 1)
-        if self.edge and self.edge.SetColor then self.edge:SetColor(0.25, 0.25, 0.25, 1) end
+        if not stock then
+            self.tex:SetVertexColor(0.8, 0.8, 0.8, 1)
+            if self.edge and self.edge.SetColor then self.edge:SetColor(0.25, 0.25, 0.25, 1) end
+        end
         EUI.HideWidgetTooltip()
     end)
     r.cancel:SetScript("OnClick", function(self)
@@ -737,7 +792,8 @@ local function Layout(r, h)
     -- cancel square left of the text, about two lines tall (placed in fill)
     local cs = math.max(CANCEL_H, math.min(h - 8, tS + nS + 6))
     r.cancel:SetSize(cs, cs)
-    r.cancel.tex:SetSize(math.floor(cs * 0.45 + 0.5), math.floor(cs * 0.45 + 0.5))
+    local xs = math.floor(cs * (r.stock and 0.6 or 0.45) + 0.5)
+    r.cancel.tex:SetSize(xs, xs)
     r.cancelSize = cs
     r.cancel:SetFrameLevel(r:GetFrameLevel() + 5)
     SetSize(r.score, ns.OwnListSize("scoreSize"))
@@ -786,9 +842,19 @@ local LIVE = {
 }
 
 -- line three: playstyle | region | time since you signed up
+-- a font string in the delisted grey, or back to the colour it was made with
+local function Grey(fs, gone)
+    if not fs.baseColor then fs.baseColor = { fs:GetTextColor() } end
+    if gone then fs:SetTextColor(DR, DG, DB)
+    else local c = fs.baseColor; fs:SetTextColor(c[1], c[2], c[3], c[4]) end
+end
+
 local function LineThree(r, id, info, src)
     local parts = r.line3
     for i = 1, #parts do parts[i]:Hide() end
+    local gone = r.gone
+    Grey(r.sep1, gone); Grey(r.style, gone); Grey(r.sep2, gone); Grey(r.sep3, gone); Grey(r.timer, gone)
+    r.flag:SetDesaturated(gone)
     r.signedAt = nil
     r.l3prev = nil
     if (r.lines or 0) < 3 then return end
@@ -807,7 +873,7 @@ local function LineThree(r, id, info, src)
     if tag then
         if r.l3prev then Put(r, r.sep2, 4) end
         r.tag:SetText(tag)
-        r.tag:SetTextColor(tr, tg, tb, 1)
+        if gone then r.tag:SetTextColor(DR, DG, DB) else r.tag:SetTextColor(tr, tg, tb, 1) end
         Put(r, r.tag, 4)
         if flag then
             local fh = math.max(8, ns.OwnListSize("lineSize"))
@@ -819,7 +885,7 @@ local function LineThree(r, id, info, src)
     local at = src.signedAt(id)
     if at then
         if r.l3prev then Put(r, r.sep3, 4) end
-        r.timer:SetText(Elapsed(at))
+        r.timer:SetText(TimeLeft(at))
         Put(r, r.timer, 4)
         r.signedAt = at
     end
@@ -830,6 +896,11 @@ local function Fill(r, id, src)
     r.resultID = id
     local info = src.info(id)
     if not Readable(info) then r:Hide() return end
+    -- delisted: greyed like blizzard's, not faded
+    local gone = info.isDelisted
+    gone = not Secret(gone) and gone and true or false
+    r.gone = gone
+    if gone then DR, DG, DB = StatusColor(LINE_DELISTED) end
     -- protected text, straight to the font string
     r.name:SetText(info.name)
     local acts = info.activityIDs
@@ -839,8 +910,11 @@ local function Fill(r, id, src)
     -- colored group names
     local nr, ng, nb
     nr, ng, nb = src.nameColor(id, info, ai)  -- "and" would drop g and b
-    if nr then r.name:SetTextColor(nr, ng, nb) else r.name:SetTextColor(1, 0.82, 0) end
+    if not nr then nr, ng, nb = FriendColor(info) end
+    if gone then r.name:SetTextColor(DR, DG, DB)
+    elseif nr then r.name:SetTextColor(nr, ng, nb) else r.name:SetTextColor(1, 0.82, 0) end
     r.act:SetText(ai and ai.fullName or "")
+    Grey(r.act, gone)
     -- the note, only where the list left room for it (protected text, straight to the font string)
     local note = r.noteRoom and NoteText(info)
     if note then
@@ -890,7 +964,7 @@ local function Fill(r, id, src)
         local cr, cg, cb = 1, 1, 1
         if ns.GFRatingColor then cr, cg, cb = ns.GFRatingColor(score) end
         r.score:SetText(score)
-        r.score:SetTextColor(cr, cg, cb)
+        if r.gone then r.score:SetTextColor(DR, DG, DB) else r.score:SetTextColor(cr, cg, cb) end
     else
         r.score:SetText("")
     end
@@ -899,16 +973,18 @@ local function Fill(r, id, src)
     if not Secret(delisted) and delisted then st = STATUS.declined_delisted end  -- secret check first
     if st then
         r.status:SetText(st[1])
-        -- same color as the status effect
+        -- same color as the row highlight
         local sl = LINE_OF[st]
         if sl then r.status:SetTextColor(StatusColor(sl)) else r.status:SetTextColor(st[2], st[3], st[4], 1) end
     else
         r.status:SetText("")
     end
-    -- status effect: an underline, or the whole row tinted
+    -- row highlight: an underline, or the whole row tinted
     local line = st and LINE_OF[st]
     local on = line and ns.OwnListGet(line[1]) ~= false or false
-    local rowFx = on and ns.OwnListGet("statusStyle") == "row" or false
+    local style = ns.OwnListGet("statusStyle")
+    if style == "none" then on = false end  -- the status text keeps its colour
+    local rowFx = on and style == "row" or false
     if on then
         local lr, lg, lb = StatusColor(line)
         -- solid, so it reads the same over any window background (the preview's is darker)
@@ -997,12 +1073,13 @@ local function Fill(r, id, src)
         r.crowns[k]:Hide()
         r.rings[k]:Hide()
         role:Hide()
-        role:SetDesaturated(false)
+        role:SetDesaturated(gone)
         role:SetAlpha(1)
         bf:Hide()
         if t._masked then t:RemoveMaskTexture(r.masks[k]); t._masked = nil end
         t:SetTexCoord(0, 1, 0, 1)
-        t:SetDesaturated(false)
+        t:SetDesaturated(gone)
+        r.crowns[k]:SetDesaturated(gone)
         if mode ~= "icons" then
             t:Hide()
         elseif m then
@@ -1074,7 +1151,7 @@ local function Fill(r, id, src)
     -- raid role counts, rating to their left
     local counts = mode == "counts" and src.counts(id)
     if not Readable(counts) then counts = nil end
-    local ellIcons = ns.OwnListGet("missingIcons") == "ellesmere"
+    local blizzRR = ns.OwnListGet("raidRoleIcons") == "blizzard"
     local round = ns.OwnListGet("iconShape") ~= "square"
     -- round rings sit outside the circle, so the first one steps in like the member icons
     local x = -(r.pad or 6) - (round and bpx or 0)
@@ -1088,20 +1165,45 @@ local function Fill(r, id, src)
         local num = counts and counts[role]
         if counts and type(num) == "number" and not Secret(num) then
             -- icon centered, count above
-            local c = RR_COLORS[role]
-            p.bg:SetColorTexture(c[1], c[2], c[3], 1)
-            if round and not p.masked then p.bg:AddMaskTexture(p.mask); p.masked = true
-            elseif not round and p.masked then p.bg:RemoveMaskTexture(p.mask); p.masked = nil end
-            p.bg:SetSize(isz, isz)
+            local edge = 0
+            if blizzRR then
+                -- blizzard's circle as one texture, no mask or border of ours
+                if p.masked then p.bg:RemoveMaskTexture(p.mask); p.masked = nil end
+                p.bg:SetAtlas(BLIZZ_RR_ATLAS[role])
+                p.icon:SetTexture(nil)
+                p.ring:Hide(); p.edge:Hide()
+            else
+                local c = RR_COLORS[role]
+                p.bg:SetColorTexture(c[1], c[2], c[3], 1)
+                if round and not p.masked then p.bg:AddMaskTexture(p.mask); p.masked = true
+                elseif not round and p.masked then p.bg:RemoveMaskTexture(p.mask); p.masked = nil end
+                CircleEdge(p, round, bpx, br, bg, bb, btex, bkey)
+                p.icon:SetAtlas(NEED_ATLAS[role])
+                local gsz = math.floor(isz * 0.7 + 0.5)
+                p.icon:SetSize(gsz, gsz)
+                edge = round and bpx * 2 or 0
+            end
+            p.bg:SetDesaturated(gone)
+            p.icon:SetDesaturated(gone)
             p.bg:ClearAllPoints()
-            p.bg:SetPoint("RIGHT", r.mid, "RIGHT", x, 0)
+            if blizzRR then
+                -- the art has a clear margin round its ring: grow it till the ring matches ours, same centre
+                edge = round and bpx * 2 or 0
+                local sz = math.floor((isz + edge) * BLIZZ_RR_SCALE + 0.5) - 2
+                p.bg:SetSize(sz, sz)
+                p.bg:SetPoint("CENTER", r.mid, "RIGHT", x - isz / 2, 0)
+            else
+                p.bg:SetSize(isz, isz)
+                p.bg:SetPoint("RIGHT", r.mid, "RIGHT", x, 0)
+            end
             p.bg:Show()
-            CircleEdge(p, round, bpx, br, bg, bb, btex, bkey)
-            local tex = ellIcons and ns.RoleIconTex and ns.RoleIconTex(role)
-            if tex then p.icon:SetTexture(tex) else p.icon:SetAtlas(NEED_ATLAS[role]) end
-            local gsz = math.floor(isz * 0.7 + 0.5)
-            p.icon:SetSize(gsz, gsz)
-            x = x - PlaceCount(p, num, isz, fsz, inside) - 6 - (round and bpx * 2 or 0)
+            x = x - PlaceCount(p, num, isz, fsz, inside) - 6 - edge
+            if blizzRR and not inside then
+                -- the number on the ring's top, not the art's
+                p.count:ClearAllPoints()
+                p.count:SetPoint("BOTTOMLEFT", p.bg, "CENTER", -isz * 1.5, isz / 2 + 1)
+                p.count:SetPoint("BOTTOMRIGHT", p.bg, "CENTER", isz * 1.5, isz / 2 + 1)
+            end
         else
             p.bg:Hide(); p.icon:Hide(); p.count:Hide(); p.ring:Hide(); p.edge:Hide()
         end
@@ -1111,6 +1213,8 @@ local function Fill(r, id, src)
     local pc = r.rr[4]
     if type(players) == "number" and not Secret(players) then
         pc.bg:SetColorTexture(PLAYERS_COLOR[1], PLAYERS_COLOR[2], PLAYERS_COLOR[3], 1)
+        pc.bg:SetDesaturated(gone)
+        pc.icon:SetDesaturated(gone)
         if round and not pc.masked then pc.bg:AddMaskTexture(pc.mask); pc.masked = true
         elseif not round and pc.masked then pc.bg:RemoveMaskTexture(pc.mask); pc.masked = nil end
         pc.bg:SetSize(isz, isz)
@@ -1136,9 +1240,14 @@ local function Fill(r, id, src)
         r.score:ClearAllPoints()
         r.score:SetPoint("RIGHT", r.mid, "RIGHT", r.scoreX or -6, 0)
     end
-    local ar, ag, ab = Accent()
-    r.sel:SetColorTexture(ar, ag, ab, selected == id and 0.18 or 0)
+    if r.stock then
+        r.sel:SetShown(selected == id)
+    else
+        local ar, ag, ab = Accent()
+        r.sel:SetColorTexture(ar, ag, ab, selected == id and 0.18 or 0)
+    end
     if dimmed[id] then r:SetAlpha(0.35)
+    elseif gone then r:SetAlpha((tonumber(ns.OwnListGet("delistedOpacity")) or 50) / 100)  -- the delisted opacity setting
     else r:SetAlpha((st and st ~= STATUS.applied and st ~= STATUS.invited) and 0.5 or 1) end
     r:Show()
 end
@@ -1147,7 +1256,7 @@ end
 --  settings preview: sample groups drawn by the list's own rows
 -------------------------------------------------------------------------------
 local PV_W, PV_PAD, PV_MARGIN = 330, 8, 10  -- about the list's row width
-local PV_SCALE = 1.3  -- drawn larger than the list, to read the details
+local PV_SCALE = 1  -- times the list's own size: 1 draws the rows as the dungeons & raids window does
 local PV_STEP = 0.3  -- a wheel tick, in rows
 local PV_DD_W, PV_DD_GAP = 170, 12  -- the preview picker, right of it
 local PV_TITLES = { groups = EllesmereUI.L("Group Finder Preview"), dungeon = EllesmereUI.L("Applicant Preview"),
@@ -1326,8 +1435,8 @@ local function PvFit()
     end
     local fw, fh = rw + PV_PAD * 2, PV_PAD + PV_TITLE + PV_VIEW_H + PV_PAD
     f:SetSize(fw, fh)
-    -- the ui's own scale and then some, grown or shrunk with the settings
-    -- window's scale, and shrunk only if the panel is narrower
+    -- the list's own size (the ui's scale, not the panel's), grown or shrunk
+    -- with the settings window's scale, and shrunk only if the panel is narrower
     local hw = hdr:GetWidth() or 0
     -- room for the picker on both sides, so the preview stays centered
     local avail = (hw > 0 and hw or pv.hdrW or 600) - PV_MARGIN * 2 - (pv.dd and (PV_DD_W + PV_DD_GAP) * 2 or 0)
@@ -1437,7 +1546,7 @@ function ns.OwnListPreviewBuild(hdr, hdrW)
         view:SetPoint("TOPLEFT", f, "TOPLEFT", PV_PAD, -(PV_PAD + PV_TITLE))
         view:SetClipsChildren(true)
         pv.view = view
-        -- the wheel scrolls part of a row at a time: it's drawn larger than the list
+        -- the wheel scrolls part of a row at a time: the window holds only two
         view:EnableMouseWheel(true)
         view:SetScript("OnMouseWheel", function(_, delta)
             local was = pv.scroll or 0
@@ -1704,7 +1813,8 @@ local function Build()
     -- our sign up button over blizzard's
     local sb = SP.SignUpButton
     if sb then
-        signBtn = CreateFrame("Button", nil, SP)
+        local stock = not Skinned()
+        signBtn = CreateFrame("Button", nil, SP, stock and "UIPanelButtonTemplate" or nil)
         signBtn:SetAllPoints(sb)
         signBtn:SetFrameLevel(sb:GetFrameLevel() + 5)
         signBtn:SetNormalFontObject("GameFontNormal")
@@ -1714,9 +1824,10 @@ local function Build()
         signBtn:SetMotionScriptsWhileDisabled(true)
         local skin = EUI._ModuleNS and EUI._ModuleNS.EllesmereUIBlizzardSkin
         local S = skin and skin.WSkin
-        if S and S.Button then
+        -- stock keeps the template's art
+        if not stock and S and S.Button then
             S.Button(signBtn)
-        else
+        elseif not stock then
             local bg = signBtn:CreateTexture(nil, "BACKGROUND")
             bg:SetAllPoints()
             bg:SetColorTexture(0.06, 0.06, 0.06, 0.95)
@@ -1751,7 +1862,7 @@ local function Build()
         tick = 0
         for i = 1, #rows do
             local r = rows[i]
-            if r.signedAt and r:IsShown() then r.timer:SetText(Elapsed(r.signedAt)) end
+            if r.signedAt and r:IsShown() then r.timer:SetText(TimeLeft(r.signedAt)) end
         end
     end)
     -- result updates gather here and flush once, on the next frame

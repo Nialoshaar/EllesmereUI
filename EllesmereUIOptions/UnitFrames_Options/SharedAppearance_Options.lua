@@ -661,7 +661,7 @@ function ns.UFO_BuildDisplaySection(parent, y, ctx)
     if not EllesmereUI._prebuilding then
         local leftRgn = sharedScaleBorderRow._rightRegion
         local ctrl = leftRgn._control
-        local PP = EllesmereUI.PP
+        local PP = EllesmereUI.PanelPP
 
         -- Corner Radius (EllesmereUI_RoundedCorners.lua): an inline cog on the
         -- border size control.
@@ -739,7 +739,6 @@ function ns.UFO_BuildDisplaySection(parent, y, ctx)
         -- reads per element; they differ only in which units the setter fans to.
         local ALL_UNITS  = { "player", "target", "focus", "targettarget", "focustarget", "pet", "boss" }
         local MAIN_UNITS = { "player", "target", "focus", "targettarget", "focustarget", "pet" }
-        local PP = EllesmereUI.PP
         local cbDD, cbDDRefresh = EllesmereUI.BuildVisOptsCBDropdown(
             rgn, 210, rgn:GetFrameLevel() + 2,
             tipItems,
@@ -1291,6 +1290,18 @@ function ns.UFO_BuildPortraitSection(parent, y, ctx)
                     SSet("detachedPortraitBgColor", { r=r, g=g, b=b, a=a or 1 })
                     UpdatePreview()
                 end,
+            }
+            -- A 3D model draws over the shape's border; on, it sits inside the
+            -- border and under it (ns.UF_PortraitShapeModel).
+            rows[#rows + 1] = { type="toggle", label="3D Portrait Below Border",
+                tooltip="Draws a 3D portrait inside the shape's border instead of over it.",
+                disabled=function()
+                    return SVal("portraitMode", "2d") ~= "3d" or SVal("detachedPortraitShape", "portrait") == "none"
+                end,
+                disabledTooltip="This option requires the 3D Art Style and a Shape other than None.",
+                rawTooltip=true,
+                get=function() return SVal("portrait3dBelowBorder", false) end,
+                set=function(v) SSet("portrait3dBelowBorder", v or nil); UpdatePreview() end,
             }
         end
         EllesmereUI.BuildInlineCog(sharedPortraitModeRow._leftRegion, {

@@ -434,29 +434,17 @@ local function CollectLines(missing, auraLock, ids, lines, last, dismissKey, lab
     if id then return nil, EABR.FvSpellEntry(missing, id, dismissKey, label) end
 end
 
-local function CharStore(field)
-    local store = EllesmereUIDB[field]
-    local keys = EABR._fvCharKeys
-    if not keys then keys = {}; EABR._fvCharKeys = keys end
-    local key = keys[field]
-    if not key then
-        key = EllesmereUI.CharKey("-", store)
-        keys[field] = key
-    end
-    return store, key
-end
-
 -- Mage armors (WoW Forever): one reminder while no rank of Frost Armor, Ice
--- Armor or Mage Armor is up; the line up is recorded in
--- EllesmereUIDB.mageArmorByChar by EllesmereUI.CharKey.
+-- Armor or Mage Armor is up; the line up is recorded in this character's
+-- roster entry (mageArmor).
 function EABR.CollectMageArmor(missing, auraLock, ids)
-    local store, key = CharStore("mageArmorByChar")
-    local last = store and key and store[key]
+    local char = EllesmereUI.CharEntry()
+    local last = char and char.mageArmor
     local up = CollectLines(missing, auraLock, ids, EABR.MAGE_ARMORS, last,
         "forever:magearmor", EllesmereUI.L("Armor"))
-    if up and up ~= last and key then
-        if not store then store = {}; EllesmereUIDB.mageArmorByChar = store end
-        store[key] = up
+    if up and up ~= last then
+        char = char or EllesmereUI.CharEntry(true)
+        if char then char.mageArmor = up end
     end
 end
 
@@ -564,8 +552,7 @@ function EABR.CollectClassBuffs(missing, fo, auraLock, ids, class)
     local list = EABR.FvClassBuffs()[class]
     if not list then return end
     local picks = fo.classBuffPicks
-    local store, key = CharStore("classBuffByChar")
-    local rec = store and key and store[key]
+    local rec = EllesmereUI.CharData("classBuff")
     for i = 1, #list do
         local buff = list[i]
         if ClassBuffOn(buff, picks) then
@@ -576,11 +563,9 @@ function EABR.CollectClassBuffs(missing, fo, auraLock, ids, class)
                 buff.label, buff.also,
                 buff.own or buff.ownMemory, buff.ownMemory)
             if entry and PickerEnabled() then ApplyClassBuffPicker(entry, fo, buff) end
-            if up and up ~= last and key and buff.lines[2] then
-                if not store then store = {}; EllesmereUIDB.classBuffByChar = store end
-                rec = store[key]
-                if not rec then rec = {}; store[key] = rec end
-                rec[buff.key] = up
+            if up and up ~= last and buff.lines[2] then
+                rec = rec or EllesmereUI.CharData("classBuff", true)
+                if rec then rec[buff.key] = up end
             end
         end
     end
@@ -653,6 +638,31 @@ local function FvNeeds(left, warnSec)
     local nextAt = EABR._nextDurationRefreshTime
     if not nextAt or at < nextAt then EABR._nextDurationRefreshTime = at end
     return false
+end
+
+-- When an aura runs out, where that can be read: nil for no aura, a secret aura or a
+-- secret time, and for an aura that does not run out.
+local function FvAuraExpiration(aura)
+    if isSecret(aura) or not aura then return end
+    local expiration = aura.expirationTime
+    if not isSecret(expiration) and expiration and expiration > 0 then return expiration end
+end
+
+-- When the last of the foods whose buff has a name of its own (EABR.FOOD_BUFFS) runs out.
+-- nil when none is up or one of them cannot be read: Well Fed's early reminder is then
+-- left out, never guessed.
+local function FvFoodExpiration()
+    local latest
+    for _, id in ipairs(EABR.FOOD_BUFFS) do
+        local ok, aura = pcall(C_UnitAuras.GetPlayerAuraBySpellID, id)
+        if not ok or isSecret(aura) then return end
+        if aura then
+            local expiration = FvAuraExpiration(aura)
+            if not expiration then return end
+            if not latest or expiration > latest then latest = expiration end
+        end
+    end
+    return latest
 end
 
 local function FvWeaponEntry(missing, hand, label, dismissKey, buff, spellID, itemID, hideNoItem, left)
@@ -774,17 +784,18 @@ local function CollectSleepingBag(showBelow, resting, auraLock)
 end
 
 -- WoW Forever collector: the Camp Benefits campfire buff, the Sleeping Bag's
--- Well-Rested buff (missing or under its full stacks, while a Cozy Sleeping Bag
--- is in the bags below max level: EABR.FvSleepingBagOwned), Well Fed (any food
+-- Well-Rested buff (missing or under its full stacks, or inside its cog's Show
+-- Below minutes of running out, then with the countdown; while a Cozy Sleeping
+-- Bag is in the bags below max level: EABR.FvSleepingBagOwned), Well Fed (any food
 -- buff: the shared Well Fed name, or one of EABR.FOOD_BUFFS), the gathering
 -- and Find Treasure trackers, a Mage's armors (EABR.CollectMageArmor), the
 -- class buffs (EABR.CollectClassBuffs), the weapon buffs
 -- (EABR.CollectForeverWeapons), the user's spell groups
 -- (EABR.CollectForeverGroups) and custom spell IDs (each for the classes ticked
 -- on it), those a ticked class buff covers standing down outside PvP. All are
--- absence only but
--- the weapon buffs, which also show their Show Below minutes before running
--- out (the one-shot duration refresh). A custom ID counts as up while any
+-- absence only but the weapon buffs, the Sleeping Bag and Well Fed, which also
+-- show their Show Below minutes before running out, with a countdown (FvNeeds
+-- arms the one-shot duration refresh for that moment). A custom ID counts as up while any
 -- spell of its rank family is (EABR.ForeverFamily). Entries are display-only
 -- textures carrying the spell for the tooltip, except the Sleeping Bag, the two
 -- trackers, the mage armors, the class buffs, the weapon buffs, the spell
@@ -862,12 +873,29 @@ function EABR.CollectForever(missing, inInstance, inPvP)
     if fo.wellFed and open then
         local name = SpellName(EABR.WELL_FED) or "Well Fed"
         local ok, aura = pcall(C_UnitAuras.GetAuraDataBySpellName, "player", name, "HELPFUL")
-        if ok and not isSecret(aura) and not aura and not PlayerHasAuraByID(EABR.FOOD_BUFFS) then
+        -- Shown while no food buff is up and, with Show Below set, that many minutes before
+        -- the one that is up runs out (the buff named Well Fed, else the last of the foods
+        -- with a name of their own), then with its countdown.
+        local show, expireAt, remaining
+        local warnSec = (fo.wellFedShowBelow or 0) * 60
+        if ok and not isSecret(aura) then
+            local fallback = not aura and PlayerHasAuraByID(EABR.FOOD_BUFFS)
+            show = not aura and not fallback
+            if not show and warnSec > 0 and EABR.ShowUnderThresholdApplies() then
+                expireAt = aura and FvAuraExpiration(aura) or (fallback and FvFoodExpiration())
+                if expireAt then
+                    remaining = expireAt - GetTime()
+                    show = remaining > 0 and FvNeeds(remaining, warnSec)
+                end
+            end
+        end
+        if show then
             local e = AcquireEntry()
             e.mode = "texture"; e.spellID = EABR.WELL_FED
             e.texture = Tex(EABR.WELL_FED)
             e.label = name
             e.cat = "forever"; e.dismissKey = "forever:wellfed"
+            if expireAt then e.expireAt, e.expireTotal = expireAt, remaining end
             missing[#missing+1] = e
         end
     end
@@ -926,7 +954,7 @@ end
 
 -------------------------------------------------------------------------------
 --  WoW Forever Raid Buffs: the retail section's two views over that client's
---  four buffs (RAID_BUFFS). A member has a buff while an aura with one of its
+--  buffs (RAID_BUFFS). A member has a buff while an aura with one of its
 --  family's names is up (every rank, the group version, other casters'
 --  versions). Under the game's aura restriction a buff is read only while none
 --  of its ranks is secret (a secret aura would read absent while up), and
@@ -1018,8 +1046,10 @@ end
 -- plus the first one without it (the click's target). A member whose answer
 -- cannot be read counts on neither side. The found aura instances
 -- (EABR._fvInst, kept outside the watch so the pass that first builds it
--- records them too) feed the group aura probe (EABR.FvAuraRelevant).
-function EABR.FvCoverage(fam, benefit)
+-- records them too) feed the group aura probe (EABR.FvAuraRelevant); keep
+-- adds them to the ones an earlier call of the same pass found (a class that
+-- provides two buffs).
+function EABR.FvCoverage(fam, benefit, keep)
     local inst = EABR._fvInst
     if not inst then inst = {}; EABR._fvInst = inst end
     local raid = IsInRaid()
@@ -1031,7 +1061,7 @@ function EABR.FvCoverage(fam, benefit)
         local u = list[i]
         if not u then break end
         local rec = inst[u]
-        if rec then wipe(rec) end
+        if rec and not keep then wipe(rec) end
         if _unitOk(u) and UnitIsPlayer(u) and _unitInRange(u) and EABR.UnitBenefits(u, benefit) then
             if not rec then rec = {}; inst[u] = rec end
             local has = EABR.FvUnitHas(u, fam, rec)
@@ -1063,13 +1093,23 @@ end
 -- their class's buff; with "Others are missing my buff" in a group it counts
 -- the in-range members who benefit, otherwise the player alone. Receiver ("I
 -- am missing others' buffs"): a buff of another class the player lacks while a
--- member of that class is in range (informational, no click). Out of combat
--- the pass also picks the provider's cast (EABR.SyncProviderCastSpell binds
--- it), and every pass syncs the group watch to what it read.
+-- member of that class is in range (informational, no click; never a talent
+-- buff). Out of combat the pass also picks the provider's cast
+-- (EABR.SyncProviderCastSpell binds it), and every pass syncs the group watch
+-- to what it read. One button casts the provider's buffs, so a class that
+-- provides two (a priest with Divine Spirit) shows one provider reminder at a
+-- time: the first of its buffs in list order that is missing and not
+-- dismissed, with the button bound to its cast; with none showing, the button
+-- stays bound to the first buff it provides. Under lockdown the binding
+-- cannot change, so only the buff the button casts shows there; another waits
+-- for the end of combat.
 function EABR.CollectForeverRaidBuffs(missing, playerClass, inInstance)
     local rb = db.profile.raidBuffs
-    local watch, roster = nil, false
+    local watch = EABR._fvWatchFams
+    if watch then wipe(watch) else watch = {}; EABR._fvWatchFams = watch end
+    local roster = false
     local castSpell, castUnit
+    local provided, covered, idle, idleFirst = false, false, nil, nil
     local lockdown = InCombatLockdown()
     if rb and EABR.SectionShows(rb.whereToShow, inInstance) then
         local sw = rb.showWhen
@@ -1083,20 +1123,32 @@ function EABR.CollectForeverRaidBuffs(missing, playerClass, inInstance)
                 local fam = buff.fam
                 local iCast = buff.class == playerClass
                     and (EABR.FvHighest(fam.single) or EABR.FvHighest(fam.group)) ~= nil
-                if iCast and othersMissing then watch = fam end
-                if not iCast and iAmMissing then roster = true end
-                local doReceiver = not iCast and groupClasses and groupClasses[buff.class]
+                if iCast and othersMissing then watch[#watch + 1] = fam end
+                if not iCast and iAmMissing and not buff.talent then roster = true end
+                local doReceiver = not iCast and not buff.talent and groupClasses and groupClasses[buff.class]
                     and EABR.PlayerBenefitsFromBuff(buff)
                 if (iCast or doReceiver) and EABR.FvReadable(fam, restricted) then
                     local isMissing, have, total, first
                     if iCast and othersMissing and grouped then
-                        have, total, first = EABR.FvCoverage(fam, buff.benefit)
+                        have, total, first = EABR.FvCoverage(fam, buff.benefit, covered)
+                        covered = true
                         isMissing = total > 0 and have < total
                     else
                         isMissing = EABR.FvUnitHas("player", fam) == false
                     end
-                    if iCast and not lockdown then
-                        castSpell, castUnit = EABR.FvPickCast(buff, first)
+                    if iCast then
+                        if not idle then idle, idleFirst = buff, first end
+                        -- Under lockdown: the spell the button casts, a rank or
+                        -- group version of the one buff that may show.
+                        local bound = lockdown and EABR._providerCastSpell
+                        isMissing = isMissing and not provided and not _dismissedUntilLoad[buff.dismissKey]
+                            and not (bound and not (tContains(fam.single, bound) or tContains(fam.group, bound)))
+                        if isMissing then
+                            provided = true
+                            if not lockdown then
+                                castSpell, castUnit = EABR.FvPickCast(buff, first)
+                            end
+                        end
                     end
                     if isMissing then
                         local e = AcquireEntry()
@@ -1123,7 +1175,10 @@ function EABR.CollectForeverRaidBuffs(missing, playerClass, inInstance)
             end
         end
     end
-    if not lockdown then EABR._fvCastSpell, EABR._fvCastUnit = castSpell, castUnit end
+    if not lockdown then
+        if not provided and idle then castSpell, castUnit = EABR.FvPickCast(idle, idleFirst) end
+        EABR._fvCastSpell, EABR._fvCastUnit = castSpell, castUnit
+    end
     EABR.FvSyncGroupWatch(watch, roster)
 end
 
@@ -1560,23 +1615,25 @@ end
 
 -------------------------------------------------------------------------------
 --  WoW Forever Raid Buffs group watch, synced by every collector pass to what
---  it read (fam = the provider's buff while its coverage counts the group,
---  roster = a receiver reminder is possible): GROUP_ROSTER_UPDATE while either
---  applies; while grouped also UNIT_IN_RANGE_UPDATE and UNIT_CONNECTION per
---  group token, plus UNIT_AURA for a provider, each aura event probing its own
---  added and removed auras before a refresh is asked (EABR.FvAuraRelevant).
+--  it read (fams = the list of the provider's buffs whose coverage counts the
+--  group, or nil; roster = a receiver reminder is possible):
+--  GROUP_ROSTER_UPDATE while either applies; while grouped also
+--  UNIT_IN_RANGE_UPDATE and UNIT_CONNECTION per group token, plus UNIT_AURA
+--  for a provider, each aura event probing its own added and removed auras
+--  before a refresh is asked (EABR.FvAuraRelevant).
 --  Nothing is registered otherwise (Refresh also stands it down while it
 --  shows nothing: the options panel open, a vehicle, dead, resting).
 --  RegisterUnitEvent takes two units, so the tokens ride one frame per pair:
 --  party1-4 in a party (the player's own auras come through the main frame),
 --  raid1-40 in a raid.
 -------------------------------------------------------------------------------
-function EABR.FvSyncGroupWatch(fam, roster)
-    local any = fam ~= nil or roster
+function EABR.FvSyncGroupWatch(fams, roster)
+    local n = fams and #fams or 0
+    local any = n > 0 or roster
     local W = EABR._fvWatch
     if not W then
         if not any then return end
-        W = { ids = {}, frames = {} }
+        W = { ids = {}, frames = {}, fams = {} }
         -- With a refresh already queued there is nothing to probe.
         local function OnUnitEvent(_, event, unit, info)
             if refreshQueued then return end
@@ -1596,10 +1653,17 @@ function EABR.FvSyncGroupWatch(fam, roster)
         W.world:SetScript("OnEvent", function() RequestRefresh() end)
         EABR._fvWatch = W
     end
-    if W.fam ~= fam then
-        W.fam = fam
+    -- The watched buffs, copied (the collector reuses its list).
+    local same = #W.fams == n
+    for i = 1, n do
+        if W.fams[i] ~= fams[i] then same = false end
+    end
+    if not same then
+        wipe(W.fams)
         wipe(W.ids)
-        if fam then
+        for i = 1, n do
+            local fam = fams[i]
+            W.fams[i] = fam
             for _, id in ipairs(fam.ids) do W.ids[id] = true end
         end
     end
@@ -1612,7 +1676,7 @@ function EABR.FvSyncGroupWatch(fam, roster)
         end
     end
     local mode = any and IsInGroup() and (IsInRaid() and "raid" or "party") or nil
-    local auraOn = mode ~= nil and fam ~= nil
+    local auraOn = mode ~= nil and n > 0
     if W.mode ~= mode or W.auraOn ~= auraOn then
         W.mode, W.auraOn = mode, auraOn
         for _, f in ipairs(W.frames) do
@@ -1629,36 +1693,44 @@ function EABR.FvSyncGroupWatch(fam, roster)
     end
 end
 
--- One group aura event against the watched buff: an added aura of it, or the
--- removal of one the last pass found on that member, asks for a refresh; a
--- full update always does; a payload the restriction made unreadable does
--- while the buff itself stays readable.
+-- Whether any watched buff stays readable under the restriction.
+local function FvWatchReadable(W)
+    local fams = W.fams
+    for i = 1, #fams do
+        if EABR.FvReadable(fams[i], true) then return true end
+    end
+    return false
+end
+
+-- One group aura event against the watched buffs: an added aura of one, or
+-- the removal of one the last pass found on that member, asks for a refresh;
+-- a full update always does; a payload the restriction made unreadable does
+-- while a watched buff itself stays readable.
 function EABR.FvAuraRelevant(unit, info)
     local W = EABR._fvWatch
-    local fam = W and W.fam
-    if not fam then return false end
+    if not (W and W.fams[1]) then return false end
     if not info then return true end
-    if isSecret(info) then return EABR.FvReadable(fam, true) end
+    if isSecret(info) then return FvWatchReadable(W) end
     local full = info.isFullUpdate
-    if isSecret(full) then return EABR.FvReadable(fam, true) end
+    if isSecret(full) then return FvWatchReadable(W) end
     if full then return true end
     local added = info.addedAuras
     if added then
-        if isSecret(added) then return EABR.FvReadable(fam, true) end
+        if isSecret(added) then return FvWatchReadable(W) end
         for i = 1, #added do
             local aura = added[i]
-            if isSecret(aura) then return EABR.FvReadable(fam, true) end
+            if isSecret(aura) then return FvWatchReadable(W) end
             local sid = aura.spellId
-            if isSecret(sid) then return EABR.FvReadable(fam, true) end
+            if isSecret(sid) then return FvWatchReadable(W) end
             if sid and W.ids[sid] then return true end
         end
     end
     local removed, found = info.removedAuraInstanceIDs, EABR._fvInst and EABR._fvInst[unit]
     if removed and found and next(found) then
-        if isSecret(removed) then return EABR.FvReadable(fam, true) end
+        if isSecret(removed) then return FvWatchReadable(W) end
         for i = 1, #removed do
             local iid = removed[i]
-            if isSecret(iid) then return EABR.FvReadable(fam, true) end
+            if isSecret(iid) then return FvWatchReadable(W) end
             if found[iid] then return true end
         end
     end

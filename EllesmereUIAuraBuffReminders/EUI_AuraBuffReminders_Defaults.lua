@@ -117,6 +117,8 @@ local defaults = {
         raidBuffs = {
             enabled = {
                 motw=true, bshout=true, fort=true, ai=true, bronze=true, sky=true, hmark=true,
+                -- WoW Forever's Divine Spirit (no key on retail).
+                spirit = EABR.FOREVER or nil,
             },
             -- Per-section "Where to Show". Stores only unchecked buckets
             -- (value false); an absent bucket = shown. Open world defaults
@@ -194,12 +196,13 @@ if EABR.FOREVER then
     defaults.profile.forever = {
         camp = false,       -- Camp Benefits reminder; opt-in, it shows whenever the buff is missing
         sleepingBag = false, -- Sleeping Bag reminder; opt-in, below max level with a Cozy Sleeping Bag in the bags
-        sleepingBagShowBelow = 0,
+        sleepingBagShowBelow = 0, -- minutes before Well-Rested runs out at which it also shows; 0 = off
         sleepingBagShowWhileRested = false,
         gather = false,     -- gathering tracking reminder; opt-in, it shows while no tracker is up
         gatherClassTrack = true,  -- an active class tracking also hides it
         treasure = false,   -- Find Treasure reminder (Dwarf); opt-in, it shows while it is off
         wellFed = false,    -- Well Fed reminder; opt-in, matched by aura name (every food has its own spell ID)
+        wellFedShowBelow = 0, -- minutes before the food buff runs out at which it also shows; 0 = off
         mageArmor = false,  -- Mage armor reminder (Mage); opt-in, it shows while no Frost/Ice/Mage Armor rank is up
         weapon = false,
         weaponLowRank = false,
