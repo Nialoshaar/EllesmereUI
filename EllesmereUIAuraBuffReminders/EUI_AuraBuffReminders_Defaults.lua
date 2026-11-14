@@ -216,14 +216,14 @@ if EABR.FOREVER then
         camp = false,       -- Camp Benefits reminder; opt-in, it shows whenever the buff is missing
         campfireKit = false,
         sleepingBag = false, -- Sleeping Bag reminder; opt-in, below max level with a Cozy Sleeping Bag in the bags
-        sleepingBagShowBelow = 0,
+        sleepingBagShowBelow = 0, -- Minutes before Well-Rested expires. 0 = off.
         sleepingBagShowWhileRested = false,
         sleepingBagShowProgress = false,
         gather = false,     -- gathering tracking reminder; opt-in, it shows while no tracker is up
         gatherClassTrack = true,  -- an active class tracking also hides it
         treasure = false,   -- Find Treasure reminder (Dwarf); opt-in, it shows while it is off
         wellFed = false,    -- Well Fed reminder; opt-in, matched by aura name (every food has its own spell ID)
-        wellFedShowBelow = 0,
+        wellFedShowBelow = 0, -- minutes before the food buff runs out at which it also shows; 0 = off
         mageArmor = false,  -- Mage armor reminder (Mage); opt-in, it shows while no Frost/Ice/Mage Armor rank is up
         weapon = false,
         weaponLowRank = false,
