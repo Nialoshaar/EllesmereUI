@@ -437,6 +437,7 @@ end
 do
     -- Use the client's localized name for the food family, shared by many spell IDs.
     local NUTRITIOUS_FOOD = 1248377
+    EABR.NutritiousFoodSpellID = NUTRITIOUS_FOOD
     local watch, watching, foods, pending, invalidated
 
     function EABR.IsForeverFoodCurrent(snapshot)
