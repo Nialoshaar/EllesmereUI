@@ -1375,14 +1375,24 @@ function EABR.FvSyncRestedSleepProgress()
 end
 
 local function RefreshRestedSleepingBag()
+    local fo = db.profile.forever
+    local showBelow = fo and fo.sleepingBagShowBelow or 0
+    local showExpiry = fo and fo.sleepingBagShowWhileRested == true and showBelow > 0
     local watching = EABR.FvSyncRestedSleepProgress()
+    local wantExpiry = showExpiry and fo.sleepingBag == true
+        and db.profile.display.remindersEnabled ~= false and not InCombat()
+    if wantExpiry then
+        CacheInstanceInfo()
+        wantExpiry = not InPvPInstance() and EABR.SectionShows(fo.whereToShow, InRealInstancedContent())
+            and EABR.FvSleepingBagOwned()
+    end
     EABR.FvStandDown(watching)
-    if not watching then return end
+    if not watching and not wantExpiry then return end
 
     local entry
-    if EABR._fvSleepStartedAt and not _dismissedUntilLoad["forever:sleepingbag"] then
+    if (EABR._fvSleepStartedAt or wantExpiry) and not _dismissedUntilLoad["forever:sleepingbag"] then
         ResetEntryPool()
-        entry = CollectSleepingBag(0, true, EllesmereUI.AuraKit.AurasRestricted())
+        entry = CollectSleepingBag(wantExpiry and showBelow or 0, true, EllesmereUI.AuraKit.AurasRestricted())
         if entry then
             ShowIcon(1, entry)
             LayoutIcons()
