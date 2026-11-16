@@ -894,7 +894,9 @@ function EABR.ShowIconTooltip(f)
         if not ok then GameTooltip:Hide() end
     elseif f._tooltipLabel and f._tooltipLabel ~= "" then
         -- Plain-text reminders use the suite tooltip, never GameTooltip.
-        EllesmereUI.ShowWidgetTooltip(f, tostring(f._tooltipLabel))
+        local label = f._tooltipLabel
+        if type(label) == "function" then label = label(f) end
+        EllesmereUI.ShowWidgetTooltip(f, tostring(label))
     end
 end
 

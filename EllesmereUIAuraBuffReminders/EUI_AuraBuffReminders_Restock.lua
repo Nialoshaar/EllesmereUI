@@ -54,7 +54,7 @@ local countDirty, bagSpaceDirty, waitingForSpellText, watchItems, watchSupplies,
 local pendingItems, failedItems, spellRequests, descriptionKinds
 local wasResting, sleepingBagRest, lastProfile
 local styleDirty
-local elixirItems, elixirLines, elixirMinimum
+local elixirItems, trackedElixirItems, elixirLines, elixirMinimum
 
 I.restockWatching = false
 I.dbSetters[#I.dbSetters + 1] = function(v) db = v end
@@ -152,6 +152,11 @@ local function RequestItemData(id)
     end
 end
 
+local function AddInventoryCount(reminder, id, count)
+    local items = reminder.items
+    items[id] = (items[id] or 0) + count
+end
+
 local function CountJunkSlot(info, id)
     if info.hasNoValue then return end
     local quality, hasNoValue = info.quality, info.hasNoValue
@@ -167,16 +172,19 @@ local function CountJunkSlot(info, id)
     end
     if quality == Enum.ItemQuality.Poor and not hasNoValue then
         junk.count = junk.count + 1
+        AddInventoryCount(junk, id, info.stackCount)
     end
 end
 
 local function PrepareElixirCount()
     wipe(elixirItems)
+    wipe(trackedElixirItems)
     for _, family in ipairs(ELIXIR_TYPES) do
         if family.enabled then
             local bestLevel = elixirs.closestLevel and -1 or 0
             family.count, family.incomplete = 0, false
             for _, id in ipairs(family.ids) do
+                trackedElixirItems[id] = true
                 if not elixirs.closestLevel then
                     elixirItems[id] = family
                 else
@@ -230,6 +238,8 @@ local function CountBagItems()
     wipe(descriptionKinds)
     local countFood, countPotions = false, false
     for _, reminder in ipairs(reminders) do
+        if reminder.items then wipe(reminder.items) end
+        if reminder.enabled and reminder ~= bagSpace and not reminder.items then reminder.items = {} end
         if reminder.spell and reminder.enabled then
             -- Reference spells supply the localized wording for the whole effect.
             local plain = GetSupplyDescription(reminder.spell)
@@ -272,6 +282,9 @@ local function CountBagItems()
             if id and junk.enabled then CountJunkSlot(info, id) end
             local family = elixirs.enabled and id and elixirItems[id]
             if family then family.count = family.count + info.stackCount end
+            if elixirs.enabled and id and trackedElixirItems[id] then
+                AddInventoryCount(elixirs, id, info.stackCount)
+            end
             if id and countSupplies then
                 local class, subclass = select(6, C_Item.GetItemInfoInstant(id))
                 local matchDescription = (countFood and subclass == FOOD_DRINK) or (countPotions and subclass == POTION)
@@ -284,11 +297,15 @@ local function CountBagItems()
                     else
                         local spellName, spellID = C_Item.GetItemSpell(id)
                         local isNutritious = nutritiousName and spellName == nutritiousName
-                        if isNutritious then wellFedFood.count = wellFedFood.count + info.stackCount end
+                        if isNutritious then
+                            wellFedFood.count = wellFedFood.count + info.stackCount
+                            AddInventoryCount(wellFedFood, id, info.stackCount)
+                        end
                         local description
                         if matchDescription and not isNutritious then description = GetSupplyDescription(spellID) end
                         local reminder = description and descriptionKinds[description]
                         if reminder and reminder.subclass == subclass then
+                            AddInventoryCount(reminder, id, info.stackCount)
                             local requiredLevel = 0
                             if reminder.closestLevel then requiredLevel = select(5, C_Item.GetItemInfo(id)) end
                             if not requiredLevel then
@@ -389,6 +406,23 @@ local function OnEvent(_, event, id, success)
     I.RequestRefresh()
 end
 
+local function RestockTooltip(icon)
+    local reminder = icon._restockReminder
+    local heading = reminder.tooltip or reminder.text
+    local items = reminder.items
+    if not items then return heading end
+
+    local lines = {}
+    for id, count in pairs(items) do
+        local name = C_Item.GetItemInfo(id)
+        if not name then name = EllesmereUI.Lf("Item #%1$d", id) end
+        lines[#lines + 1] = EllesmereUI.Lf("%1$s x%2$d", name, count)
+    end
+    table.sort(lines)
+    if #lines == 0 then lines[1] = EllesmereUI.L("None") end
+    return heading .. "\n\n" .. EllesmereUI.L("In Your Bags") .. "\n" .. table.concat(lines, "\n")
+end
+
 local function RenderReminder(reminder, p, w, h, x)
     local icon = reminder.icon
     if not icon then
@@ -396,8 +430,9 @@ local function RenderReminder(reminder, p, w, h, x)
         icon = I.BuildVisualIcon(nil, anchor)
         reminder.icon = icon
         icon:SetMouseClickEnabled(false)
+        icon._restockReminder = reminder
         EABR.SetIconHighlight(icon, false)
-        if reminder ~= elixirs then EABR.ApplyIconTooltipData(icon, { label = reminder.text }) end
+        EABR.ApplyIconTooltipData(icon, { label = RestockTooltip })
     end
     if reminder.x ~= x then
         reminder.x = x
@@ -414,7 +449,6 @@ local function RenderReminder(reminder, p, w, h, x)
         reminder.badgeDirty = true
     end
     if reminder.badgeDirty then
-        if reminder == elixirs then icon._tooltipLabel = reminder.tooltip end
         local texture = (reminder.subclass == FOOD_DRINK and I.Tex(reminder.spell)) or reminder.texture
         if texture ~= reminder.iconTexture then
             reminder.iconTexture = texture
@@ -525,7 +559,7 @@ function I.RefreshRestock()
         if closest then wantLevel = true end
     end
     if wantElixirs then
-        if not elixirItems then elixirItems, elixirLines = {}, {} end
+        if not elixirItems then elixirItems, trackedElixirItems, elixirLines = {}, {}, {} end
         for _, family in ipairs(ELIXIR_TYPES) do
             local enabled = restock.elixirs[family.key] == true
             if enabled ~= family.enabled then
