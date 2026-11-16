@@ -1211,6 +1211,7 @@ function EABR.ApplyEatingVisual(f, m)
     f:SetScript("OnUpdate", EABR.EatingTick)
 end
 
+local ShowCampfireAddonMenu
 function EABR.ApplyIconExpiry(f, m)
     local expireAt = m and m.expireAt
     local swipe = f._expirySwipe
@@ -1290,6 +1291,8 @@ local function GetOrCreateIcon(index)
             ShowForeverGroupMenu(self)
         elseif button == "RightButton" and self._foreverFood and not InCombat() then
             ShowForeverFoodMenu(self)
+        elseif button == "RightButton" and self._campfireAddonPicker and not InCombat() then
+            ShowCampfireAddonMenu(self)
         end
     end)
 
@@ -1629,6 +1632,37 @@ end
 --  Data-driven setup: eliminates per-refresh closure + table allocations
 -------------------------------------------------------------------------------
 -- Pre-allocated entry pool + data-driven setup (eliminates per-refresh closures)
+function EABR.CampfireAddonMacro(id)
+    return "/use [nocombat] item:" .. id
+end
+
+ShowCampfireAddonMenu = function(btn)
+    if not (MenuUtil and MenuUtil.CreateContextMenu and EABR.HasCampfireNearby()) then return end
+    local fo = db.profile.forever
+    if not (fo and fo.camp ~= false and fo.campfireKit) then return end
+    local items = EABR.GetCampfireAddons()
+    local ids = {}
+    for id in pairs(items) do ids[#ids + 1] = id end
+    if #ids == 0 then return end
+    table.sort(ids)
+    EABR.HideIconTooltip(btn)
+    MenuUtil.CreateContextMenu(btn, function(_, root)
+        root:CreateTitle(btn._tooltipLabel)
+        local function IsSelected(id) return fo.campfireAddonItem == id end
+        local function SelectItem(id)
+            if InCombat() or not btn:IsVisible() or not btn._campfireAddonPicker
+                or db.profile.forever ~= fo or fo.camp == false or not fo.campfireKit
+                or not EABR.HasCampfireNearby() or C_Item.GetItemCount(id) <= 0 then return end
+            fo.campfireAddonItem = id
+            if _G._EABR_RequestRefresh then _G._EABR_RequestRefresh() end
+        end
+        for _, id in ipairs(ids) do
+            local name = C_Item.GetItemNameByID(id) or tostring(id)
+            root:CreateRadio(name .. " (" .. items[id] .. ")", IsSelected, SelectItem, id)
+        end
+    end)
+end
+
 local AcquireEntry, ResetEntryPool, ApplySetup
 do
     local pool = {}
@@ -1657,6 +1691,8 @@ do
         e.spellRank = nil
         e.foreverFood = nil
         e.stackText = nil
+        e.campfireDuration = nil
+        e.campfireAddonPicker = nil
         return e
     end
 
@@ -1684,6 +1720,19 @@ do
         btn._text:SetText(m.label or "")
         btn._icon:SetDesaturated(m.desaturated or false)
         btn._tooltipLabel = m.label or nil
+        local cooldown = btn._campfireCooldown
+        if m.campfireDuration then
+            if not cooldown then
+                cooldown = CreateFrame("Cooldown", nil, btn, "CooldownFrameTemplate")
+                cooldown:SetAllPoints()
+                cooldown:SetDrawEdge(false)
+                cooldown:SetHideCountdownNumbers(false)
+                btn._campfireCooldown = cooldown
+            end
+            cooldown:SetCooldownFromDurationObject(m.campfireDuration)
+        elseif cooldown then
+            cooldown:Clear()
+        end
     end
 end
 
