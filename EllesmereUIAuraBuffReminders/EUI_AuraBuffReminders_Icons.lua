@@ -1281,10 +1281,14 @@ local function GetOrCreateIcon(index)
 
     -- Middle-click dismiss: hide this reminder until the next loading screen.
     -- Right-click on a multi-pet-cycle reminder previews the next pet without
-    -- casting. On a clickable spell group it opens the spell picker.
+    -- casting. On a clickable spell group it opens the spell picker, on the
+    -- Well Fed reminder the food picker.
     btn:HookScript("PostClick", function(self, button, down)
         if button == "MiddleButton" and self._dismissKey then
             _dismissedUntilLoad[self._dismissKey] = true
+            if self._dismissKey == "forever:wellfed" then
+                EABR.SyncForeverFoodWatch(false)
+            end
             if _G._EABR_RequestRefresh then _G._EABR_RequestRefresh() end
         elseif button == "LeftButton" and self._requestKey and not down then
             EABR.SendBuffRequest(self._requestKey, self._requestName)
@@ -1622,6 +1626,10 @@ ShowForeverFoodMenu = function(btn)
                 return 38, 38
             end)
             button:SetTooltip(function(tooltip, description)
+                local owner = tooltip:GetOwner()
+                tooltip:SetOwner(owner, "ANCHOR_NONE")
+                tooltip:ClearAllPoints()
+                tooltip:SetPoint("BOTTOMLEFT", owner, "TOPRIGHT", 4, 4)
                 tooltip:SetItemByID(description:GetData())
             end)
         end

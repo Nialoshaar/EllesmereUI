@@ -439,9 +439,57 @@ do
     local NUTRITIOUS_FOOD = 1248377
     EABR.NutritiousFoodSpellID = NUTRITIOUS_FOOD
     local watch, watching, foods, pending, invalidated
+    local isFood = {}  -- [itemID] = whether its use spell is the food family's, kept once its data has loaded
+    local spare        -- the table of a bag scan that found nothing new
 
     function EABR.IsForeverFoodCurrent(snapshot)
         return snapshot == foods
+    end
+
+    -- true or false once the item's data has loaded (an item's use spell never
+    -- changes), nil until then or while the family's name is missing.
+    local function IsFood(id, name)
+        local food = isFood[id]
+        if food == nil and name then
+            if select(6, C_Item.GetItemInfoInstant(id)) ~= Enum.ItemClass.Consumable then
+                food = false
+            elseif C_Item.IsItemDataCachedByID(id) then
+                food = C_Item.GetItemSpell(id) == name
+            end
+            isFood[id] = food
+        end
+        return food
+    end
+
+    -- The bags' food into found, [itemID] = count. An item whose data has not
+    -- loaded is asked for and left out until its answer.
+    local function Scan(found, name)
+        for bag = 0, NUM_BAG_SLOTS do
+            for slot = 1, C_Container.GetContainerNumSlots(bag) do
+                local id = C_Container.GetContainerItemID(bag, slot)
+                if id and not pending[id] then
+                    local food = IsFood(id, name)
+                    if food then
+                        local info = C_Container.GetContainerItemInfo(bag, slot)
+                        found[id] = (found[id] or 0) + (info and info.stackCount or 1)
+                    elseif food == nil then
+                        if not next(pending) then watch:RegisterEvent("ITEM_DATA_LOAD_RESULT") end
+                        pending[id] = true
+                        C_Item.RequestLoadItemDataByID(id)
+                    end
+                end
+            end
+        end
+    end
+
+    local function Same(a, b)
+        for id, n in pairs(a) do
+            if b[id] ~= n then return false end
+        end
+        for id in pairs(b) do
+            if a[id] == nil then return false end
+        end
+        return true
     end
 
     function EABR.GetForeverFood()
@@ -449,31 +497,11 @@ do
         local found = {}
         invalidated = false
         local name = SpellName(NUTRITIOUS_FOOD)
-        if not name then
-            if not watch:IsEventRegistered("SPELL_DATA_LOAD_RESULT") then
-                watch:RegisterEvent("SPELL_DATA_LOAD_RESULT")
-                C_Spell.RequestLoadSpellData(NUTRITIOUS_FOOD)
-            end
-        else
-            for bag = 0, NUM_BAG_SLOTS do
-                for slot = 1, C_Container.GetContainerNumSlots(bag) do
-                    local info = C_Container.GetContainerItemInfo(bag, slot)
-                    local id = info and info.itemID
-                    if id and not pending[id] then
-                        if found[id] then
-                            found[id] = found[id] + info.stackCount
-                        elseif select(6, C_Item.GetItemInfoInstant(id)) == Enum.ItemClass.Consumable then
-                            if not C_Item.IsItemDataCachedByID(id) then
-                                if not next(pending) then watch:RegisterEvent("ITEM_DATA_LOAD_RESULT") end
-                                pending[id] = true
-                                C_Item.RequestLoadItemDataByID(id)
-                            elseif C_Item.GetItemSpell(id) == name then
-                                found[id] = info.stackCount
-                            end
-                        end
-                    end
-                end
-            end
+        if name then
+            Scan(found, name)
+        elseif not watch:IsEventRegistered("SPELL_DATA_LOAD_RESULT") then
+            watch:RegisterEvent("SPELL_DATA_LOAD_RESULT")
+            C_Spell.RequestLoadSpellData(NUTRITIOUS_FOOD)
         end
         -- A synchronous load result queues another refresh. Leave the cache empty for that pass.
         if not invalidated then foods = found end
@@ -497,10 +525,35 @@ do
                     pending[id] = nil
                     if not next(pending) then watch:UnregisterEvent(event) end
                     if not success then return end
+                    -- A loaded item that is no food changes nothing.
+                    if IsFood(id, SpellName(NUTRITIOUS_FOOD)) == false then return end
                 elseif event == "SPELL_DATA_LOAD_RESULT" then
                     if id ~= NUTRITIOUS_FOOD then return end
                     watch:UnregisterEvent(event)
                     if not success then return end
+                elseif foods then
+                    -- A bag change: the reminders refresh only when the food itself changed.
+                    local name = SpellName(NUTRITIOUS_FOOD)
+                    if name then
+                        local found = spare or {}
+                        spare = nil
+                        wipe(found)
+                        invalidated = false
+                        Scan(found, name)
+                        if invalidated then
+                            -- a load answered inside the scan and asked for the refresh itself
+                            spare = found
+                            return
+                        end
+                        if Same(found, foods) then
+                            spare = found
+                            return
+                        end
+                        foods = found
+                        if EABR.ValidateOpenPicker then EABR.ValidateOpenPicker() end
+                        if _G._EABR_RequestRefresh then _G._EABR_RequestRefresh() end
+                        return
+                    end
                 end
                 invalidated = true
                 foods = nil
@@ -510,18 +563,6 @@ do
         end
         watch:RegisterEvent("BAG_UPDATE_DELAYED")
     end
-end
-
-local function CharStore(field)
-    local store = EllesmereUIDB[field]
-    local keys = EABR._fvCharKeys
-    if not keys then keys = {}; EABR._fvCharKeys = keys end
-    local key = keys[field]
-    if not key then
-        key = EllesmereUI.CharKey("-", store)
-        keys[field] = key
-    end
-    return store, key
 end
 
 -- Mage armors (WoW Forever): one reminder while no rank of Frost Armor, Ice
@@ -1081,7 +1122,7 @@ function EABR.CollectForever(missing, inInstance, inPvP)
         if not scanned then treasureUp = EABR.FvTrackingState() end
         if not treasureUp then EABR.FvSpellEntry(missing, tid, "forever:treasure") end
     end
-    if fo.wellFed and open then
+    if fo.wellFed and open and not _dismissedUntilLoad["forever:wellfed"] then
         local name = SpellName(EABR.WELL_FED) or "Well Fed"
         local ok, aura = pcall(C_UnitAuras.GetAuraDataBySpellName, "player", name, "HELPFUL")
         -- Shown while no food buff is up and, with Show Below set, that many minutes before
@@ -1181,44 +1222,22 @@ end
 
 -------------------------------------------------------------------------------
 --  WoW Forever Raid Buffs: the retail section's two views over that client's
---  buffs (RAID_BUFFS). A member has a buff while an aura with one of its
---  family's names is up (every rank, the group version, other casters'
---  versions). Under the game's aura restriction a buff is read only while none
+--  buffs (RAID_BUFFS). A member has a buff while an aura of its family is up
+--  (every rank, the group version, other casters' versions: the parent's
+--  ForeverFamilyAura). Under the game's aura restriction a buff is read only while none
 --  of its ranks is secret (a secret aura would read absent while up), and
 --  shows nothing otherwise rather than a false alarm. Absence only (no expiry
 --  thresholds).
 -------------------------------------------------------------------------------
--- Localized names of a family, cached per family (cold spell data stays uncached).
-function EABR.FvNames(fam)
-    local cache = EABR._fvNameCache
-    if not cache then cache = {}; EABR._fvNameCache = cache end
-    local names = cache[fam]
-    if names then return names end
-    names = {}
-    for _, id in ipairs(fam.names) do
-        local n = SpellName(id)
-        if n then names[#names + 1] = n end
-    end
-    if names[1] then cache[fam] = names end
-    return names
-end
-
 -- Whether a unit carries any rank of a family: true / false, or nil when the
 -- answer cannot be read. rec (optional) collects the found aura's instance ID
 -- for the group aura probe.
 function EABR.FvUnitHas(u, fam, rec)
-    local names = EABR.FvNames(fam)
-    if not names[1] then return nil end
-    for n = 1, #names do
-        local ok, aura = pcall(C_UnitAuras.GetAuraDataBySpellName, u, names[n], "HELPFUL")
-        if not ok or isSecret(aura) then return nil end
-        if aura then
-            local iid = rec and aura.auraInstanceID
-            if iid and not isSecret(iid) then rec[iid] = true end
-            return true
-        end
-    end
-    return false
+    local aura = EllesmereUI.ForeverFamilyAura(u, fam)
+    if not aura then return aura end
+    local iid = rec and aura.auraInstanceID
+    if iid and not isSecret(iid) then rec[iid] = true end
+    return true
 end
 
 -- The highest rank in a list (lowest first) the player knows, or nil.
@@ -1927,6 +1946,10 @@ function EABR.FvSyncGroupWatch(fams, roster)
             local fam = fams[i]
             W.fams[i] = fam
             for _, id in ipairs(fam.ids) do W.ids[id] = true end
+            -- A stronger buff of the same stat changes the answer too.
+            if fam.stronger then
+                for id in pairs(fam.stronger) do W.ids[id] = true end
+            end
         end
     end
     if W.any ~= any then

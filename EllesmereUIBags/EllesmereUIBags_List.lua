@@ -728,6 +728,9 @@ local function RenderRow(btn, data, cols, rowW, x, y, stripe, dim)
     parent:SetPoint("TOPLEFT", x, y)
     parent:SetID(data.bag)
     btn:SetID(data.slot)
+    -- For the cooldown-only pass (see RenderButton in the Grid file).
+    btn._cdItem = true
+    btn._cdS, btn._cdD = data._cdStart, data._cdDuration
     parent:Show()
     btn:Show()
     btn:SetAlpha(dim and 0.2 or 1)
@@ -754,6 +757,10 @@ local function RenderRow(btn, data, cols, rowW, x, y, stripe, dim)
             -- Junk Item Visuals' Desaturate greys grey items and Junk Marker junk
             icon:SetDesaturated(info.isLocked or (BP().bagDesaturateJunkItems == true
                 and (q == 0 or EUI_CategoryManager:IsJunk(info.itemID, q))) or false)
+            -- Mark mode shows the Junk Marker's coin on the row's icon
+            if EUI_Bags._junkMode or btn._junkCoin then
+                ns.PaintJunkCoin(btn, EUI_Bags._junkMode and EUI_CategoryManager:IsJunk(info.itemID, q) or false)
+            end
             if EUI._BagsItemUnusable(data.bag, data.slot, data.itemLink, info.itemID) then
                 icon:SetVertexColor(1, 0.1, 0.1)
             else
@@ -820,13 +827,8 @@ local function RenderRow(btn, data, cols, rowW, x, y, stripe, dim)
 end
 ns.RenderListRow = RenderRow
 
--- Mark mode: the row pool it hit-tests, and the one row it toggled
+-- Mark mode: the row pool it hit-tests
 ns.ListRows = _rows
-function ns.ListPaintJunk(btn, info)
-    local q = info.quality or 1
-    btn._lvIcon:SetDesaturated(info.isLocked or (BP().bagDesaturateJunkItems == true
-        and (q == 0 or EUI_CategoryManager:IsJunk(info.itemID, q))) or false)
-end
 
 -- Re-pins each host's rows (the bags and the bank) after its level moved (ns.PinItemPool)
 function ns.ResyncListRowLevels()
@@ -845,6 +847,7 @@ local function RenderEmptyRow(btn, cols, d, rowW, x, y, stripe)
     parent:SetPoint("TOPLEFT", x, y)
     parent:SetID(d.bag)
     btn:SetID(d.slot)
+    btn._cdItem = nil
     parent:Show()
     btn:Show()
     btn:SetAlpha(1)

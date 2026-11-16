@@ -542,7 +542,22 @@ local function MMAddCharStats()
         ns.Tip_AddDouble(STAT_AVERAGE_ITEM_LEVEL or "Item Level", format("%.1f", eq), ar, ag, ab, 1, 1, 1)
     end
 
-    local pLabel, pIdx = MMPrimaryStat()
+    -- WoW Forever has no primary stat (one class-wide spec), so list all five
+    -- attributes in UNITSTAT order under the client's own names, as its own
+    -- character sheet does.
+    if EllesmereUI.IS_FOREVER then
+        for i = 1, 5 do
+            local label = _G["SPELL_STAT" .. i .. "_NAME"]
+            local _, eff = UnitStat("player", i)
+            eff = clean(eff)
+            if label and eff then
+                ns.Tip_AddDouble(label, format("%.0f", eff), ar, ag, ab, 1, 1, 1)
+            end
+        end
+    end
+
+    local pLabel, pIdx
+    if not EllesmereUI.IS_FOREVER then pLabel, pIdx = MMPrimaryStat() end
     if pLabel and pIdx then
         local _, eff = UnitStat("player", pIdx)
         eff = clean(eff)

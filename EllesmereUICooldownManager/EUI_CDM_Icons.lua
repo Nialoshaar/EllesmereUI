@@ -502,10 +502,12 @@ do
 
     -- Effective threshold config for a frame's spell: per-spell family store (tier-chained) first,
     -- then the preset/custom customActiveStates entry -- the same two homes Reverse Swipe reads. Returns the arming block, or nil.
-    function ns.ResolveThresholdTextSettings(frame, sid, sd, barKey)
+    function ns.ResolveThresholdTextSettings(frame, sid, sd, barKey, asBuff)
         if not sid then return nil end
         local ss
-        if ns.ResolveSpellSettings then
+        if asBuff and ns.ResolveBuffSettings then
+            ss = ns.ResolveBuffSettings(frame, sid, sd, barKey)
+        elseif ns.ResolveSpellSettings then
             ss = ns.ResolveSpellSettings(frame, sid, sd, barKey)
         end
         if ss and (tonumber(ss.thresholdSeconds) or 0) > 0 then return ss end
@@ -548,6 +550,33 @@ function ns.StyleCustomChargeText(icon, barKey)
     if txOverlay then fs:SetParent(txOverlay) end
     fs:ClearAllPoints()
     fs:SetPoint(scPoint, txOverlay or icon, scPoint, scX, scY)
+end
+
+-- Duration Above Glows (opt-in, per bar). The swipe and the countdown number share one
+-- Cooldown widget, so raising the widget would lift the swipe over the glow as well. Instead
+-- only the countdown FontString moves, onto our own carrier: a child of cd (so it shows, hides
+-- and fades with the widget) levelled above every glow overlay (the buff and proc overlays at
+-- +16, the pandemic overlay at +17) and below textOverlay (+23). The
+-- number stays anchored to cd. Keyed weakly by cd, never a field on a Blizzard frame; built on
+-- first enable only, and turning it off moves the number back onto cd. Returns the frame that
+-- holds the number now.
+local CD_TEXT_CARRIER_LEVEL = 18
+local _cdTextCarrier = setmetatable({}, { __mode = "k" })
+local function CdmCountdownHost(icon, cd, on)
+    local car = _cdTextCarrier[cd]
+    if on and not car then
+        car = CreateFrame("Frame", nil, cd)
+        car:SetAllPoints(cd)
+        car:EnableMouse(false)
+        _cdTextCarrier[cd] = car
+    end
+    if not car then return cd end
+    local fs = cd.GetCountdownFontString and cd:GetCountdownFontString()
+    if not fs then return cd end
+    if on then car:SetFrameLevel(icon:GetFrameLevel() + CD_TEXT_CARRIER_LEVEL) end
+    local host = on and car or cd
+    if fs:GetParent() ~= host then fs:SetParent(host) end
+    return host
 end
 
 -- Refresh visual properties of existing icons (called when settings change)
@@ -639,7 +668,7 @@ local function RefreshCDMIconAppearance(barKey)
             if sidb then
                 local sdb = ns.GetBarSpellData(barKey)
                 -- Shared resolver: matches the key against the frame's full identity set (canon first, then resolvedSid/baseSpellID).
-                ssb = ns.ResolveSpellSettings and ns.ResolveSpellSettings(icon, sidb, sdb, barKey)
+                ssb = ns.ResolveBuffSettings and ns.ResolveBuffSettings(icon, sidb, sdb, barKey)
             end
             -- Stash the effective Buff Glow on fd so the BuffTicker hot path reads it without a
             -- per-tick lookup. Only restart the live glow when the effective value actually changed (no flicker on no-op rebuilds).
@@ -809,7 +838,7 @@ local function RefreshCDMIconAppearance(barKey)
                     or (ttFc and ttFc.spellID)
                 local tt
                 if ttSid and ns.ResolveThresholdTextSettings then
-                    tt = ns.ResolveThresholdTextSettings(icon, ttSid, ns.GetBarSpellData(barKey), barKey)
+                    tt = ns.ResolveThresholdTextSettings(icon, ttSid, ns.GetBarSpellData(barKey), barKey, true)
                 end
                 ns.ApplyThresholdFormatter(cd, tt)
             end
@@ -818,6 +847,8 @@ local function RefreshCDMIconAppearance(barKey)
             local hideCD = not showCD
             if ns.CdmShouldHideCountdown then hideCD = ns.CdmShouldHideCountdown(icon, hideCD) end
             cd:SetHideCountdownNumbers(hideCD)
+            -- Opt-in Duration Above Glows: the number may live on a carrier above the glow.
+            local cdTextHost = CdmCountdownHost(icon, cd, barData.cooldownTextAboveGlow)
             -- Apply cooldown text font directly.
             if showCD then
                 local cdFont = GetCDMFont()
@@ -829,11 +860,12 @@ local function RefreshCDMIconAppearance(barKey)
                     or barData.cooldownTextPosition or "center"
                 local cdX = (ssb and ssb.cooldownTextX) or barData.cooldownTextX or 0
                 local cdY = (ssb and ssb.cooldownTextY) or barData.cooldownTextY or 0
-                -- Find Blizzard's countdown FontString on the Cooldown widget. Keep it ON the
-                -- widget (anchored to cd) so the user's position and X/Y offset work -- REPARENTING
-                -- it makes Blizzard's engine re-center and ignore both. Setting our own anchor also
+                -- Find Blizzard's countdown FontString on its host: the Cooldown widget, or the
+                -- Duration Above Glows carrier (a child of the widget). Keep it anchored to cd so
+                -- the user's position and X/Y offset work -- hung from a frame outside the widget
+                -- Blizzard's engine re-centers it and ignores both. Setting our own anchor also
                 -- overrides the engine's stale baseline (raw SetFont vs SetCountdownFont); off-center anchors are where a missed or stomped anchor first becomes visible.
-                for _, rgn in pairs({ cd:GetRegions() }) do
+                for _, rgn in pairs({ cdTextHost:GetRegions() }) do
                     if rgn and rgn.GetObjectType and rgn:GetObjectType() == "FontString" then
                         EllesmereUI.ApplyIconTextFont(rgn, cdFont, cdSize, "cdm")
                         rgn:SetTextColor(cdR, cdG, cdB)
@@ -1201,6 +1233,17 @@ local function RefreshCDMIconAppearance(barKey)
     end
 end
 ns.RefreshCDMIconAppearance = RefreshCDMIconAppearance
+
+-- Per-icon menu setters: a buff's settings also style its "Replace with Buff" icons on cd/util bars.
+function ns.RefreshCDMIconSettings(barKey)
+    RefreshCDMIconAppearance(barKey)
+    if not ns._cdmAnyBuffReplace then return end
+    local bd = barDataByKey[barKey]
+    if not (bd and (bd.barType == "buffs" or bd.barType == "custom_buff")) then return end
+    for bk in pairs(ns._buffReplaceBars) do
+        if bk ~= barKey then RefreshCDMIconAppearance(bk) end
+    end
+end
 
 I.RefreshCDMIconAppearance = RefreshCDMIconAppearance
 I.broken = false
