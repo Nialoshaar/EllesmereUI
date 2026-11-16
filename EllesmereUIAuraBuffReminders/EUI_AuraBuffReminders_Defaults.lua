@@ -91,6 +91,9 @@ local defaults = {
             bagSpace = false,
             bagSpaceMinimum = 5,
             junk = false,
+            elixirs = {},
+            elixirsMinimum = 5,
+            elixirsClosestLevel = true,
         },
         display = {
             iconShape = "none",

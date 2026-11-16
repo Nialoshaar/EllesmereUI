@@ -3761,32 +3761,24 @@ initFrame:SetScript("OnEvent", function(self)
                          EllesmereUI:RefreshPage()
                      end }
         end
-        local function RestockMinimum(key, label, tooltip)
+        local function RestockMinimum(key, label, tooltip, disabled)
             local minimum = key .. "Minimum"
+            disabled = disabled or function() local p = DB(); return not (p and p.restock[key]) end
             return { type="slider", text=label, min=1, max=100, step=1, tooltip=tooltip,
-                     disabled=function() local p = DB(); return not (p and p.restock[key]) end,
+                     disabled=disabled,
                      getValue=function() local p = DB(); return p and p.restock[minimum] or 5 end,
                      setValue=function(v)
                          local p = DB()
-                         if not (p and p.restock[key]) then return end
+                         if not p or disabled() then return end
                          p.restock[minimum] = v
                          RefreshAll()
                      end }
         end
-        local function AddSupplyRow(key, name, tooltip)
+        local function AddClosestCog(region, key, name, disabled)
             local closest = key .. "ClosestLevel"
-            local function Disabled()
-                local p = DB()
-                return not (p and p.restock[key])
-            end
-
-            local row, rowHeight = W:DualRow(parent, y,
-                RestockToggle(key, name, tooltip),
-                RestockMinimum(key, "Minimum Count", "Show the reminder when your bag count falls below this number.")
-            )
-            EllesmereUI.BuildInlineCog(row._leftRegion, {
+            EllesmereUI.BuildInlineCog(region, {
                 title = name,
-                disabled = Disabled,
+                disabled = disabled,
                 disabledTooltip = name,
                 rows = {
                     { type="toggle", label="Closest to Your Level",
@@ -3796,12 +3788,22 @@ initFrame:SetScript("OnEvent", function(self)
                       get=function() local p = DB(); return p and p.restock[closest] ~= false end,
                       set=function(v)
                           local p = DB()
-                          if not (p and p.restock[key]) then return end
+                          if not p or disabled() then return end
                           p.restock[closest] = v
                           RefreshAll()
                       end },
                 },
             })
+        end
+        local function AddSupplyRow(key, name, tooltip)
+            local row, rowHeight = W:DualRow(parent, y,
+                RestockToggle(key, name, tooltip),
+                RestockMinimum(key, "Minimum Count", "Show the reminder when your bag count falls below this number.")
+            )
+            AddClosestCog(row._leftRegion, key, name, function()
+                local p = DB()
+                return not (p and p.restock[key])
+            end)
             y = y - rowHeight
         end
         AddSupplyRow("healthFood", "Health Food", "Show a restock reminder in rested areas for food that only restores health.")
@@ -3813,6 +3815,38 @@ initFrame:SetScript("OnEvent", function(self)
                 RestockToggle("wellFedFood", "Well Fed Food", "Show a restock reminder for Nutritious Food in rested areas."),
                 RestockMinimum("wellFedFood", "Minimum Count", "Show the reminder when your Nutritious Food count falls below this number."))
             y = y - h
+            local function NoElixirs()
+                local p = DB()
+                return not (p and next(p.restock.elixirs))
+            end
+            local row
+            row, h = W:DualRow(parent, y,
+                { type="dropdown", text="Elixirs", tooltip="Select the elixir types to track in rested areas.",
+                  values={ none="None" }, order={ "none" },
+                  getValue=function() return "none" end, setValue=function() end },
+                RestockMinimum("elixirs", "Minimum Count", "Minimum bag count for each selected elixir type.", NoElixirs))
+            y = y - h
+            if not EllesmereUI._prebuilding then
+                local region = row._leftRegion
+                if region._control then region._control:Hide() end
+                local dropdown, refresh = EllesmereUI.BuildVisOptsCBDropdown(region, 160, region:GetFrameLevel() + 2,
+                    ns.RestockElixirTypes,
+                    function(key)
+                        local p = DB()
+                        return p and p.restock.elixirs[key] == true
+                    end,
+                    function(key, enabled)
+                        local p = DB()
+                        if not p then return end
+                        p.restock.elixirs[key] = enabled and true or nil
+                        RefreshAll()
+                    end,
+                    function() EllesmereUI:RefreshPage() end, nil, nil, nil, nil, { countLabel = true })
+                PP.Point(dropdown, "RIGHT", region, "RIGHT", -20, 0)
+                region._control, region._lastInline = dropdown, nil
+                EllesmereUI.RegisterWidgetRefresh(refresh)
+                AddClosestCog(region, "elixirs", "Elixirs", NoElixirs)
+            end
         end
         _, h = W:DualRow(parent, y,
             RestockToggle("bagSpace", "Bag Space", "Show free general-purpose bag slots in rested areas."),

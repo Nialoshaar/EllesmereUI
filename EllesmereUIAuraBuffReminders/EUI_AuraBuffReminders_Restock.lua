@@ -14,6 +14,21 @@ local bagSpace = { key = "bagSpace", minimum = "bagSpaceMinimum", texture = 1336
 local junk = { key = "junk", texture = 133784, label = function() return EllesmereUI.L("Junk") end }
 local wellFedFood = { key = "wellFedFood", minimum = "wellFedFoodMinimum", texture = 136000,
     label = function() return EllesmereUI.L("Well Fed Food") end }
+local elixirs = { key = "elixirs", closest = "elixirsClosestLevel", texture = 134810,
+    label = function() return EllesmereUI.L("Elixirs") end }
+local ELIXIR_TYPES = {
+    { key = "strength", label = "Strength", ids = { 2454, 3391, 250349, 9206 } },
+    { key = "agility", label = "Agility", ids = { 2457, 3390, 8949, 9187, 13452 } },
+    { key = "intellect", label = "Intellect", ids = { 3383, 250353, 250354, 9179 } },
+    { key = "spellPower", label = "Spell Power", ids = { 247754, 250342, 9155, 13454 } },
+    { key = "armor", label = "Armor", ids = { 5997, 3389, 8951, 13445 } },
+    { key = "fortitude", label = "Max Health", ids = { 2458, 3825, 250334, 250335 } },
+    { key = "healthRegen", label = "Health Regen", ids = { 3382, 3388, 3826, 20004 } },
+    { key = "spirit", label = "Spirit", ids = { 250344, 250345, 250346, 250347 } },
+    { key = "healing", label = "Healing Done", ids = { 250330, 250331, 250332, 250333 } },
+    { key = "manaRegen", label = "Mana Regen", ids = { 250339, 250340, 250341, 20007 } },
+}
+ns.RestockElixirTypes = ELIXIR_TYPES
 local reminders = {
     { key = "healthFood", minimum = "healthFoodMinimum", closest = "healthFoodClosestLevel", subclass = FOOD_DRINK,
       spell = EABR.FOREVER and 433 or 1290925, otherSpell = EABR.FOREVER and 1131 or nil,
@@ -30,6 +45,7 @@ local reminders = {
       tiers = { 49, 41, 31, 22, 14, 5 },
       texture = 134850, label = function() return EllesmereUI.L("Mana Potions") end },
     wellFedFood,
+    elixirs,
     bagSpace,
     junk,
 }
@@ -38,6 +54,7 @@ local countDirty, bagSpaceDirty, waitingForSpellText, watchItems, watchSupplies,
 local pendingItems, failedItems, spellRequests, descriptionKinds
 local wasResting, sleepingBagRest, lastProfile
 local styleDirty
+local elixirItems, elixirLines, elixirMinimum
 
 I.restockWatching = false
 I.dbSetters[#I.dbSetters + 1] = function(v) db = v end
@@ -59,7 +76,13 @@ local function GetAnchorSize(w, h)
     local p = db.profile
     local count = 0
     for _, reminder in ipairs(reminders) do
-        if p.restock[reminder.key] and (reminder ~= wellFedFood or EABR.FOREVER) then count = count + 1 end
+        local enabled = p.restock[reminder.key]
+        if reminder == elixirs then
+            enabled = EABR.FOREVER and next(enabled) ~= nil
+        elseif reminder == wellFedFood then
+            enabled = enabled and EABR.FOREVER
+        end
+        if enabled then count = count + 1 end
     end
     count = math.max(count, 1)
     return count * w + (count - 1) * (p.display.iconSpacing or 8), h
@@ -92,6 +115,7 @@ local function RegisterUnlockElement()
                 local restock = db.profile.restock
                 return not (restock.healthFood or restock.manaDrink or restock.healthPotion or restock.manaPotion
                     or (EABR.FOREVER and restock.wellFedFood)
+                    or (EABR.FOREVER and next(restock.elixirs))
                     or restock.bagSpace or restock.junk)
             end,
             savePos = function(_, point, relPoint, x, y)
@@ -146,6 +170,48 @@ local function CountJunkSlot(info, id)
     end
 end
 
+local function PrepareElixirCount()
+    wipe(elixirItems)
+    for _, family in ipairs(ELIXIR_TYPES) do
+        if family.enabled then
+            local bestLevel = elixirs.closestLevel and -1 or 0
+            family.count, family.incomplete = 0, false
+            for _, id in ipairs(family.ids) do
+                if not elixirs.closestLevel then
+                    elixirItems[id] = family
+                else
+                    local level = select(5, C_Item.GetItemInfo(id))
+                    if level == nil then
+                        if not failedItems[id] then family.incomplete = true end
+                        RequestItemData(id)
+                    elseif level <= playerLevel and level >= bestLevel then
+                        if level > bestLevel then
+                            for _, familyID in ipairs(family.ids) do elixirItems[familyID] = nil end
+                            bestLevel = level
+                        end
+                        elixirItems[id] = family
+                    end
+                end
+            end
+            family.usable = bestLevel >= 0
+        end
+    end
+end
+
+local function UpdateElixirShortages(minimum)
+    wipe(elixirLines)
+    elixirLines[1] = elixirs.label()
+    for _, family in ipairs(ELIXIR_TYPES) do
+        if family.enabled and family.usable and not family.incomplete and family.count < minimum then
+            elixirLines[#elixirLines + 1] = EllesmereUI.Lf("%1$s (%2$d/%3$d)", EllesmereUI.L(family.label), family.count, minimum)
+        end
+    end
+    elixirs.count = #elixirLines - 1
+    elixirs.tooltip = table.concat(elixirLines, "\n")
+    elixirs.badgeDirty = true
+    elixirMinimum = minimum
+end
+
 local function GetMinimumTier(reminder)
     if not reminder.closestLevel or not EABR.FOREVER then return 0 end
     -- Keep the current tier as the minimum even when its bags are empty.
@@ -193,9 +259,10 @@ local function CountBagItems()
     local countSupplies = countFood or countPotions or nutritiousName
     if junk.enabled then
         junk.count, junk.incomplete, junk.badgeDirty = 0, false, true
-    elseif not countSupplies then
+    elseif not countSupplies and not elixirs.enabled then
         return
     end
+    if elixirs.enabled then PrepareElixirCount() end
 
     local incompleteFood, incompletePotions = false, false
     for bag = 0, NUM_BAG_SLOTS do
@@ -203,6 +270,8 @@ local function CountBagItems()
             local info = C_Container.GetContainerItemInfo(bag, slot)
             local id = info and info.itemID
             if id and junk.enabled then CountJunkSlot(info, id) end
+            local family = elixirs.enabled and id and elixirItems[id]
+            if family then family.count = family.count + info.stackCount end
             if id and countSupplies then
                 local class, subclass = select(6, C_Item.GetItemInfoInstant(id))
                 local matchDescription = (countFood and subclass == FOOD_DRINK) or (countPotions and subclass == POTION)
@@ -328,7 +397,7 @@ local function RenderReminder(reminder, p, w, h, x)
         reminder.icon = icon
         icon:SetMouseClickEnabled(false)
         EABR.SetIconHighlight(icon, false)
-        EABR.ApplyIconTooltipData(icon, { label = reminder.text })
+        if reminder ~= elixirs then EABR.ApplyIconTooltipData(icon, { label = reminder.text }) end
     end
     if reminder.x ~= x then
         reminder.x = x
@@ -345,6 +414,7 @@ local function RenderReminder(reminder, p, w, h, x)
         reminder.badgeDirty = true
     end
     if reminder.badgeDirty then
+        if reminder == elixirs then icon._tooltipLabel = reminder.tooltip end
         local texture = (reminder.subclass == FOOD_DRINK and I.Tex(reminder.spell)) or reminder.texture
         if texture ~= reminder.iconTexture then
             reminder.iconTexture = texture
@@ -369,7 +439,8 @@ function I.RefreshRestock()
     local restock = profile.restock
     local wantSupplies = restock.healthFood or restock.manaDrink or restock.healthPotion or restock.manaPotion
         or (EABR.FOREVER and restock.wellFedFood)
-    local wantItems = wantSupplies or restock.junk
+    local wantElixirs = EABR.FOREVER and next(restock.elixirs) ~= nil
+    local wantItems = wantSupplies or restock.junk or wantElixirs
     if not (wantItems or restock.bagSpace) then
         if I.restockWatching then
             anchor:UnregisterAllEvents()
@@ -441,6 +512,7 @@ function I.RefreshRestock()
     local wantLevel = false
     for _, reminder in ipairs(reminders) do
         local enabled = restock[reminder.key] == true and (reminder ~= wellFedFood or EABR.FOREVER)
+        if reminder == elixirs then enabled = wantElixirs end
         local closest = enabled and reminder.closest ~= nil and restock[reminder.closest] ~= false
         if enabled ~= reminder.enabled or closest ~= reminder.closestLevel then
             reminder.enabled, reminder.closestLevel = enabled, closest
@@ -451,6 +523,16 @@ function I.RefreshRestock()
             end
         end
         if closest then wantLevel = true end
+    end
+    if wantElixirs then
+        if not elixirItems then elixirItems, elixirLines = {}, {} end
+        for _, family in ipairs(ELIXIR_TYPES) do
+            local enabled = restock.elixirs[family.key] == true
+            if enabled ~= family.enabled then
+                family.enabled = enabled
+                countDirty = true
+            end
+        end
     end
     if wantLevel ~= watchLevel then
         watchLevel = wantLevel
@@ -474,8 +556,11 @@ function I.RefreshRestock()
     wasResting = true
     if panelOpen then return end
     if countDirty then
-        if watchItems then CountBagItems() end
         countDirty = false
+        if watchItems then CountBagItems() end
+        if wantElixirs then UpdateElixirShortages(restock.elixirsMinimum) end
+    elseif wantElixirs and elixirMinimum ~= restock.elixirsMinimum then
+        UpdateElixirShortages(restock.elixirsMinimum)
     end
     if bagSpaceDirty and bagSpace.enabled then
         CountFreeSlots()

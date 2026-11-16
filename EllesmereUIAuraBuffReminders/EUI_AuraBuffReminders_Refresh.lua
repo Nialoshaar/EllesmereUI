@@ -1484,6 +1484,7 @@ local function Refresh()
     local restock = db.profile.restock
     if restock.healthFood or restock.manaDrink or restock.healthPotion or restock.manaPotion
         or restock.wellFedFood or restock.bagSpace or restock.junk
+        or (EABR.FOREVER and next(restock.elixirs))
         or I.restockWatching then
         I.RefreshRestock()
     end
