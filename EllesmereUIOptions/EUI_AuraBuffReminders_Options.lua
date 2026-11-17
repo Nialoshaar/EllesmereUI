@@ -3828,43 +3828,49 @@ initFrame:SetScript("OnEvent", function(self)
         AddSupplyRow("manaDrink", "Mana Drink", "Show a restock reminder in rested areas for drinks that only restore mana.")
         AddSupplyRow("healthPotion", "Health Potions", "Show a restock reminder in rested areas for potions that only restore health.")
         AddSupplyRow("manaPotion", "Mana Potions", "Show a restock reminder in rested areas for potions that only restore mana.")
-        if FOREVER then
-            _, h = W:DualRow(parent, y,
-                RestockToggle("wellFedFood", "Well Fed Food", "Show a restock reminder for Nutritious Food in rested areas."),
-                RestockMinimum("wellFedFood", "Minimum Count", "Show the reminder when your Nutritious Food count falls below this number."))
-            y = y - h
-            local function NoElixirs()
+        local function AddGroupRow(groupKey, name, tooltip, minimumTooltip, families)
+            local function NoSelection()
                 local p = DB()
-                return not (p and next(p.restock.elixirs))
+                return not (p and ns.HasRestockGroupSelection(p.restock[groupKey], families))
             end
             local row
             row, h = W:DualRow(parent, y,
-                { type="dropdown", text="Elixirs", tooltip="Select the elixir types to track in rested areas.",
+                { type="dropdown", text=name, tooltip=tooltip,
                   values={ none="None" }, order={ "none" },
                   getValue=function() return "none" end, setValue=function() end },
-                RestockMinimum("elixirs", "Minimum Count", "Minimum bag count for each selected elixir type.", NoElixirs))
+                RestockMinimum(groupKey, "Minimum Count", minimumTooltip, NoSelection))
             y = y - h
             if not EllesmereUI._prebuilding then
                 local region = row._leftRegion
                 if region._control then region._control:Hide() end
                 local dropdown, refresh = EllesmereUI.BuildVisOptsCBDropdown(region, 160, region:GetFrameLevel() + 2,
-                    ns.RestockElixirTypes,
+                    families,
                     function(key)
                         local p = DB()
-                        return p and p.restock.elixirs[key] == true
+                        return p and p.restock[groupKey][key] == true
                     end,
                     function(key, enabled)
                         local p = DB()
                         if not p then return end
-                        p.restock.elixirs[key] = enabled and true or nil
+                        p.restock[groupKey][key] = enabled and true or nil
                         RefreshAll()
                     end,
                     function() EllesmereUI:RefreshPage() end, nil, nil, nil, nil, { countLabel = true })
                 PP.Point(dropdown, "RIGHT", region, "RIGHT", -20, 0)
                 region._control, region._lastInline = dropdown, nil
                 EllesmereUI.RegisterWidgetRefresh(refresh)
-                AddClosestCog(region, "elixirs", "Elixirs", NoElixirs)
+                AddClosestCog(region, groupKey, name, NoSelection)
             end
+        end
+        if FOREVER then
+            _, h = W:DualRow(parent, y,
+                RestockToggle("wellFedFood", "Well Fed Food", "Show a restock reminder for Nutritious Food in rested areas."),
+                RestockMinimum("wellFedFood", "Minimum Count", "Show the reminder when your Nutritious Food count falls below this number."))
+            y = y - h
+            AddGroupRow("elixirs", "Elixirs", "Select the elixir types to track in rested areas.",
+                "Minimum bag count for each selected elixir type.", ns.RestockElixirTypes)
+            AddGroupRow("potions", "Potions", "Select the potion types to track in rested areas.",
+                "Minimum bag count for each selected potion type.", ns.RestockPotionTypes)
         end
         _, h = W:DualRow(parent, y,
             RestockToggle("bagSpace", "Bag Space", "Show free general-purpose bag slots in rested areas."),

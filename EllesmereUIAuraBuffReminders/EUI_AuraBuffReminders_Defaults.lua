@@ -94,6 +94,9 @@ local defaults = {
             elixirs = {},
             elixirsMinimum = 5,
             elixirsClosestLevel = true,
+            potions = {},
+            potionsMinimum = 5,
+            potionsClosestLevel = true,
         },
         display = {
             iconShape = "none",
