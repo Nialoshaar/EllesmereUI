@@ -37,8 +37,34 @@ local POTION_TYPES = {
     { key = "menders", label = "Mender's", ids = { 250944, 250945, 250946, 250947, 250948, 250949 } },
 }
 ns.RestockPotionTypes = POTION_TYPES
+local weaponBuffs = {
+    key = "weaponBuffs", groupMinimum = "weaponBuffsMinimum", texture = 134711,
+    label = function() return EllesmereUI.L("Weapon Buffs") end,
+}
+local WEAPON_BUFF_TYPES = {
+    { key = "oil", label = "Oil", ids = {} },
+    { key = "weightstone", label = "Weightstone", ids = {} },
+    { key = "sharpening", label = "Sharpening Stone", ids = {} },
+}
+if EABR.FOREVER then
+    for _, buff in ipairs(EABR.FV_WEAPON_BUFFS) do
+        local family
+        if buff.key:match("oil$") then
+            family = WEAPON_BUFF_TYPES[1]
+        elseif buff.key == "weightstone" then
+            family = WEAPON_BUFF_TYPES[2]
+        elseif buff.key == "sharpening" or buff.key == "elemental" or buff.key == "consecrated" then
+            family = WEAPON_BUFF_TYPES[3]
+        end
+        if family then
+            for _, id in ipairs(buff.items) do family.ids[#family.ids + 1] = id end
+        end
+    end
+end
+ns.RestockWeaponBuffTypes = WEAPON_BUFF_TYPES
 elixirs.families, potions.families = ELIXIR_TYPES, POTION_TYPES
-local groups = { elixirs, potions }
+weaponBuffs.families = WEAPON_BUFF_TYPES
+local groups = { elixirs, potions, weaponBuffs }
 local reminders = {
     { key = "healthFood", minimum = "healthFoodMinimum", closest = "healthFoodClosestLevel", subclass = FOOD_DRINK,
       spell = EABR.FOREVER and 433 or 1290925, otherSpell = EABR.FOREVER and 1131 or nil,
@@ -57,6 +83,7 @@ local reminders = {
     wellFedFood,
     elixirs,
     potions,
+    weaponBuffs,
     bagSpace,
     junk,
 }
@@ -135,6 +162,7 @@ local function RegisterUnlockElement()
                 return not (restock.healthFood or restock.manaDrink or restock.healthPotion or restock.manaPotion
                     or (EABR.FOREVER and restock.wellFedFood)
                     or IsReminderEnabled(elixirs, restock) or IsReminderEnabled(potions, restock)
+                    or IsReminderEnabled(weaponBuffs, restock)
                     or restock.bagSpace or restock.junk)
             end,
             savePos = function(_, point, relPoint, x, y)
@@ -286,7 +314,7 @@ local function CountBagItems()
         end
     end
     local countSupplies = countFood or countPotions or nutritiousName
-    local countGroups = elixirs.enabled or potions.enabled
+    local countGroups = elixirs.enabled or potions.enabled or weaponBuffs.enabled
     if junk.enabled then
         junk.count, junk.incomplete, junk.badgeDirty = 0, false, true
     elseif not countSupplies and not countGroups then
@@ -500,6 +528,7 @@ function I.RefreshRestock()
     local wantSupplies = restock.healthFood or restock.manaDrink or restock.healthPotion or restock.manaPotion
         or (EABR.FOREVER and restock.wellFedFood)
     local wantGroups = IsReminderEnabled(elixirs, restock) or IsReminderEnabled(potions, restock)
+        or IsReminderEnabled(weaponBuffs, restock)
     local wantItems = wantSupplies or restock.junk or wantGroups
     if not (wantItems or restock.bagSpace) then
         if I.restockWatching then

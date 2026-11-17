@@ -97,6 +97,8 @@ local defaults = {
             potions = {},
             potionsMinimum = 5,
             potionsClosestLevel = true,
+            weaponBuffs = {},
+            weaponBuffsMinimum = 5,
         },
         display = {
             iconShape = "none",

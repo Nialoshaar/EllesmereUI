@@ -3828,7 +3828,7 @@ initFrame:SetScript("OnEvent", function(self)
         AddSupplyRow("manaDrink", "Mana Drink", "Show a restock reminder in rested areas for drinks that only restore mana.")
         AddSupplyRow("healthPotion", "Health Potions", "Show a restock reminder in rested areas for potions that only restore health.")
         AddSupplyRow("manaPotion", "Mana Potions", "Show a restock reminder in rested areas for potions that only restore mana.")
-        local function AddGroupRow(groupKey, name, tooltip, minimumTooltip, families)
+        local function AddGroupRow(groupKey, name, tooltip, minimumTooltip, families, hasClosest)
             local function NoSelection()
                 local p = DB()
                 return not (p and ns.HasRestockGroupSelection(p.restock[groupKey], families))
@@ -3859,7 +3859,7 @@ initFrame:SetScript("OnEvent", function(self)
                 PP.Point(dropdown, "RIGHT", region, "RIGHT", -20, 0)
                 region._control, region._lastInline = dropdown, nil
                 EllesmereUI.RegisterWidgetRefresh(refresh)
-                AddClosestCog(region, groupKey, name, NoSelection)
+                if hasClosest then AddClosestCog(region, groupKey, name, NoSelection) end
             end
         end
         if FOREVER then
@@ -3868,9 +3868,11 @@ initFrame:SetScript("OnEvent", function(self)
                 RestockMinimum("wellFedFood", "Minimum Count", "Show the reminder when your Nutritious Food count falls below this number."))
             y = y - h
             AddGroupRow("elixirs", "Elixirs", "Select the elixir types to track in rested areas.",
-                "Minimum bag count for each selected elixir type.", ns.RestockElixirTypes)
+                "Minimum bag count for each selected elixir type.", ns.RestockElixirTypes, true)
             AddGroupRow("potions", "Potions", "Select the potion types to track in rested areas.",
-                "Minimum bag count for each selected potion type.", ns.RestockPotionTypes)
+                "Minimum bag count for each selected potion type.", ns.RestockPotionTypes, true)
+            AddGroupRow("weaponBuffs", "Weapon Buffs", "Select the weapon buff types to track in rested areas.",
+                "Minimum bag count for each selected weapon buff type.", ns.RestockWeaponBuffTypes)
         end
         _, h = W:DualRow(parent, y,
             RestockToggle("bagSpace", "Bag Space", "Show free general-purpose bag slots in rested areas."),
