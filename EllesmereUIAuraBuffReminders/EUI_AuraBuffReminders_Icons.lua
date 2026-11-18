@@ -1698,6 +1698,7 @@ do
         e.foreverGroup = nil
         e.spellRank = nil
         e.foreverFood = nil
+        e.fvExtra = nil
         e.foreverWeapon = nil
         e.stackText = nil
         e.campfireDuration = nil
