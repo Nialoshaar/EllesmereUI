@@ -541,20 +541,20 @@ function EABR.StartSleepProgress(instanceID)
     mainFrame:RegisterEvent("PLAYER_LOGOUT")
 end
 
-local intellectItemLevels, intellectItemPending, intellectItemFailed
+local consumableItemLevels, consumableItemPending, consumableItemFailed
 
 mainFrame:SetScript("OnEvent", function(_, e, arg1, arg2, arg3)
     if e == "ITEM_DATA_LOAD_RESULT" then
-        if not intellectItemPending or intellectItemPending[arg1] == nil then return end
-        intellectItemPending[arg1] = nil
-        if not next(intellectItemPending) then mainFrame:UnregisterEvent(e) end
+        if not consumableItemPending or consumableItemPending[arg1] == nil then return end
+        consumableItemPending[arg1] = nil
+        if not next(consumableItemPending) then mainFrame:UnregisterEvent(e) end
         local level = arg2 and select(5, C_Item.GetItemInfo(arg1))
         if level then
-            intellectItemLevels[arg1] = level
+            consumableItemLevels[arg1] = level
             RequestRefresh()
         else
-            intellectItemFailed = intellectItemFailed or {}
-            intellectItemFailed[arg1] = true
+            consumableItemFailed = consumableItemFailed or {}
+            consumableItemFailed[arg1] = true
         end
         return
     end
@@ -772,7 +772,7 @@ mainFrame:SetScript("OnEvent", function(_, e, arg1, arg2, arg3)
     -- is intentionally NOT registered: it fires ~1/sec from cooldown ticks, changes nothing reminder-relevant, and would refresh every second and bust the resolved-item cache.
     if e == "BAG_UPDATE_DELAYED" or e == "BAG_UPDATE" then
         InvalidateItemCountCache()
-        intellectItemFailed = nil
+        consumableItemFailed = nil
         EABR._fvSleepBag, EABR._fvCenser = nil, nil
     end
 
@@ -923,39 +923,39 @@ if EABR.FOREVER then
             mainFrame:UnregisterEvent("BAG_UPDATE_DELAYED")
         end
     end
-    function EABR.FvIntellectItemLevel(id)
-        intellectItemLevels = intellectItemLevels or {}
-        local level = intellectItemLevels[id]
+    function EABR.FvConsumableItemLevel(id)
+        consumableItemLevels = consumableItemLevels or {}
+        local level = consumableItemLevels[id]
         if level ~= nil then return level end
-        if intellectItemPending and intellectItemPending[id] ~= nil then
-            intellectItemPending[id] = true
+        if consumableItemPending and consumableItemPending[id] ~= nil then
+            consumableItemPending[id] = true
             return
         end
         -- A failed load can retry on the next bag change or activation.
-        if intellectItemFailed and intellectItemFailed[id] then return end
+        if consumableItemFailed and consumableItemFailed[id] then return end
         level = select(5, C_Item.GetItemInfo(id))
         if level ~= nil then
-            intellectItemLevels[id] = level
+            consumableItemLevels[id] = level
             return level
         end
-        intellectItemPending = intellectItemPending or {}
-        if not next(intellectItemPending) then mainFrame:RegisterEvent("ITEM_DATA_LOAD_RESULT") end
-        intellectItemPending[id] = true
+        consumableItemPending = consumableItemPending or {}
+        if not next(consumableItemPending) then mainFrame:RegisterEvent("ITEM_DATA_LOAD_RESULT") end
+        consumableItemPending[id] = true
         C_Item.RequestLoadItemDataByID(id)
-        return intellectItemLevels[id]
+        return consumableItemLevels[id]
     end
-    function EABR.FvSyncIntellectItemEvents(active, watchLevel)
-        if intellectItemPending and next(intellectItemPending) then
+    function EABR.FvSyncConsumableItemEvents(active, watchLevel)
+        if consumableItemPending and next(consumableItemPending) then
             -- Retain only requests that could improve this pass's choice.
-            for id, seen in pairs(intellectItemPending) do
-                if active and seen then intellectItemPending[id] = false
-                else intellectItemPending[id] = nil end
+            for id, seen in pairs(consumableItemPending) do
+                if active and seen then consumableItemPending[id] = false
+                else consumableItemPending[id] = nil end
             end
-            if not next(intellectItemPending) then mainFrame:UnregisterEvent("ITEM_DATA_LOAD_RESULT") end
+            if not next(consumableItemPending) then mainFrame:UnregisterEvent("ITEM_DATA_LOAD_RESULT") end
         end
-        if not active then intellectItemFailed = nil end
-        if watchLevel == (EABR._fvIntellectLevelEvent or false) then return end
-        EABR._fvIntellectLevelEvent = watchLevel
+        if not active then consumableItemFailed = nil end
+        if watchLevel == (EABR._fvConsumableLevelEvent or false) then return end
+        EABR._fvConsumableLevelEvent = watchLevel
         if watchLevel then
             mainFrame:RegisterEvent("PLAYER_LEVEL_UP")
         else

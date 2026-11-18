@@ -1049,12 +1049,27 @@ local function SyncCampfireWatch(want)
     campfireWatch:RegisterEvent("ZONE_CHANGED_INDOORS")
 end
 
--- Item ID and Intellect bonus, strongest first.
+-- Item ID and stat bonus, strongest first.
 local intellectConsumables = {
-    { 9179, 25 }, { 10308, 16 }, { 4419, 12 }, { 250354, 10 },
-    { 2290, 8 }, { 250353, 6 }, { 955, 4 }, { 3383, 3 },
+    label = "Intellect", dismissKey = "forever:intellect", iconSpell = 1459,
+    items = {
+        { 9179, 25 }, { 10308, 16 }, { 4419, 12 }, { 250354, 10 },
+        { 2290, 8 }, { 250353, 6 }, { 955, 4 }, { 3383, 3 },
+    },
+    auras = { 11396, 12176, 8098, 1250989, 8097, 1250988, 8096, 3166 },
 }
-local intellectConsumableAuras = { 11396, 12176, 8098, 1250989, 8097, 1250988, 8096, 3166 }
+local strengthConsumables = {
+    label = "Strength", dismissKey = "forever:strength", iconSpell = 8118,
+    items = {
+        { 250351, 25 }, { 9206, 25 }, { 250350, 18 }, { 13453, 18 }, { 10310, 17 }, { 4426, 13 },
+        { 250349, 10 }, { 2289, 9 }, { 3391, 8 }, { 6662, 8 }, { 954, 5 }, { 2454, 4 },
+    },
+    auras = { 1250986, 11405, 1250985, 17537, 12179, 8120, 1250984, 8119, 3164, 8212, 8118, 2367 },
+}
+
+local function ConsumableAuraAbsent(auras, restricted)
+    return (not restricted or EABR.FvRanksReadable(auras)) and not PlayerHasAuraByID(auras)
+end
 
 local function IntellectBonusToBeat()
     local family = EllesmereUI.FOREVER_BUFF_FAMILIES.ai
@@ -1068,29 +1083,27 @@ local function IntellectBonusToBeat()
         local spellID = aura.spellId
         if isSecret(spellID) then return end
         amount = family.amounts[spellID]
-        if not amount or amount >= intellectConsumables[1][2] then return end
+        if not amount or amount >= intellectConsumables.items[1][2] then return end
     end
-    if (restricted and not EABR.FvRanksReadable(intellectConsumableAuras))
-        or PlayerHasAuraByID(intellectConsumableAuras) then return end
-    return amount
+    if ConsumableAuraAbsent(intellectConsumables.auras, restricted) then return amount end
 end
 
-local function CollectIntellectConsumable(missing, activeBonus, level)
+local function CollectStatConsumable(missing, stat, activeBonus, level)
     local watchLevel = false
-    for _, consumable in ipairs(intellectConsumables) do
+    for _, consumable in ipairs(stat.items) do
         local itemID, bonus = consumable[1], consumable[2]
         if bonus <= activeBonus then break end
         if CachedGetItemCount(itemID) > 0 then
-            local requiredLevel = EABR.FvIntellectItemLevel(itemID)
+            local requiredLevel = EABR.FvConsumableItemLevel(itemID)
             if requiredLevel then
                 if level >= requiredLevel then
                     local e = AcquireEntry()
                     e.mode = "macro"
                     e.macro = "/use [@player,nocombat] item:" .. itemID
-                    e.texture = C_Item.GetItemIconByID(itemID) or Tex(1459)
+                    e.texture = C_Item.GetItemIconByID(itemID) or Tex(stat.iconSpell)
                     e.tooltipItem = itemID
-                    e.label = EllesmereUI.L("Intellect")
-                    e.cat = "forever"; e.dismissKey = "forever:intellect"
+                    e.label = EllesmereUI.L(stat.label)
+                    e.cat = "forever"; e.dismissKey = stat.dismissKey
                     missing[#missing + 1] = e
                     break
                 end
@@ -1124,13 +1137,17 @@ function EABR.CollectForever(missing, inInstance, inPvP, playerClass)
         and not (EllesmereUI.AuraKit.AurasRestricted() and not EABR.FvRanksReadable(censerIDs))
     if wantCenser and not censerMissing then EABR._fvCenser = nil end
     local censer = censerMissing and EABR.FvCenserOwned() or false
-    local intellectBonus
+    local intellectBonus, strengthMissing
     if shows and not inPvP and playerClass then
         local enabled = fo.intellectConsumableByClass and fo.intellectConsumableByClass[playerClass]
         if enabled == nil then enabled = fo.intellectConsumable end
         if enabled == true then intellectBonus = IntellectBonusToBeat() end
+        if fo.strengthConsumableByClass and fo.strengthConsumableByClass[playerClass] == true then
+            strengthMissing = ConsumableAuraAbsent(strengthConsumables.auras, EllesmereUI.AuraKit.AurasRestricted())
+        end
     end
-    local bagListen = shows and (fo.weapon == true or sleepBag or censer or intellectBonus ~= nil) or false
+    local statConsumableNeeded = intellectBonus ~= nil or strengthMissing == true
+    local bagListen = shows and (fo.weapon == true or sleepBag or censer or statConsumableNeeded) or false
     EABR.FvSyncSleepBagWatch(wantBag and not sleepBag and not EABR._fvMaxLevel
         and not bagListen or false)
     EABR.FvSyncCenserWatch(censerMissing and not censer and not bagListen or false)
@@ -1141,7 +1158,7 @@ function EABR.CollectForever(missing, inInstance, inPvP, playerClass)
     end
     local watchFood = watchPickerSpells and not inPvP and fo.wellFed or false
     if not shows then
-        EABR.FvSyncIntellectItemEvents(false, false)
+        EABR.FvSyncConsumableItemEvents(false, false)
         EABR.SyncForeverFoodWatch(false)
         return
     end
@@ -1203,8 +1220,13 @@ function EABR.CollectForever(missing, inInstance, inPvP, playerClass)
         local e = CollectSleepingBag(fo.sleepingBagShowBelow or 0, false, auraLock)
         if e then missing[#missing+1] = e end
     end
-    local watchIntellectLevel = intellectBonus and CollectIntellectConsumable(missing, intellectBonus, UnitLevel("player")) or false
-    EABR.FvSyncIntellectItemEvents(intellectBonus ~= nil, watchIntellectLevel)
+    local watchLevel = false
+    if statConsumableNeeded then
+        local level = UnitLevel("player")
+        if intellectBonus then watchLevel = CollectStatConsumable(missing, intellectConsumables, intellectBonus, level) end
+        if strengthMissing and CollectStatConsumable(missing, strengthConsumables, 0, level) then watchLevel = true end
+    end
+    EABR.FvSyncConsumableItemEvents(statConsumableNeeded, watchLevel)
     -- Arcane Censer: its buff missing and a censer in the bags (read above);
     -- the click uses the censer.
     if censer then
@@ -1562,7 +1584,7 @@ function EABR.FvStandDown(keepSleepProgress)
     EABR.FvSyncGroupWatch(nil, false)
     EABR.FvSyncTrackingEvent(false)
     EABR.FvSyncWeaponEvents(false)
-    EABR.FvSyncIntellectItemEvents(false, false)
+    EABR.FvSyncConsumableItemEvents(false, false)
     EABR.FvSyncBagEvent(false)
     EABR.FvSyncSleepBagWatch(false)
     EABR.FvSyncCenserWatch(false)

@@ -1162,22 +1162,28 @@ initFrame:SetScript("OnEvent", function(self)
                 if k == 1 then
                     local rgn = row._leftRegion
                     local profile = FDB()
-                    local items = { { key = "intellect", label = EllesmereUI.L("Intellect") } }
+                    local items = {
+                        { key = "intellect", label = EllesmereUI.L("Intellect") },
+                        { key = "strength", label = EllesmereUI.L("Strength") },
+                    }
                     local dd, refresh = EllesmereUI.BuildVisOptsCBDropdown(rgn, 170, rgn:GetFrameLevel() + 2, items,
-                        function()
+                        function(key)
                             local f = FDB(); if not (f and class) then return false end
-                            local enabled = f.intellectConsumableByClass and f.intellectConsumableByClass[class]
-                            if enabled == nil then enabled = f.intellectConsumable end
+                            local picks = f[key .. "ConsumableByClass"]
+                            local enabled = picks and picks[class]
+                            if enabled == nil and key == "intellect" then enabled = f.intellectConsumable end
                             return enabled == true
                         end,
-                        function(_, v)
+                        function(key, v)
                             local f = FDB(); if not (f and f == profile and class) then return end
-                            local picks = f.intellectConsumableByClass
+                            local field = key .. "ConsumableByClass"
+                            local picks = f[field]
                             local enabled = v == true
-                            if enabled == (f.intellectConsumable == true) then
+                            local inherited = key == "intellect" and f.intellectConsumable == true
+                            if enabled == inherited then
                                 if picks then picks[class] = nil end
                             else
-                                if not picks then picks = {}; f.intellectConsumableByClass = picks end
+                                if not picks then picks = {}; f[field] = picks end
                                 picks[class] = enabled
                             end
                             RefreshAll()
