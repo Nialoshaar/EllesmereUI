@@ -1163,8 +1163,10 @@ initFrame:SetScript("OnEvent", function(self)
                     local rgn = row._leftRegion
                     local profile = FDB()
                     local items = {
-                        { key = "intellect", label = EllesmereUI.L("Intellect") },
-                        { key = "strength", label = EllesmereUI.L("Strength") },
+                        { key = "intellect", label = EllesmereUI.L("Intellect"),
+                          tooltip = EllesmereUI.L("Scroll of Intellect") .. "\n" .. EllesmereUI.L("Intellect Elixirs") },
+                        { key = "strength", label = EllesmereUI.L("Strength"),
+                          tooltip = EllesmereUI.L("Scroll of Strength") .. "\n" .. EllesmereUI.L("Strength Elixirs") },
                     }
                     local dd, refresh = EllesmereUI.BuildVisOptsCBDropdown(rgn, 170, rgn:GetFrameLevel() + 2, items,
                         function(key)
