@@ -541,7 +541,23 @@ function EABR.StartSleepProgress(instanceID)
     mainFrame:RegisterEvent("PLAYER_LOGOUT")
 end
 
+local intellectItemLevels, intellectItemPending, intellectItemFailed
+
 mainFrame:SetScript("OnEvent", function(_, e, arg1, arg2, arg3)
+    if e == "ITEM_DATA_LOAD_RESULT" then
+        if not intellectItemPending or intellectItemPending[arg1] == nil then return end
+        intellectItemPending[arg1] = nil
+        if not next(intellectItemPending) then mainFrame:UnregisterEvent(e) end
+        local level = arg2 and select(5, C_Item.GetItemInfo(arg1))
+        if level then
+            intellectItemLevels[arg1] = level
+            RequestRefresh()
+        else
+            intellectItemFailed = intellectItemFailed or {}
+            intellectItemFailed[arg1] = true
+        end
+        return
+    end
     if e == "PLAYER_LOGOUT" then
         local startedAt = EABR._fvSleepStartedAt
         if startedAt and db and EABR._fvSleepProfile == db.profile
@@ -756,6 +772,7 @@ mainFrame:SetScript("OnEvent", function(_, e, arg1, arg2, arg3)
     -- is intentionally NOT registered: it fires ~1/sec from cooldown ticks, changes nothing reminder-relevant, and would refresh every second and bust the resolved-item cache.
     if e == "BAG_UPDATE_DELAYED" or e == "BAG_UPDATE" then
         InvalidateItemCountCache()
+        intellectItemFailed = nil
         EABR._fvSleepBag, EABR._fvCenser = nil, nil
     end
 
@@ -817,7 +834,7 @@ local function DetectUsedItem()
     for k, v in pairs(_bagCounts) do _prevBagCounts[k] = v end
 end
 
--- Item-use tracking serves the consumable pickers; WoW Forever has no consumable reminders.
+-- Item-use history serves the retail consumable pickers.
 if not EABR.FOREVER then
     local f = CreateFrame("Frame")
     f:RegisterEvent("BAG_UPDATE_DELAYED")
@@ -904,6 +921,45 @@ if EABR.FOREVER then
             mainFrame:RegisterEvent("BAG_UPDATE_DELAYED")
         else
             mainFrame:UnregisterEvent("BAG_UPDATE_DELAYED")
+        end
+    end
+    function EABR.FvIntellectItemLevel(id)
+        intellectItemLevels = intellectItemLevels or {}
+        local level = intellectItemLevels[id]
+        if level ~= nil then return level end
+        if intellectItemPending and intellectItemPending[id] ~= nil then
+            intellectItemPending[id] = true
+            return
+        end
+        -- A failed load can retry on the next bag change or activation.
+        if intellectItemFailed and intellectItemFailed[id] then return end
+        level = select(5, C_Item.GetItemInfo(id))
+        if level ~= nil then
+            intellectItemLevels[id] = level
+            return level
+        end
+        intellectItemPending = intellectItemPending or {}
+        if not next(intellectItemPending) then mainFrame:RegisterEvent("ITEM_DATA_LOAD_RESULT") end
+        intellectItemPending[id] = true
+        C_Item.RequestLoadItemDataByID(id)
+        return intellectItemLevels[id]
+    end
+    function EABR.FvSyncIntellectItemEvents(active, watchLevel)
+        if intellectItemPending and next(intellectItemPending) then
+            -- Retain only requests that could improve this pass's choice.
+            for id, seen in pairs(intellectItemPending) do
+                if active and seen then intellectItemPending[id] = false
+                else intellectItemPending[id] = nil end
+            end
+            if not next(intellectItemPending) then mainFrame:UnregisterEvent("ITEM_DATA_LOAD_RESULT") end
+        end
+        if not active then intellectItemFailed = nil end
+        if watchLevel == (EABR._fvIntellectLevelEvent or false) then return end
+        EABR._fvIntellectLevelEvent = watchLevel
+        if watchLevel then
+            mainFrame:RegisterEvent("PLAYER_LEVEL_UP")
+        else
+            mainFrame:UnregisterEvent("PLAYER_LEVEL_UP")
         end
     end
     -- A Cozy Sleeping Bag or an Arcane Censer bought or looted while none is

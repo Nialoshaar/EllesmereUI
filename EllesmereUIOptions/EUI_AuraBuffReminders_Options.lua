@@ -1064,21 +1064,23 @@ initFrame:SetScript("OnEvent", function(self)
     end
 
     ---------------------------------------------------------------------------
-    --  WoW Forever custom spells: the lead slot (the Add Custom Spell entry),
-    --  the New Spell Group slot, then one slot per tracked spell (its icon,
+    --  WoW Forever consumables and custom spells: the Consumable Buffs,
+    --  Add Custom Spell and New Spell Group slots, then one per tracked spell (its icon,
     --  name and ID, and a checkbox dropdown of the classes it reminds, each
     --  ticked until unticked, forever.customClasses[id][CLASS] = false, with
     --  Remove at its top), filled left to right, a blank label in an odd last
     --  slot. The page rebuilds on add and remove, so the slots never need
     --  in-place updates.
     ---------------------------------------------------------------------------
-    local function BuildForeverCustomRows(parent, y, lead)
+    local function BuildForeverCustomRows(parent, y, class, lead)
         local f = FDB()
         local ids = f and f.customIDs
         local newGroupSlot = { type="labeledButton", text="New Spell Group", buttonText="Create", width=90,
             tooltip="Creates a group of spells. A reminder shows if none of the auras from the group are active.",
             onClick=function() PromptSpellGroupName() end }
-        local n = 2 + (ids and #ids or 0)
+        local consumableSlot = { type="label", text=EllesmereUI.L("Consumable Buffs"),
+            tooltip="Choose consumable reminders for your current class. Click a reminder to use the item from your bags." }
+        local n = 3 + (ids and #ids or 0)
         local W = EllesmereUI.Widgets
         local PPx = EllesmereUI.PanelPP
         local function Slot(id)
@@ -1087,9 +1089,10 @@ initFrame:SetScript("OnEvent", function(self)
                 tooltip="Reminds you whenever this buff is missing, on the classes ticked here." }
         end
         local function SlotAt(k)
-            if k == 1 then return lead end
-            if k == 2 then return newGroupSlot end
-            local id = ids and ids[k - 2]
+            if k == 1 then return consumableSlot end
+            if k == 2 then return lead end
+            if k == 3 then return newGroupSlot end
+            local id = ids and ids[k - 3]
             return id and Slot(id) or EllesmereUI.BlankRowCfg()
         end
         local function Remove(id)
@@ -1155,9 +1158,38 @@ initFrame:SetScript("OnEvent", function(self)
         end
         for k = 1, n, 2 do
             local row, h = W:DualRow(parent, y, SlotAt(k), SlotAt(k + 1))
-            if ids and not EllesmereUI._prebuilding then
-                DressSlot(row._leftRegion, ids[k - 2])
-                DressSlot(row._rightRegion, ids[k - 1])
+            if not EllesmereUI._prebuilding then
+                if k == 1 then
+                    local rgn = row._leftRegion
+                    local profile = FDB()
+                    local items = { { key = "intellect", label = EllesmereUI.L("Intellect") } }
+                    local dd, refresh = EllesmereUI.BuildVisOptsCBDropdown(rgn, 170, rgn:GetFrameLevel() + 2, items,
+                        function()
+                            local f = FDB(); if not (f and class) then return false end
+                            local enabled = f.intellectConsumableByClass and f.intellectConsumableByClass[class]
+                            if enabled == nil then enabled = f.intellectConsumable end
+                            return enabled == true
+                        end,
+                        function(_, v)
+                            local f = FDB(); if not (f and f == profile and class) then return end
+                            local picks = f.intellectConsumableByClass
+                            local enabled = v == true
+                            if enabled == (f.intellectConsumable == true) then
+                                if picks then picks[class] = nil end
+                            else
+                                if not picks then picks = {}; f.intellectConsumableByClass = picks end
+                                picks[class] = enabled
+                            end
+                            RefreshAll()
+                        end)
+                    PPx.Point(dd, "RIGHT", rgn, "RIGHT", -20, 0)
+                    rgn._control = dd
+                    rgn._lastInline = nil
+                    EllesmereUI.RegisterWidgetRefresh(refresh)
+                elseif ids then
+                    DressSlot(row._leftRegion, ids[k - 3])
+                    DressSlot(row._rightRegion, ids[k - 2])
+                end
             end
             y = y - h
         end
@@ -2167,7 +2199,7 @@ initFrame:SetScript("OnEvent", function(self)
             end
 
             -- Add Custom Spell, paired with the tracked spells
-            y = BuildForeverCustomRows(parent, y,
+            y = BuildForeverCustomRows(parent, y, class,
                 { type="input", text="Add Custom Spell", inputStyle="popup", placeholder="Spell ID", inputWidth=110,
                   tooltip="Type a spell ID and press Enter to be reminded whenever that buff is missing.\nUnknown IDs are ignored.",
                   getValue=function() return "" end,
