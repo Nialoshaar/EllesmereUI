@@ -213,7 +213,7 @@ local defaults = {
             inkyBlackZones = "",
         },
         unlockPos = nil,
-        talentReminders = {},  -- array of {zoneNames={} (zoneName = an older version's single zone, read while there is no list), spellID=number, spellName=string, notNeededMode="never"|"season"|"all", showNotNeeded=bool (the old checkbox, kept in step)}
+        talentReminders = {},  -- array of {acts={[activity]=true}, notNeededActs={[activity]=true}, spellID=number, spellName=string, class, specID}; one saved before activities holds zoneNames={} (zoneName = an older version's single zone) and notNeededMode="never"|"season"|"all" (showNotNeeded = the older checkbox), read through ns.TRActs until edited
         talentReminderYOffset = -50,
     },
 }
@@ -227,6 +227,7 @@ if EABR.FOREVER then
         sleepingBagShowBelow = 0, -- Minutes before Well-Rested expires. 0 = off.
         sleepingBagShowWhileRested = false,
         sleepingBagShowProgress = false,
+        arcaneCenser = false, -- Arcane Censer reminder; opt-in, in dungeons while a censer is in the bags
         gather = false,     -- gathering tracking reminder; opt-in, it shows while no tracker is up
         gatherClassTrack = true,  -- an active class tracking also hides it
         treasure = false,   -- Find Treasure reminder (Dwarf); opt-in, it shows while it is off
