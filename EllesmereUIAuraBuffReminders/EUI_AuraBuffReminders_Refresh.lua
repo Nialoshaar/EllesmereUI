@@ -1047,57 +1047,54 @@ local function SyncCampfireWatch(want)
     campfireWatch:RegisterEvent("ZONE_CHANGED_INDOORS")
 end
 
--- Item ID and stat bonus, strongest first.
+-- Item ID, stat bonus, and aura spell ID, strongest first.
 local intellectConsumables = {
     label = "Intellect", dismissKey = "forever:intellect", iconSpell = 1459,
     setting = "intellectConsumableByClass", legacySetting = "intellectConsumable", family = "ai",
     items = {
-        { 9179, 25 }, { 10308, 16 }, { 4419, 12 }, { 250354, 10 },
-        { 2290, 8 }, { 250353, 6 }, { 955, 4 }, { 3383, 3 },
+        { 9179, 25, 11396 }, { 10308, 16, 12176 }, { 4419, 12, 8098 }, { 250354, 10, 1250989 },
+        { 2290, 8, 8097 }, { 250353, 6, 1250988 }, { 955, 4, 8096 }, { 3383, 3, 3166 },
     },
-    auras = { 11396, 12176, 8098, 1250989, 8097, 1250988, 8096, 3166 },
 }
 local strengthConsumables = {
     label = "Strength", dismissKey = "forever:strength", iconSpell = 8118,
     setting = "strengthConsumableByClass",
     items = {
-        { 250351, 25 }, { 9206, 25 }, { 250350, 18 }, { 13453, 18 }, { 10310, 17 }, { 4426, 13 },
-        { 250349, 10 }, { 2289, 9 }, { 3391, 8 }, { 6662, 8 }, { 954, 5 }, { 2454, 4 },
+        { 250351, 25, 1250986 }, { 9206, 25, 11405 }, { 250350, 18, 1250985 }, { 13453, 18, 17537 },
+        { 10310, 17, 12179 }, { 4426, 13, 8120 }, { 250349, 10, 1250984 }, { 2289, 9, 8119 },
+        { 3391, 8, 3164 }, { 6662, 8, 8212 }, { 954, 5, 8118 }, { 2454, 4, 2367 },
     },
-    auras = { 1250986, 11405, 1250985, 17537, 12179, 8120, 1250984, 8119, 3164, 8212, 8118, 2367 },
 }
 local agilityConsumables = {
     label = "Agility", dismissKey = "forever:agility", iconSpell = 8115,
     setting = "agilityConsumableByClass",
     items = {
-        { 13452, 25 }, { 250328, 25 }, { 9187, 25 }, { 250350, 18 }, { 10309, 17 }, { 8949, 15 },
-        { 4425, 13 }, { 1477, 9 }, { 3390, 8 }, { 3012, 5 }, { 2457, 4 },
+        { 13452, 25, 17538 }, { 250328, 25, 1250918 }, { 9187, 25, 11334 }, { 250350, 18, 1250985 },
+        { 10309, 17, 12174 }, { 8949, 15, 11328 }, { 4425, 13, 8117 }, { 1477, 9, 8116 },
+        { 3390, 8, 3160 }, { 3012, 5, 8115 }, { 2457, 4, 2374 },
     },
-    auras = { 17538, 1250918, 11334, 1250985, 12174, 11328, 8117, 8116, 3160, 8115, 2374 },
 }
 local staminaConsumables = {
     label = "Stamina", dismissKey = "forever:stamina", iconSpell = 8099,
     setting = "staminaConsumableByClass", family = "fort",
-    items = { { 13453, 18 }, { 10307, 16 }, { 4422, 12 }, { 1711, 8 }, { 1180, 4 } },
-    auras = { 17537, 12178, 8101, 8100, 8099 },
+    items = { { 13453, 18, 17537 }, { 10307, 16, 12178 }, { 4422, 12, 8101 }, { 1711, 8, 8100 }, { 1180, 4, 8099 } },
 }
 local spiritConsumables = {
     label = "Spirit", dismissKey = "forever:spirit", iconSpell = 8112,
     setting = "spiritConsumableByClass", family = "spirit",
     items = {
-        { 250348, 25 }, { 250338, 25 }, { 13447, 18 }, { 250347, 18 }, { 10306, 15 }, { 4424, 11 },
-        { 250346, 10 }, { 1712, 7 }, { 250345, 6 }, { 1181, 3 }, { 250344, 3 },
+        { 250348, 25, 1250981 }, { 250338, 25, 1250941 }, { 13447, 18, 17535 }, { 250347, 18, 1250979 },
+        { 10306, 15, 12177 }, { 4424, 11, 8114 }, { 250346, 10, 1250978 }, { 1712, 7, 8113 },
+        { 250345, 6, 1250976 }, { 1181, 3, 8112 }, { 250344, 3, 1250974 },
     },
-    auras = { 1250981, 1250941, 17535, 1250979, 12177, 8114, 1250978, 8113, 1250976, 8112, 1250974 },
 }
 local protectionConsumables = {
     label = "Protection", dismissKey = "forever:protection", iconSpell = 8091,
     setting = "protectionConsumableByClass",
     items = {
-        { 250329, 500 }, { 13445, 450 }, { 8951, 250 }, { 10305, 240 }, { 4421, 180 },
-        { 3389, 150 }, { 1478, 120 }, { 3013, 60 }, { 5997, 50 },
+        { 250329, 500, 1250920 }, { 13445, 450, 11348 }, { 8951, 250, 11349 }, { 10305, 240, 12175 },
+        { 4421, 180, 8095 }, { 3389, 150, 3220 }, { 1478, 120, 8094 }, { 3013, 60, 8091 }, { 5997, 50, 673 },
     },
-    auras = { 1250920, 11348, 11349, 12175, 8095, 3220, 8094, 8091, 673 },
 }
 -- The single reminder uses the first eligible stat in dropdown order.
 local statConsumables = {
@@ -1172,7 +1169,23 @@ function ns.FvStatConsumableLocked(family, class)
     return EABR.FvHighest(ranks) ~= nil, true
 end
 
-local function StatBonusToBeat(stat, restricted, warnSec)
+local function StatConsumableAuraState(items, watchExpiration)
+    local strongest, latest, unknownExpiration = 0
+    for _, item in ipairs(items) do
+        local ok, aura = pcall(C_UnitAuras.GetPlayerAuraBySpellID, item[3])
+        if not ok or isSecret(aura) then return end
+        if aura then
+            if strongest == 0 then strongest = item[2] end
+            if not watchExpiration then return strongest end
+            local expiration = FvAuraExpiration(aura)
+            if not expiration then unknownExpiration = true
+            elseif not latest or expiration > latest then latest = expiration end
+        end
+    end
+    return strongest, not unknownExpiration and latest or nil
+end
+
+local function StatBonusToBeat(stat, restricted, warnSec, showUpgrades)
     local amount = 0
     if stat.family then
         local family = EllesmereUI.FOREVER_BUFF_FAMILIES[stat.family]
@@ -1180,6 +1193,7 @@ local function StatBonusToBeat(stat, restricted, warnSec)
         local aura = EllesmereUI.ForeverFamilyAura("player", family)
         if isSecret(aura) or aura == nil then return end
         if aura then
+            if not showUpgrades then return end
             local spellID = aura.spellId
             if isSecret(spellID) then return end
             amount = family.amounts and family.amounts[spellID]
@@ -1187,17 +1201,21 @@ local function StatBonusToBeat(stat, restricted, warnSec)
         end
     end
     if stat == intellectConsumables and not restricted then amount = math.max(amount, FvCampIntellect()) end
-    if amount >= stat.items[1][2] then return end
-    if restricted and not EABR.FvRanksReadable(stat.auras) then return end
-    if not warnSec then
-        if not PlayerHasAuraByID(stat.auras) then return amount end
-        return
+    local items = stat.items
+    if (amount > 0 and not showUpgrades) or amount >= items[1][2] then return end
+    if restricted then
+        for _, item in ipairs(items) do
+            if not EABR.IsRuntimeNonSecret(item[3]) then return end
+        end
     end
-    local expiration, unreadable = FvLatestAuraExpiration(stat.auras)
-    if unreadable then return end
-    if not expiration then return amount end
-    local remaining = expiration - GetTime()
-    if remaining > 0 and FvNeeds(remaining, warnSec) then return amount, expiration end
+    local active, expiration = StatConsumableAuraState(items, warnSec)
+    if not active then return end
+    if active == 0 then return amount end
+    if expiration then
+        local remaining = expiration - GetTime()
+        if remaining > 0 and FvNeeds(remaining, warnSec) then return amount, expiration end
+    end
+    if showUpgrades and active < items[1][2] then return math.max(amount, active) end
 end
 
 local function PickStatConsumable(stat, activeBonus, level, choices, low)
@@ -1272,6 +1290,7 @@ function EABR.CollectForever(missing, inInstance, inPvP, playerClass)
         local restricted
         local minutes = fo.statConsumableShowBelow or 0
         local warnSec = minutes > 0 and EABR.ShowUnderThresholdApplies() and minutes * 60 or nil
+        local showUpgrades = fo.statConsumableShowUpgrades == true
         for i, stat in ipairs(statConsumables) do
             local picks = fo[stat.setting]
             local enabled = picks and picks[playerClass]
@@ -1282,7 +1301,7 @@ function EABR.CollectForever(missing, inInstance, inPvP, playerClass)
                 if tracksSpell then watchStatSpells = true end
                 if not locked then
                     if restricted == nil then restricted = EllesmereUI.AuraKit.AurasRestricted() end
-                    bonus, expiration = StatBonusToBeat(stat, restricted, warnSec)
+                    bonus, expiration = StatBonusToBeat(stat, restricted, warnSec, showUpgrades)
                     if bonus ~= nil then statConsumableNeeded = true end
                 end
             end

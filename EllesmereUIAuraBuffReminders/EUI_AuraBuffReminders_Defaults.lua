@@ -210,6 +210,7 @@ if EABR.FOREVER then
         statConsumableLowRank = false,
         statConsumableShowBelow = 0,
         statConsumableSeparateReminders = false,
+        statConsumableShowUpgrades = false,
         gather = false,     -- gathering tracking reminder; opt-in, it shows while no tracker is up
         gatherClassTrack = true,  -- an active class tracking also hides it
         treasure = false,   -- Find Treasure reminder (Dwarf); opt-in, it shows while it is off
