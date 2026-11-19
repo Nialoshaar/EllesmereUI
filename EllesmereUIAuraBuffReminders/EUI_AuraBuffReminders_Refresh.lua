@@ -1096,9 +1096,15 @@ local protectionConsumables = {
         { 4421, 180, 8095 }, { 3389, 150, 3220 }, { 1478, 120, 8094 }, { 3013, 60, 8091 }, { 5997, 50, 673 },
     },
 }
+local spellPowerConsumables = {
+    label = "Spell Power", dismissKey = "forever:spellPower", iconSpell = 1245244,
+    setting = "spellPowerConsumableByClass",
+    items = { { 13454, 35, 17539 }, { 9155, 20, 11390 }, { 250342, 15, 1250971 }, { 247754, 5, 1245244 } },
+}
 -- The single reminder uses the first eligible stat in dropdown order.
 local statConsumables = {
     intellectConsumables, strengthConsumables, agilityConsumables, staminaConsumables, spiritConsumables, protectionConsumables,
+    spellPowerConsumables,
 }
 local statBonusesToBeat = {}
 local statExpirations = {}

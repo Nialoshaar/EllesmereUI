@@ -1191,6 +1191,8 @@ initFrame:SetScript("OnEvent", function(self)
                         { key = "protection", label = EllesmereUI.L("Protection"),
                           tooltip = EllesmereUI.L("Scroll of Protection") .. "\n" .. EllesmereUI.L("Armor Elixirs") .. "\n\n"
                               .. EllesmereUI.L("Can stack with Devotion Aura.") },
+                        { key = "spellPower", label = EllesmereUI.L("Spell Power"),
+                          tooltip = EllesmereUI.L("Arcane Elixirs") },
                     }
                     for _, item in ipairs(items) do
                         if item.lockedTooltip then
