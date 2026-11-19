@@ -1274,7 +1274,7 @@ local function GetOrCreateIcon(index)
     -- Middle-click dismiss: hide this reminder until the next loading screen.
     -- Right-click on a multi-pet-cycle reminder previews the next pet without
     -- casting. On a clickable spell group it opens the spell picker, on the
-    -- Well Fed reminder the food picker.
+    -- item reminders with choices it opens the item picker.
     btn:HookScript("PostClick", function(self, button, down)
         if button == "MiddleButton" and self._dismissKey then
             _dismissedUntilLoad[self._dismissKey] = true
@@ -1289,7 +1289,7 @@ local function GetOrCreateIcon(index)
             if _G._EABR_RequestRefresh then _G._EABR_RequestRefresh() end
         elseif button == "RightButton" and self._foreverGroup and not InCombat() then
             ShowForeverGroupMenu(self)
-        elseif button == "RightButton" and (self._foreverFood or self._foreverWeapon) and not InCombat() then
+        elseif button == "RightButton" and (self._foreverFood or self._foreverWeapon or self._foreverStatItems) and not InCombat() then
             ShowForeverItemMenu(self)
         elseif button == "RightButton" and self._campfireAddonPicker and not InCombat() then
             ShowCampfireAddonMenu(self)
@@ -1583,17 +1583,33 @@ ShowForeverItemMenu = function(btn)
     local profile = db.profile
     local fo = profile.forever
     local weapon = btn._foreverWeapon
-    local items = weapon and weapon.items or btn._foreverFood
-    local function IsCurrent()
-        return not InCombat() and db.profile == profile and profile.forever == fo
-            and fo and fo.pickerEnabled == true and items and btn:IsVisible()
-            and ((weapon and fo.weapon and btn._foreverWeapon == weapon)
-                or (not weapon and fo.wellFed and EABR.IsForeverFoodCurrent(items) and btn._foreverFood == items))
-    end
-    if not IsCurrent() then return end
+    local statItems = btn._foreverStatItems
+    local class = statItems and GetPlayerClass()
+    local items = weapon and weapon.items or statItems or btn._foreverFood
+    if not items then return end
     local ids = {}
-    for id in pairs(items) do ids[#ids + 1] = id end
-    if #ids == 0 then return end
+    -- The collector reuses the stat item table, so keep the counts shown by this menu.
+    local statSnapshot = statItems and {}
+    for id, count in pairs(items) do
+        ids[#ids + 1] = id
+        if statSnapshot then statSnapshot[id] = count end
+    end
+    local function IsCurrent()
+        if InCombat() or db.profile ~= profile or profile.forever ~= fo
+            or not (fo and fo.pickerEnabled == true and btn:IsVisible()) then return false end
+        if weapon then return fo.weapon and btn._foreverWeapon == weapon end
+        if statItems then
+            if not class or GetPlayerClass() ~= class or btn._foreverStatItems ~= statItems then return false end
+            local n = 0
+            for id, count in pairs(statItems) do
+                if statSnapshot[id] ~= count then return false end
+                n = n + 1
+            end
+            return n == #ids
+        end
+        return fo.wellFed and EABR.IsForeverFoodCurrent(items) and btn._foreverFood == items
+    end
+    if #ids == 0 or not IsCurrent() then return end
     table.sort(ids)
     local function SelectItem(id)
         if not IsCurrent() or not items[id] then return end
@@ -1602,6 +1618,12 @@ ShowForeverItemMenu = function(btn)
         if weapon then
             fo.weaponPickerItems = fo.weaponPickerItems or {}
             fo.weaponPickerItems[weapon.slot] = id
+            if _G._EABR_RequestRefresh then _G._EABR_RequestRefresh() end
+            return
+        end
+        if statItems then
+            fo.statConsumablePickerByClass = fo.statConsumablePickerByClass or {}
+            fo.statConsumablePickerByClass[class] = id
             if _G._EABR_RequestRefresh then _G._EABR_RequestRefresh() end
             return
         end
@@ -1698,6 +1720,7 @@ do
         e.foreverGroup = nil
         e.spellRank = nil
         e.foreverFood = nil
+        e.foreverStatItems = nil
         e.fvExtra = nil
         e.foreverWeapon = nil
         e.stackText = nil

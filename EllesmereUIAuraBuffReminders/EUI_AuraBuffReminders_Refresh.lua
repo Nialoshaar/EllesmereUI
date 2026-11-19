@@ -1107,6 +1107,7 @@ local statConsumables = {
 }
 local statBonusesToBeat = {}
 local statConsumableDismissKey = "forever:scrollsAndElixirs"
+local statConsumableChoices
 
 local function ConsumableAuraAbsent(auras, restricted)
     return (not restricted or EABR.FvRanksReadable(auras)) and not PlayerHasAuraByID(auras)
@@ -1129,20 +1130,27 @@ local function StatBonusToBeat(stat, restricted)
     if ConsumableAuraAbsent(stat.auras, restricted) then return amount end
 end
 
-local function PickStatConsumable(stat, activeBonus, level)
+local function PickStatConsumable(stat, activeBonus, level, choices)
     local watchLevel = false
+    local firstID
     for _, consumable in ipairs(stat.items) do
         local itemID, bonus = consumable[1], consumable[2]
         if bonus <= activeBonus then break end
-        if CachedGetItemCount(itemID) > 0 then
+        local count = CachedGetItemCount(itemID)
+        if count > 0 then
             local requiredLevel = EABR.FvConsumableItemLevel(itemID)
             if requiredLevel then
-                if level >= requiredLevel then return itemID, watchLevel end
-                watchLevel = true
+                if level >= requiredLevel then
+                    if not choices then return itemID, watchLevel end
+                    choices[itemID] = count
+                    firstID = firstID or itemID
+                else
+                    watchLevel = true
+                end
             end
         end
     end
-    return nil, watchLevel
+    return firstID, watchLevel
 end
 
 function EABR.CollectForever(missing, inInstance, inPvP, playerClass)
@@ -1189,11 +1197,11 @@ function EABR.CollectForever(missing, inInstance, inPvP, playerClass)
         and not bagListen or false)
     EABR.FvSyncCenserWatch(censerMissing and not censer and not bagListen or false)
     EABR.FvSyncBagEvent(bagListen)
-    local watchPickerSpells = shows and PickerEnabled() or false
-    if watchPickerSpells ~= (EABR._fvPickerSpellEvents or false) then
-        EABR.FvSyncPickerSpellEvents(watchPickerSpells)
+    local pickerEnabled = shows and PickerEnabled() or false
+    if pickerEnabled ~= (EABR._fvPickerSpellEvents or false) then
+        EABR.FvSyncPickerSpellEvents(pickerEnabled)
     end
-    local watchFood = watchPickerSpells and not inPvP and fo.wellFed or false
+    local watchFood = pickerEnabled and not inPvP and fo.wellFed or false
     if not shows then
         EABR.FvSyncConsumableItemEvents(false, false)
         EABR.SyncForeverFoodWatch(false)
@@ -1260,23 +1268,39 @@ function EABR.CollectForever(missing, inInstance, inPvP, playerClass)
     local watchLevel = false
     if statConsumableNeeded then
         local level = UnitLevel("player")
+        local choices, preferred
+        if pickerEnabled then
+            if not statConsumableChoices then statConsumableChoices = {} end
+            choices = statConsumableChoices
+            wipe(choices)
+            preferred = fo.statConsumablePickerByClass and fo.statConsumablePickerByClass[playerClass]
+        end
+        local chosenID, chosenStat
         for i, stat in ipairs(statConsumables) do
             local bonus = statBonusesToBeat[i]
             if bonus then
-                local itemID, blockedByLevel = PickStatConsumable(stat, bonus, level)
+                local itemID, blockedByLevel = PickStatConsumable(stat, bonus, level, choices)
                 if blockedByLevel then watchLevel = true end
-                if itemID then
-                    local e = AcquireEntry()
-                    e.mode = "macro"
-                    e.macro = "/use [@player,nocombat] item:" .. itemID
-                    e.texture = C_Item.GetItemIconByID(itemID) or Tex(stat.iconSpell)
-                    e.tooltipItem = itemID
-                    e.label = EllesmereUI.L(stat.label)
-                    e.cat = "forever"; e.dismissKey = statConsumableDismissKey
-                    missing[#missing + 1] = e
-                    break
+                if itemID and not chosenID then
+                    chosenID, chosenStat = itemID, stat
+                    if not choices then break end
+                end
+                if preferred and choices[preferred] then
+                    chosenID, chosenStat = preferred, stat
+                    preferred = nil
                 end
             end
+        end
+        if chosenID then
+            local e = AcquireEntry()
+            e.mode = "macro"
+            e.macro = "/use [@player,nocombat] item:" .. chosenID
+            e.texture = C_Item.GetItemIconByID(chosenID) or Tex(chosenStat.iconSpell)
+            e.tooltipItem = chosenID
+            e.label = EllesmereUI.L(chosenStat.label)
+            e.cat = "forever"; e.dismissKey = statConsumableDismissKey
+            e.foreverStatItems = choices
+            missing[#missing + 1] = e
         end
     end
     EABR.FvSyncConsumableItemEvents(statConsumableNeeded, watchLevel)

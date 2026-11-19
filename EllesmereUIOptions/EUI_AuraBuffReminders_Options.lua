@@ -1079,7 +1079,7 @@ initFrame:SetScript("OnEvent", function(self)
             tooltip="Creates a group of spells. A reminder shows if none of the auras from the group are active.",
             onClick=function() PromptSpellGroupName() end }
         local consumableSlot = { type="label", text=EllesmereUI.L("Scrolls and Elixirs"),
-            tooltip=EllesmereUI.L("Choose stats for your current class. One reminder shows the next usable scroll or elixir in dropdown order. Scroll and elixir buffs for the same stat are mutually exclusive and do not stack. Click the reminder to use the item from your bags.") }
+            tooltip=EllesmereUI.L("Choose stats for your current class. One reminder shows the next usable scroll or elixir in dropdown order by default. Scroll and elixir buffs for the same stat are mutually exclusive and do not stack. Left-click to use the item. With Action Picker on, right-click to choose another.") }
         local n = 3 + (ids and #ids or 0)
         local W = EllesmereUI.Widgets
         local PPx = EllesmereUI.PanelPP
@@ -1476,7 +1476,7 @@ initFrame:SetScript("OnEvent", function(self)
             (function()
                 if FOREVER then
                     return { type="toggle", text="Action Picker",
-                      tooltip="Right-click a spell group or Class Buffs reminder to choose the spell its left click casts, or the Well Fed reminder to choose a food. Scroll over a spell to choose its rank.",
+                      tooltip="Right-click a spell group or Class Buffs reminder to choose a spell, or an item reminder such as Well Fed or Scrolls and Elixirs to choose an item. Scroll over a spell to choose its rank.",
                       getValue=function() local f = FDB(); return f and f.pickerEnabled == true end,
                       setValue=function(v)
                           local f = FDB(); if not f then return end; f.pickerEnabled = v
