@@ -1234,6 +1234,23 @@ initFrame:SetScript("OnEvent", function(self)
                     DressSlot(row._rightRegion, ids[k - 2])
                 end
             end
+            if k == 1 then
+                EllesmereUI.BuildInlineCog(row._leftRegion, {
+                    title = "Scrolls and Elixirs",
+                    minWidth = 320,
+                    rows = {
+                        { type="dropdown", label="Rank to Use", ddWidth=200,
+                          values={ high = "Highest Owned", low = "Lowest Owned" }, order={ "high", "low" },
+                          tooltip=EllesmereUI.L("Choose the highest or lowest eligible item for each stat. An eligible Action Picker choice takes priority."),
+                          get=function() local f = FDB(); return f and f.statConsumableLowRank and "low" or "high" end,
+                          set=function(v) local f = FDB(); if f then f.statConsumableLowRank = v == "low"; RefreshAll() end end },
+                        { type="slider", label="Show Below (Minutes)", min=0, max=10, step=1,
+                          tooltip=EllesmereUI.L("Show a countdown before a tracked scroll or elixir buff expires. 0 = show only after it expires."),
+                          get=function() local f = FDB(); return f and f.statConsumableShowBelow or 0 end,
+                          set=function(v) local f = FDB(); if f then f.statConsumableShowBelow = v; RefreshAll() end end },
+                    },
+                })
+            end
             y = y - h
         end
         return y
