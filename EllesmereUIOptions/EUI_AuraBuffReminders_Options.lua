@@ -1079,7 +1079,7 @@ initFrame:SetScript("OnEvent", function(self)
             tooltip="Creates a group of spells. A reminder shows if none of the auras from the group are active.",
             onClick=function() PromptSpellGroupName() end }
         local consumableSlot = { type="label", text=EllesmereUI.L("Scrolls and Elixirs"),
-            tooltip=EllesmereUI.L("Choose stats for your current class. One reminder shows the next usable scroll or elixir in dropdown order by default.\n\nScroll and elixir buffs for the same stat are mutually exclusive and do not stack.\n\nLeft-click to use the item.\nWith Action Picker on, right-click to choose another.") }
+            tooltip=EllesmereUI.L("Choose stats for your current class. By default, one reminder shows the next usable item in dropdown order. Open the options to show each stat separately.\n\nScroll and elixir buffs for the same stat are mutually exclusive and do not stack.\n\nLeft-click to use the item.\nWith Action Picker on, right-click to choose another.") }
         local n = 3 + (ids and #ids or 0)
         local W = EllesmereUI.Widgets
         local PPx = EllesmereUI.PanelPP
@@ -1239,6 +1239,10 @@ initFrame:SetScript("OnEvent", function(self)
                     title = "Scrolls and Elixirs",
                     minWidth = 320,
                     rows = {
+                        { type="toggle", label=EllesmereUI.L("Separate Reminders"),
+                          tooltip=EllesmereUI.L("Show a separate icon for each selected stat with an eligible scroll or elixir."),
+                          get=function() local f = FDB(); return f and f.statConsumableSeparateReminders == true end,
+                          set=function(v) local f = FDB(); if f then f.statConsumableSeparateReminders = v == true; RefreshAll() end end },
                         { type="dropdown", label="Rank to Use", ddWidth=200,
                           values={ high = "Highest Owned", low = "Lowest Owned" }, order={ "high", "low" },
                           tooltip=EllesmereUI.L("Choose the highest or lowest eligible item for each stat. An eligible Action Picker choice takes priority."),

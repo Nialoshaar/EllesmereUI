@@ -1049,7 +1049,7 @@ end
 
 -- Item ID and stat bonus, strongest first.
 local intellectConsumables = {
-    label = "Intellect", iconSpell = 1459,
+    label = "Intellect", dismissKey = "forever:intellect", iconSpell = 1459,
     setting = "intellectConsumableByClass", legacySetting = "intellectConsumable", family = "ai",
     items = {
         { 9179, 25 }, { 10308, 16 }, { 4419, 12 }, { 250354, 10 },
@@ -1058,7 +1058,7 @@ local intellectConsumables = {
     auras = { 11396, 12176, 8098, 1250989, 8097, 1250988, 8096, 3166 },
 }
 local strengthConsumables = {
-    label = "Strength", iconSpell = 8118,
+    label = "Strength", dismissKey = "forever:strength", iconSpell = 8118,
     setting = "strengthConsumableByClass",
     items = {
         { 250351, 25 }, { 9206, 25 }, { 250350, 18 }, { 13453, 18 }, { 10310, 17 }, { 4426, 13 },
@@ -1067,7 +1067,7 @@ local strengthConsumables = {
     auras = { 1250986, 11405, 1250985, 17537, 12179, 8120, 1250984, 8119, 3164, 8212, 8118, 2367 },
 }
 local agilityConsumables = {
-    label = "Agility", iconSpell = 8115,
+    label = "Agility", dismissKey = "forever:agility", iconSpell = 8115,
     setting = "agilityConsumableByClass",
     items = {
         { 13452, 25 }, { 250328, 25 }, { 9187, 25 }, { 250350, 18 }, { 10309, 17 }, { 8949, 15 },
@@ -1076,13 +1076,13 @@ local agilityConsumables = {
     auras = { 17538, 1250918, 11334, 1250985, 12174, 11328, 8117, 8116, 3160, 8115, 2374 },
 }
 local staminaConsumables = {
-    label = "Stamina", iconSpell = 8099,
+    label = "Stamina", dismissKey = "forever:stamina", iconSpell = 8099,
     setting = "staminaConsumableByClass", family = "fort",
     items = { { 13453, 18 }, { 10307, 16 }, { 4422, 12 }, { 1711, 8 }, { 1180, 4 } },
     auras = { 17537, 12178, 8101, 8100, 8099 },
 }
 local spiritConsumables = {
-    label = "Spirit", iconSpell = 8112,
+    label = "Spirit", dismissKey = "forever:spirit", iconSpell = 8112,
     setting = "spiritConsumableByClass", family = "spirit",
     items = {
         { 250348, 25 }, { 250338, 25 }, { 13447, 18 }, { 250347, 18 }, { 10306, 15 }, { 4424, 11 },
@@ -1091,7 +1091,7 @@ local spiritConsumables = {
     auras = { 1250981, 1250941, 17535, 1250979, 12177, 8114, 1250978, 8113, 1250976, 8112, 1250974 },
 }
 local protectionConsumables = {
-    label = "Protection", iconSpell = 8091,
+    label = "Protection", dismissKey = "forever:protection", iconSpell = 8091,
     setting = "protectionConsumableByClass",
     items = {
         { 250329, 500 }, { 13445, 450 }, { 8951, 250 }, { 10305, 240 }, { 4421, 180 },
@@ -1168,6 +1168,21 @@ local function PickStatConsumable(stat, activeBonus, level, choices, low)
     return firstID, watchLevel
 end
 
+local function AddStatConsumableEntry(missing, stat, itemID, expiration, choices, separate)
+    local e = AcquireEntry()
+    e.mode = "macro"
+    e.macro = "/use [@player,nocombat] item:" .. itemID
+    e.texture = C_Item.GetItemIconByID(itemID) or Tex(stat.iconSpell)
+    e.tooltipItem = itemID
+    e.label = EllesmereUI.L(stat.label)
+    e.cat = "forever"
+    e.dismissKey = separate and stat.dismissKey or statConsumableDismissKey
+    e.foreverStatItems = choices
+    e.foreverStatFamily = separate and stat.dismissKey or nil
+    if expiration then e.expireAt, e.expireTotal = expiration, expiration - GetTime() end
+    missing[#missing + 1] = e
+end
+
 function EABR.CollectForever(missing, inInstance, inPvP, playerClass)
     local fo = db.profile.forever
     local shows = fo and not InCombat() and EABR.SectionShows(fo.whereToShow, inInstance)
@@ -1193,7 +1208,8 @@ function EABR.CollectForever(missing, inInstance, inPvP, playerClass)
     local censer = censerMissing and EABR.FvCenserOwned() or false
     local statConsumableNeeded = false
     local watchStatSpells = false
-    if shows and not inPvP and playerClass and not _dismissedUntilLoad[statConsumableDismissKey] then
+    local separate = fo and fo.statConsumableSeparateReminders == true
+    if shows and not inPvP and playerClass and (separate or not _dismissedUntilLoad[statConsumableDismissKey]) then
         local restricted
         local minutes = fo.statConsumableShowBelow or 0
         local warnSec = minutes > 0 and EABR.ShowUnderThresholdApplies() and minutes * 60 or nil
@@ -1202,7 +1218,7 @@ function EABR.CollectForever(missing, inInstance, inPvP, playerClass)
             local enabled = picks and picks[playerClass]
             if enabled == nil and stat.legacySetting then enabled = fo[stat.legacySetting] end
             local bonus, expiration
-            if enabled == true then
+            if enabled == true and not (separate and _dismissedUntilLoad[stat.dismissKey]) then
                 local locked, tracksSpell = ns.FvStatConsumableLocked(stat.family, playerClass)
                 if tracksSpell then watchStatSpells = true end
                 if not locked then
@@ -1292,43 +1308,48 @@ function EABR.CollectForever(missing, inInstance, inPvP, playerClass)
     local watchLevel = false
     if statConsumableNeeded then
         local level = UnitLevel("player")
-        local choices, preferred
+        local sharedChoices, preferred, familyPicks
         if pickerEnabled then
-            if not statConsumableChoices then statConsumableChoices = {} end
-            choices = statConsumableChoices
-            wipe(choices)
-            preferred = fo.statConsumablePickerByClass and fo.statConsumablePickerByClass[playerClass]
+            if separate then
+                familyPicks = fo.statConsumablePickerByFamily and fo.statConsumablePickerByFamily[playerClass]
+            else
+                if not statConsumableChoices then statConsumableChoices = {} end
+                sharedChoices = statConsumableChoices
+                wipe(sharedChoices)
+                preferred = fo.statConsumablePickerByClass and fo.statConsumablePickerByClass[playerClass]
+            end
         end
         local chosenID, chosenIndex
         local low = fo.statConsumableLowRank == true
         for i, stat in ipairs(statConsumables) do
             local bonus = statBonusesToBeat[i]
             if bonus then
+                local choices = sharedChoices
+                if separate and pickerEnabled then
+                    if not stat.choices then stat.choices = {} end
+                    choices = stat.choices
+                    wipe(choices)
+                end
                 local itemID, blockedByLevel = PickStatConsumable(stat, bonus, level, choices, low)
                 if blockedByLevel then watchLevel = true end
-                if itemID and not chosenID then
-                    chosenID, chosenIndex = itemID, i
-                    if not choices then break end
-                end
-                if preferred and choices[preferred] then
-                    chosenID, chosenIndex = preferred, i
-                    preferred = nil
+                if separate then
+                    local familyPick = familyPicks and familyPicks[stat.dismissKey]
+                    if familyPick and choices[familyPick] then itemID = familyPick end
+                    if itemID then AddStatConsumableEntry(missing, stat, itemID, statExpirations[i], choices, true) end
+                else
+                    if itemID and not chosenID then
+                        chosenID, chosenIndex = itemID, i
+                        if not choices then break end
+                    end
+                    if preferred and choices[preferred] then
+                        chosenID, chosenIndex = preferred, i
+                        preferred = nil
+                    end
                 end
             end
         end
         if chosenID then
-            local chosenStat = statConsumables[chosenIndex]
-            local expiration = statExpirations[chosenIndex]
-            local e = AcquireEntry()
-            e.mode = "macro"
-            e.macro = "/use [@player,nocombat] item:" .. chosenID
-            e.texture = C_Item.GetItemIconByID(chosenID) or Tex(chosenStat.iconSpell)
-            e.tooltipItem = chosenID
-            e.label = EllesmereUI.L(chosenStat.label)
-            e.cat = "forever"; e.dismissKey = statConsumableDismissKey
-            e.foreverStatItems = choices
-            if expiration then e.expireAt, e.expireTotal = expiration, expiration - GetTime() end
-            missing[#missing + 1] = e
+            AddStatConsumableEntry(missing, statConsumables[chosenIndex], chosenID, statExpirations[chosenIndex], sharedChoices, false)
         end
     end
     EABR.FvSyncConsumableItemEvents(statConsumableNeeded, watchLevel)

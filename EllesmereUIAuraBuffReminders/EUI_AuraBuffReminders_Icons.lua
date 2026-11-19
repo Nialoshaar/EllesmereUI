@@ -1584,6 +1584,7 @@ ShowForeverItemMenu = function(btn)
     local fo = profile.forever
     local weapon = btn._foreverWeapon
     local statItems = btn._foreverStatItems
+    local statFamily = btn._foreverStatFamily
     local class = statItems and GetPlayerClass()
     local items = weapon and weapon.items or statItems or btn._foreverFood
     if not items then return end
@@ -1599,7 +1600,9 @@ ShowForeverItemMenu = function(btn)
             or not (fo and fo.pickerEnabled == true and btn:IsVisible()) then return false end
         if weapon then return fo.weapon and btn._foreverWeapon == weapon end
         if statItems then
-            if not class or GetPlayerClass() ~= class or btn._foreverStatItems ~= statItems then return false end
+            if not class or GetPlayerClass() ~= class or btn._foreverStatItems ~= statItems
+                or btn._foreverStatFamily ~= statFamily
+                or (fo.statConsumableSeparateReminders == true) ~= (statFamily ~= nil) then return false end
             local n = 0
             for id, count in pairs(statItems) do
                 if statSnapshot[id] ~= count then return false end
@@ -1622,8 +1625,15 @@ ShowForeverItemMenu = function(btn)
             return
         end
         if statItems then
-            fo.statConsumablePickerByClass = fo.statConsumablePickerByClass or {}
-            fo.statConsumablePickerByClass[class] = id
+            if statFamily then
+                fo.statConsumablePickerByFamily = fo.statConsumablePickerByFamily or {}
+                local picks = fo.statConsumablePickerByFamily[class]
+                if not picks then picks = {}; fo.statConsumablePickerByFamily[class] = picks end
+                picks[statFamily] = id
+            else
+                fo.statConsumablePickerByClass = fo.statConsumablePickerByClass or {}
+                fo.statConsumablePickerByClass[class] = id
+            end
             if _G._EABR_RequestRefresh then _G._EABR_RequestRefresh() end
             return
         end
@@ -1721,6 +1731,7 @@ do
         e.spellRank = nil
         e.foreverFood = nil
         e.foreverStatItems = nil
+        e.foreverStatFamily = nil
         e.fvExtra = nil
         e.foreverWeapon = nil
         e.stackText = nil
