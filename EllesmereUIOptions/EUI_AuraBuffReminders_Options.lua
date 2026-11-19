@@ -1167,6 +1167,8 @@ initFrame:SetScript("OnEvent", function(self)
                           tooltip = EllesmereUI.L("Scroll of Intellect") .. "\n" .. EllesmereUI.L("Intellect Elixirs") },
                         { key = "strength", label = EllesmereUI.L("Strength"),
                           tooltip = EllesmereUI.L("Scroll of Strength") .. "\n" .. EllesmereUI.L("Strength Elixirs") },
+                        { key = "spirit", label = EllesmereUI.L("Spirit"),
+                          tooltip = EllesmereUI.L("Scroll of Spirit") .. "\n" .. EllesmereUI.L("Spirit Elixirs") },
                     }
                     local dd, refresh = EllesmereUI.BuildVisOptsCBDropdown(rgn, 170, rgn:GetFrameLevel() + 2, items,
                         function(key)

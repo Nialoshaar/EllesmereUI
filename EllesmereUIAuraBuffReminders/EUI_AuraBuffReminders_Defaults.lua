@@ -203,6 +203,7 @@ if EABR.FOREVER then
         arcaneCenser = false, -- Arcane Censer reminder; opt-in, in dungeons while a censer is in the bags
         intellectConsumableByClass = {},
         strengthConsumableByClass = {},
+        spiritConsumableByClass = {},
         gather = false,     -- gathering tracking reminder; opt-in, it shows while no tracker is up
         gatherClassTrack = true,  -- an active class tracking also hides it
         treasure = false,   -- Find Treasure reminder (Dwarf); opt-in, it shows while it is off
