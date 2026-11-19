@@ -1162,16 +1162,26 @@ initFrame:SetScript("OnEvent", function(self)
                 if k == 1 then
                     local rgn = row._leftRegion
                     local profile = FDB()
+                    local function IntellectLocked() return ns.FvStatConsumableLocked("ai", class) end
+                    local function StaminaLocked() return ns.FvStatConsumableLocked("fort", class) end
+                    local function SpiritLocked() return ns.FvStatConsumableLocked("spirit", class) end
+                    local locks = { intellect = IntellectLocked, stamina = StaminaLocked, spirit = SpiritLocked }
                     local items = {
                         { key = "intellect", label = EllesmereUI.L("Intellect"),
+                          lockedFn = IntellectLocked,
+                          lockedTooltip = EllesmereUI.L("Disabled because you already know Arcane Intellect."),
                           tooltip = EllesmereUI.L("Scroll of Intellect") .. "\n" .. EllesmereUI.L("Intellect Elixirs") },
                         { key = "strength", label = EllesmereUI.L("Strength"),
                           tooltip = EllesmereUI.L("Scroll of Strength") .. "\n" .. EllesmereUI.L("Strength Elixirs") },
                         { key = "agility", label = EllesmereUI.L("Agility"),
                           tooltip = EllesmereUI.L("Scroll of Agility") .. "\n" .. EllesmereUI.L("Agility Elixirs") },
                         { key = "stamina", label = EllesmereUI.L("Stamina"),
+                          lockedFn = StaminaLocked,
+                          lockedTooltip = EllesmereUI.L("Disabled because you already know Power Word: Fortitude."),
                           tooltip = EllesmereUI.L("Scroll of Stamina") .. "\n" .. EllesmereUI.L("Elixir of Brute Force") },
                         { key = "spirit", label = EllesmereUI.L("Spirit"),
+                          lockedFn = SpiritLocked,
+                          lockedTooltip = EllesmereUI.L("Disabled because you already know Divine Spirit."),
                           tooltip = EllesmereUI.L("Scroll of Spirit") .. "\n" .. EllesmereUI.L("Spirit Elixirs") },
                         { key = "protection", label = EllesmereUI.L("Protection"),
                           tooltip = EllesmereUI.L("Scroll of Protection") .. "\n" .. EllesmereUI.L("Armor Elixirs") },
@@ -1179,6 +1189,7 @@ initFrame:SetScript("OnEvent", function(self)
                     local dd, refresh = EllesmereUI.BuildVisOptsCBDropdown(rgn, 170, rgn:GetFrameLevel() + 2, items,
                         function(key)
                             local f = FDB(); if not (f and class) then return false end
+                            if locks[key] and locks[key]() then return false end
                             local picks = f[key .. "ConsumableByClass"]
                             local enabled = picks and picks[class]
                             if enabled == nil and key == "intellect" then enabled = f.intellectConsumable end
@@ -1186,6 +1197,7 @@ initFrame:SetScript("OnEvent", function(self)
                         end,
                         function(key, v)
                             local f = FDB(); if not (f and f == profile and class) then return end
+                            if locks[key] and locks[key]() then return end
                             local field = key .. "ConsumableByClass"
                             local picks = f[field]
                             local enabled = v == true
@@ -1197,12 +1209,15 @@ initFrame:SetScript("OnEvent", function(self)
                                 picks[class] = enabled
                             end
                             RefreshAll()
-                        end)
+                        end, nil, nil, nil, nil, nil, { dimLocked = true })
                     PPx.Point(dd, "RIGHT", rgn, "RIGHT", -20, 0)
                     dd._ttText = consumableSlot.tooltip
                     rgn._control = dd
                     rgn._lastInline = nil
                     EllesmereUI.RegisterWidgetRefresh(refresh)
+                    ns.RefreshStatConsumableOptions = function()
+                        if dd:IsVisible() then refresh() end
+                    end
                 elseif ids then
                     DressSlot(row._leftRegion, ids[k - 3])
                     DressSlot(row._rightRegion, ids[k - 2])

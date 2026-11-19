@@ -807,6 +807,7 @@ mainFrame:SetScript("OnEvent", function(_, e, arg1, arg2, arg3)
         EABR._fvFamDirty = true
         EABR._fvClassPickerGroups = nil
         if e == "LEARNED_SPELL_IN_SKILL_LINE" then EABR._fvTrackDirty = true end
+        if ns.RefreshStatConsumableOptions then ns.RefreshStatConsumableOptions() end
     elseif e == "MINIMAP_UPDATE_TRACKING" then
         EABR._fvTrackDirty = true
     elseif e == "PLAYER_EQUIPMENT_CHANGED" and arg1 ~= 16 and arg1 ~= 17 then
@@ -858,8 +859,8 @@ if EABR.FOREVER then
     -- state's edges and newly learned spells (a rank joins the custom spells'
     -- families, a raid buff becomes castable). Raid Buffs adds its group
     -- events itself (EABR.FvSyncGroupWatch), the two trackers their minimap
-    -- event (EABR.FvSyncTrackingEvent), the Action Picker its spellbook event
-    -- (EABR.FvSyncPickerSpellEvents).
+    -- event (EABR.FvSyncTrackingEvent), the Action Picker and stat consumables
+    -- share the spellbook event (EABR.FvSyncSpellbookEvents).
     mainFrame:RegisterEvent("PLAYER_UPDATE_RESTING")
     mainFrame:RegisterEvent("LEARNED_SPELL_IN_SKILL_LINE")
     mainFrame:RegisterEvent("ENCOUNTER_START")
@@ -888,11 +889,9 @@ if EABR.FOREVER then
             mainFrame:UnregisterEvent("MINIMAP_UPDATE_TRACKING")
         end
     end
-    -- The Action Picker's choices follow the spellbook: SPELLS_CHANGED is
-    -- listened to only while the picker is on and a reminder can show
-    -- (EABR.CollectForever; EABR.FvStandDown turns it off).
-    function EABR.FvSyncPickerSpellEvents(want)
-        EABR._fvPickerSpellEvents = want
+    -- Picker choices and stat consumable locks can change when a spell is unlearned.
+    function EABR.FvSyncSpellbookEvents(want)
+        EABR._fvSpellbookEvents = want
         if want then
             -- Talent changes may have happened while this listener was off.
             EABR._fvFamDirty = true

@@ -1108,6 +1108,14 @@ local statConsumables = {
 local statBonusesToBeat = {}
 local statConsumableDismissKey = "forever:scrollsAndElixirs"
 local statConsumableChoices
+local statConsumableBuffClasses = { ai = "MAGE", fort = "PRIEST", spirit = "PRIEST" }
+
+function ns.FvStatConsumableLocked(family, class)
+    local buffClass = family and statConsumableBuffClasses[family]
+    if not buffClass or buffClass ~= class then return false, false end
+    local ranks = EllesmereUI.FOREVER_BUFF_FAMILIES[family].single
+    return EABR.FvHighest(ranks) ~= nil, true
+end
 
 local function ConsumableAuraAbsent(auras, restricted)
     return (not restricted or EABR.FvRanksReadable(auras)) and not PlayerHasAuraByID(auras)
@@ -1177,6 +1185,7 @@ function EABR.CollectForever(missing, inInstance, inPvP, playerClass)
     if wantCenser and not censerMissing then EABR._fvCenser = nil end
     local censer = censerMissing and EABR.FvCenserOwned() or false
     local statConsumableNeeded = false
+    local watchStatSpells = false
     if shows and not inPvP and playerClass and not _dismissedUntilLoad[statConsumableDismissKey] then
         local restricted
         for i, stat in ipairs(statConsumables) do
@@ -1185,9 +1194,13 @@ function EABR.CollectForever(missing, inInstance, inPvP, playerClass)
             if enabled == nil and stat.legacySetting then enabled = fo[stat.legacySetting] end
             local bonus
             if enabled == true then
-                if restricted == nil then restricted = EllesmereUI.AuraKit.AurasRestricted() end
-                bonus = StatBonusToBeat(stat, restricted)
-                if bonus ~= nil then statConsumableNeeded = true end
+                local locked, tracksSpell = ns.FvStatConsumableLocked(stat.family, playerClass)
+                if tracksSpell then watchStatSpells = true end
+                if not locked then
+                    if restricted == nil then restricted = EllesmereUI.AuraKit.AurasRestricted() end
+                    bonus = StatBonusToBeat(stat, restricted)
+                    if bonus ~= nil then statConsumableNeeded = true end
+                end
             end
             statBonusesToBeat[i] = bonus
         end
@@ -1198,8 +1211,9 @@ function EABR.CollectForever(missing, inInstance, inPvP, playerClass)
     EABR.FvSyncCenserWatch(censerMissing and not censer and not bagListen or false)
     EABR.FvSyncBagEvent(bagListen)
     local pickerEnabled = shows and PickerEnabled() or false
-    if pickerEnabled ~= (EABR._fvPickerSpellEvents or false) then
-        EABR.FvSyncPickerSpellEvents(pickerEnabled)
+    local watchSpellbook = pickerEnabled or watchStatSpells
+    if watchSpellbook ~= (EABR._fvSpellbookEvents or false) then
+        EABR.FvSyncSpellbookEvents(watchSpellbook)
     end
     local watchFood = pickerEnabled and not inPvP and fo.wellFed or false
     if not shows then
@@ -1669,7 +1683,7 @@ function EABR.FvStandDown(keepSleepProgress)
     if not keepSleepProgress and EABR._fvSleepStartedAt then EABR.ClearSleepProgress() end
     -- Bag changes go unheard while these listeners are off.
     EABR._fvSleepBag = nil
-    if EABR._fvPickerSpellEvents then EABR.FvSyncPickerSpellEvents(false) end
+    if EABR._fvSpellbookEvents then EABR.FvSyncSpellbookEvents(false) end
     if EABR.ValidateOpenPicker then EABR.ValidateOpenPicker() end
     if EABR._durationTimer then
         EABR._durationTimer:Cancel()
