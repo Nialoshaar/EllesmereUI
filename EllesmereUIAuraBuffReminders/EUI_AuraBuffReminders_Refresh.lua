@@ -1077,6 +1077,12 @@ local agilityConsumables = {
     },
     auras = { 17538, 1250918, 11334, 1250985, 12174, 11328, 8117, 8116, 3160, 8115, 2374 },
 }
+local staminaConsumables = {
+    label = "Stamina", dismissKey = "forever:stamina", iconSpell = 8099,
+    setting = "staminaConsumableByClass", family = "fort",
+    items = { { 13453, 18 }, { 10307, 16 }, { 4422, 12 }, { 1711, 8 }, { 1180, 4 } },
+    auras = { 17537, 12178, 8101, 8100, 8099 },
+}
 local spiritConsumables = {
     label = "Spirit", dismissKey = "forever:spirit", iconSpell = 8112,
     setting = "spiritConsumableByClass", family = "spirit",
@@ -1095,7 +1101,9 @@ local protectionConsumables = {
     },
     auras = { 1250920, 11348, 11349, 12175, 8095, 3220, 8094, 8091, 673 },
 }
-local statConsumables = { intellectConsumables, strengthConsumables, agilityConsumables, spiritConsumables, protectionConsumables }
+local statConsumables = {
+    intellectConsumables, strengthConsumables, agilityConsumables, staminaConsumables, spiritConsumables, protectionConsumables,
+}
 local statBonusesToBeat = {}
 
 local function ConsumableAuraAbsent(auras, restricted)

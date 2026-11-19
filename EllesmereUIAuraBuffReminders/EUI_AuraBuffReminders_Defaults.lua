@@ -204,6 +204,7 @@ if EABR.FOREVER then
         intellectConsumableByClass = {},
         strengthConsumableByClass = {},
         agilityConsumableByClass = {},
+        staminaConsumableByClass = {},
         spiritConsumableByClass = {},
         protectionConsumableByClass = {},
         gather = false,     -- gathering tracking reminder; opt-in, it shows while no tracker is up

@@ -1169,6 +1169,8 @@ initFrame:SetScript("OnEvent", function(self)
                           tooltip = EllesmereUI.L("Scroll of Strength") .. "\n" .. EllesmereUI.L("Strength Elixirs") },
                         { key = "agility", label = EllesmereUI.L("Agility"),
                           tooltip = EllesmereUI.L("Scroll of Agility") .. "\n" .. EllesmereUI.L("Agility Elixirs") },
+                        { key = "stamina", label = EllesmereUI.L("Stamina"),
+                          tooltip = EllesmereUI.L("Scroll of Stamina") .. "\n" .. EllesmereUI.L("Elixir of Brute Force") },
                         { key = "spirit", label = EllesmereUI.L("Spirit"),
                           tooltip = EllesmereUI.L("Scroll of Spirit") .. "\n" .. EllesmereUI.L("Spirit Elixirs") },
                         { key = "protection", label = EllesmereUI.L("Protection"),
