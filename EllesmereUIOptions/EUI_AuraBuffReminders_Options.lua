@@ -1170,22 +1170,33 @@ initFrame:SetScript("OnEvent", function(self)
                         { key = "intellect", label = EllesmereUI.L("Intellect"),
                           lockedFn = IntellectLocked,
                           lockedTooltip = EllesmereUI.L("Disabled because you already know Arcane Intellect."),
-                          tooltip = EllesmereUI.L("Scroll of Intellect") .. "\n" .. EllesmereUI.L("Intellect Elixirs") },
+                          tooltip = EllesmereUI.L("Scroll of Intellect") .. "\n" .. EllesmereUI.L("Intellect Elixirs") .. "\n\n"
+                              .. EllesmereUI.L("Does not stack with Arcane Intellect or Arcane Brilliance. Incense Candle also conflicts with Arcane Intellect.") },
                         { key = "strength", label = EllesmereUI.L("Strength"),
-                          tooltip = EllesmereUI.L("Scroll of Strength") .. "\n" .. EllesmereUI.L("Strength Elixirs") },
+                          tooltip = EllesmereUI.L("Scroll of Strength") .. "\n" .. EllesmereUI.L("Strength Elixirs") .. "\n\n"
+                              .. EllesmereUI.L("Can stack with Sharpening Wheel.") },
                         { key = "agility", label = EllesmereUI.L("Agility"),
-                          tooltip = EllesmereUI.L("Scroll of Agility") .. "\n" .. EllesmereUI.L("Agility Elixirs") },
+                          tooltip = EllesmereUI.L("Scroll of Agility") .. "\n" .. EllesmereUI.L("Agility Elixirs") .. "\n\n"
+                              .. EllesmereUI.L("Can stack with Grace of Air Totem.") },
                         { key = "stamina", label = EllesmereUI.L("Stamina"),
                           lockedFn = StaminaLocked,
                           lockedTooltip = EllesmereUI.L("Disabled because you already know Power Word: Fortitude."),
-                          tooltip = EllesmereUI.L("Scroll of Stamina") .. "\n" .. EllesmereUI.L("Elixir of Brute Force") },
+                          tooltip = EllesmereUI.L("Scroll of Stamina") .. "\n" .. EllesmereUI.L("Elixir of Brute Force") .. "\n\n"
+                              .. EllesmereUI.L("Stamina scrolls do not stack with Power Word: Fortitude or Prayer of Fortitude. First Aid Kit also conflicts with Power Word: Fortitude.") },
                         { key = "spirit", label = EllesmereUI.L("Spirit"),
                           lockedFn = SpiritLocked,
                           lockedTooltip = EllesmereUI.L("Disabled because you already know Divine Spirit."),
-                          tooltip = EllesmereUI.L("Scroll of Spirit") .. "\n" .. EllesmereUI.L("Spirit Elixirs") },
+                          tooltip = EllesmereUI.L("Scroll of Spirit") .. "\n" .. EllesmereUI.L("Spirit Elixirs") .. "\n\n"
+                              .. EllesmereUI.L("Does not stack with Divine Spirit or Prayer of Spirit. Faction Banner also conflicts with Divine Spirit.") },
                         { key = "protection", label = EllesmereUI.L("Protection"),
-                          tooltip = EllesmereUI.L("Scroll of Protection") .. "\n" .. EllesmereUI.L("Armor Elixirs") },
+                          tooltip = EllesmereUI.L("Scroll of Protection") .. "\n" .. EllesmereUI.L("Armor Elixirs") .. "\n\n"
+                              .. EllesmereUI.L("Can stack with Devotion Aura.") },
                     }
+                    for _, item in ipairs(items) do
+                        if item.lockedTooltip then
+                            item.lockedTooltip = item.lockedTooltip .. "\n\n" .. item.tooltip
+                        end
+                    end
                     local dd, refresh = EllesmereUI.BuildVisOptsCBDropdown(rgn, 170, rgn:GetFrameLevel() + 2, items,
                         function(key)
                             local f = FDB(); if not (f and class) then return false end
