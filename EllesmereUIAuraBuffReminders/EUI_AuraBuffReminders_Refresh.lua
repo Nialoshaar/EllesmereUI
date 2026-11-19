@@ -1108,6 +1108,62 @@ local statExpirations = {}
 local statConsumableDismissKey = "forever:scrollsAndElixirs"
 local statConsumableChoices
 local statConsumableBuffClasses = { ai = "MAGE", fort = "PRIEST", spirit = "PRIEST" }
+local campIntellectAuraID, campIntellectExpiration, campIntellectAmount
+
+function EABR.FvInvalidateCampIntellect(info)
+    if not campIntellectAuraID then return end
+    if isSecret(info) or not info or isSecret(info.isFullUpdate) or info.isFullUpdate then
+        campIntellectAuraID = nil
+        return
+    end
+    local updated = info.updatedAuraInstanceIDs
+    if isSecret(updated) then
+        campIntellectAuraID = nil
+    elseif updated then
+        for _, id in ipairs(updated) do
+            if isSecret(id) or id == campIntellectAuraID then
+                campIntellectAuraID = nil
+                break
+            end
+        end
+    end
+end
+
+local function FvCampIntellect()
+    -- Camp Benefits exposes its individual bonuses in the aura tooltip.
+    local ok, aura = pcall(C_UnitAuras.GetUnitAuraBySpellID, "player", EABR.CAMP_BENEFITS)
+    if not ok or isSecret(aura) then return 0 end
+    if not aura then
+        campIntellectAuraID = nil
+        return 0
+    end
+    local id, expiration = aura.auraInstanceID, aura.expirationTime
+    if isSecret(id) or not id or isSecret(expiration) then return 0 end
+    if id == campIntellectAuraID and expiration == campIntellectExpiration then return campIntellectAmount end
+
+    local candle = C_Spell.GetSpellName(1229705) -- Incense Candle
+    if not candle then return 0 end
+    local hasTooltip, tooltip = pcall(C_TooltipInfo.GetUnitAuraByAuraInstanceID, "player", id)
+    if not hasTooltip or isSecret(tooltip) or not tooltip then return 0 end
+    local lines = tooltip.lines
+    if isSecret(lines) or not lines then return 0 end
+    local amount = 0
+    for _, line in ipairs(lines) do
+        if isSecret(line) then return 0 end
+        local text = line.leftText
+        if isSecret(text) then return 0 end
+        if text then
+            for entry in text:gmatch("[^\r\n]+") do
+                local start, last = entry:find(candle, 1, true)
+                if start and entry:sub(1, start - 1):match("^%s*$") then
+                    amount = tonumber(entry:match("(%d+)%D*$", last + 1)) or amount
+                end
+            end
+        end
+    end
+    campIntellectAuraID, campIntellectExpiration, campIntellectAmount = id, expiration, amount
+    return amount
+end
 
 function ns.FvStatConsumableLocked(family, class)
     local buffClass = family and statConsumableBuffClasses[family]
@@ -1127,9 +1183,11 @@ local function StatBonusToBeat(stat, restricted, warnSec)
             local spellID = aura.spellId
             if isSecret(spellID) then return end
             amount = family.amounts and family.amounts[spellID]
-            if not amount or amount >= stat.items[1][2] then return end
+            if not amount then return end
         end
     end
+    if stat == intellectConsumables and not restricted then amount = math.max(amount, FvCampIntellect()) end
+    if amount >= stat.items[1][2] then return end
     if restricted and not EABR.FvRanksReadable(stat.auras) then return end
     if not warnSec then
         if not PlayerHasAuraByID(stat.auras) then return amount end

@@ -668,6 +668,7 @@ mainFrame:SetScript("OnEvent", function(_, e, arg1, arg2, arg3)
 
     if e == "PLAYER_ENTERING_WORLD" then
         wipe(_dismissedUntilLoad)
+        if EABR.FOREVER then EABR.FvInvalidateCampIntellect() end
         -- Preserve the last known targeted-aura state across loading screens;
         -- nil is unknown and readers suppress until the delayed rescan resolves it.
         -- WoW Forever has no targeted own-aura tracking (its Raid Buffs keep
@@ -719,7 +720,8 @@ mainFrame:SetScript("OnEvent", function(_, e, arg1, arg2, arg3)
     if e == "UNIT_AURA" then
         -- arg1 = unit token. Player aura changes always refresh; group member changes only matter for Evoker ownOnRaid cache updates and OOC raid buff checks (broad UNIT_AURA is only registered for classes needing group tracking).
         if arg1 == "player" then
-            if not EABR.FOREVER then EABR.UpdateEatingState(arg2) end  -- eating channel feeds the retail food reminder only
+            if EABR.FOREVER then EABR.FvInvalidateCampIntellect(arg2)
+            else EABR.UpdateEatingState(arg2) end  -- eating channel feeds the retail food reminder only
             local isEvoker = GetPlayerClass() == "EVOKER"
             if isEvoker and InCombat() and IsInGroup() then
                 for _, id in ipairs(_ownOnRaidIDs) do
