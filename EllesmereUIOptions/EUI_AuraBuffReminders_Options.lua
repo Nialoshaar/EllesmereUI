@@ -1064,7 +1064,7 @@ initFrame:SetScript("OnEvent", function(self)
     end
 
     ---------------------------------------------------------------------------
-    --  WoW Forever consumables and custom spells: the Consumable Buffs,
+    --  WoW Forever consumables and custom spells: the Scrolls and Elixirs,
     --  Add Custom Spell and New Spell Group slots, then one per tracked spell (its icon,
     --  name and ID, and a checkbox dropdown of the classes it reminds, each
     --  ticked until unticked, forever.customClasses[id][CLASS] = false, with
@@ -1078,8 +1078,8 @@ initFrame:SetScript("OnEvent", function(self)
         local newGroupSlot = { type="labeledButton", text="New Spell Group", buttonText="Create", width=90,
             tooltip="Creates a group of spells. A reminder shows if none of the auras from the group are active.",
             onClick=function() PromptSpellGroupName() end }
-        local consumableSlot = { type="label", text=EllesmereUI.L("Consumable Buffs"),
-            tooltip="Choose consumable reminders for your current class. Click a reminder to use the item from your bags." }
+        local consumableSlot = { type="label", text=EllesmereUI.L("Scrolls and Elixirs"),
+            tooltip=EllesmereUI.L("Choose reminders for your current class. Scroll and elixir buffs for the same stat are mutually exclusive and do not stack. Click a reminder to use the item from your bags.") }
         local n = 3 + (ids and #ids or 0)
         local W = EllesmereUI.Widgets
         local PPx = EllesmereUI.PanelPP
@@ -1199,6 +1199,7 @@ initFrame:SetScript("OnEvent", function(self)
                             RefreshAll()
                         end)
                     PPx.Point(dd, "RIGHT", rgn, "RIGHT", -20, 0)
+                    dd._ttText = consumableSlot.tooltip
                     rgn._control = dd
                     rgn._lastInline = nil
                     EllesmereUI.RegisterWidgetRefresh(refresh)
