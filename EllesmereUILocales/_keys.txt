@@ -388,7 +388,7 @@ Choose Zones
 Choose a buff from the bar menu
 Choose an alt
 Choose an icon for \
-Choose stats for your current class. One reminder shows the next usable scroll or elixir in dropdown order by default. Scroll and elixir buffs for the same stat are mutually exclusive and do not stack. Left-click to use the item. With Action Picker on, right-click to choose another.
+Choose stats for your current class. One reminder shows the next usable scroll or elixir in dropdown order by default.\n\nScroll and elixir buffs for the same stat are mutually exclusive and do not stack.\n\nLeft-click to use the item.\nWith Action Picker on, right-click to choose another.
 Choose the specs this action menu works in.
 Choose which addons to import. Any addons not included will use your active profile's settings in the new profile.
 Choose which addons to include in your exported profile. Check everything for a full profile export.

@@ -1079,7 +1079,7 @@ initFrame:SetScript("OnEvent", function(self)
             tooltip="Creates a group of spells. A reminder shows if none of the auras from the group are active.",
             onClick=function() PromptSpellGroupName() end }
         local consumableSlot = { type="label", text=EllesmereUI.L("Scrolls and Elixirs"),
-            tooltip=EllesmereUI.L("Choose stats for your current class. One reminder shows the next usable scroll or elixir in dropdown order by default. Scroll and elixir buffs for the same stat are mutually exclusive and do not stack. Left-click to use the item. With Action Picker on, right-click to choose another.") }
+            tooltip=EllesmereUI.L("Choose stats for your current class. One reminder shows the next usable scroll or elixir in dropdown order by default.\n\nScroll and elixir buffs for the same stat are mutually exclusive and do not stack.\n\nLeft-click to use the item.\nWith Action Picker on, right-click to choose another.") }
         local n = 3 + (ids and #ids or 0)
         local W = EllesmereUI.Widgets
         local PPx = EllesmereUI.PanelPP
