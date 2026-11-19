@@ -1101,10 +1101,18 @@ local spellPowerConsumables = {
     setting = "spellPowerConsumableByClass",
     items = { { 13454, 35, 17539 }, { 9155, 20, 11390 }, { 250342, 15, 1250971 }, { 247754, 5, 1245244 } },
 }
+local manaRegenConsumables = {
+    label = "Mana Regen (MP5)", dismissKey = "forever:manaRegen", iconSpell = 24363,
+    setting = "manaRegenConsumableByClass",
+    items = {
+        { 250341, 20, 1250948 }, { 20007, 12, 24363 }, { 250336, 10, 1250932 },
+        { 250340, 6, 1250944 }, { 250339, 3, 1250942 },
+    },
+}
 -- The single reminder uses the first eligible stat in dropdown order.
 local statConsumables = {
     intellectConsumables, strengthConsumables, agilityConsumables, staminaConsumables, spiritConsumables, protectionConsumables,
-    spellPowerConsumables,
+    spellPowerConsumables, manaRegenConsumables,
 }
 local statBonusesToBeat = {}
 local statExpirations = {}
