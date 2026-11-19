@@ -1175,6 +1175,7 @@ local function AddStatConsumableEntry(missing, stat, itemID, expiration, choices
     e.texture = C_Item.GetItemIconByID(itemID) or Tex(stat.iconSpell)
     e.tooltipItem = itemID
     e.label = EllesmereUI.L(stat.label)
+    e.cooldownItemID = itemID
     e.cat = "forever"
     e.dismissKey = separate and stat.dismissKey or statConsumableDismissKey
     e.foreverStatItems = choices
@@ -1306,6 +1307,7 @@ function EABR.CollectForever(missing, inInstance, inPvP, playerClass)
         if e then missing[#missing+1] = e end
     end
     local watchLevel = false
+    local beforeStatCount = #missing
     if statConsumableNeeded then
         local level = UnitLevel("player")
         local sharedChoices, preferred, familyPicks
@@ -1352,7 +1354,7 @@ function EABR.CollectForever(missing, inInstance, inPvP, playerClass)
             AddStatConsumableEntry(missing, statConsumables[chosenIndex], chosenID, statExpirations[chosenIndex], sharedChoices, false)
         end
     end
-    EABR.FvSyncConsumableItemEvents(statConsumableNeeded, watchLevel)
+    EABR.FvSyncConsumableItemEvents(statConsumableNeeded, watchLevel, #missing > beforeStatCount)
     -- Arcane Censer: its buff missing and a censer in the bags (read above);
     -- the click uses the censer.
     if censer then

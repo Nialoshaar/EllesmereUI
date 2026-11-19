@@ -544,6 +544,10 @@ end
 local consumableItemLevels, consumableItemPending, consumableItemFailed
 
 mainFrame:SetScript("OnEvent", function(_, e, arg1, arg2, arg3)
+    if e == "BAG_UPDATE_COOLDOWN" then
+        EABR.FvUpdateStatItemCooldowns()
+        return
+    end
     if e == "ITEM_DATA_LOAD_RESULT" then
         if not consumableItemPending or consumableItemPending[arg1] == nil then return end
         consumableItemPending[arg1] = nil
@@ -768,8 +772,7 @@ mainFrame:SetScript("OnEvent", function(_, e, arg1, arg2, arg3)
         return
     end
 
-    -- Bag CONTENT changes (BAG_UPDATE/_DELAYED) alter item counts/resolution, so re-scan. BAG_UPDATE_COOLDOWN
-    -- is intentionally NOT registered: it fires ~1/sec from cooldown ticks, changes nothing reminder-relevant, and would refresh every second and bust the resolved-item cache.
+    -- Only bag content changes invalidate item counts and resolution.
     if e == "BAG_UPDATE_DELAYED" or e == "BAG_UPDATE" then
         InvalidateItemCountCache()
         consumableItemFailed = nil
@@ -943,7 +946,7 @@ if EABR.FOREVER then
         C_Item.RequestLoadItemDataByID(id)
         return consumableItemLevels[id]
     end
-    function EABR.FvSyncConsumableItemEvents(active, watchLevel)
+    function EABR.FvSyncConsumableItemEvents(active, watchLevel, watchCooldown)
         if consumableItemPending and next(consumableItemPending) then
             -- Retain only requests that could improve this pass's choice.
             for id, seen in pairs(consumableItemPending) do
@@ -953,6 +956,12 @@ if EABR.FOREVER then
             if not next(consumableItemPending) then mainFrame:UnregisterEvent("ITEM_DATA_LOAD_RESULT") end
         end
         if not active then consumableItemFailed = nil end
+        watchCooldown = watchCooldown == true
+        if watchCooldown ~= (EABR._fvConsumableCooldownEvent or false) then
+            EABR._fvConsumableCooldownEvent = watchCooldown
+            if watchCooldown then mainFrame:RegisterEvent("BAG_UPDATE_COOLDOWN")
+            else mainFrame:UnregisterEvent("BAG_UPDATE_COOLDOWN") end
+        end
         if watchLevel == (EABR._fvConsumableLevelEvent or false) then return end
         EABR._fvConsumableLevelEvent = watchLevel
         if watchLevel then

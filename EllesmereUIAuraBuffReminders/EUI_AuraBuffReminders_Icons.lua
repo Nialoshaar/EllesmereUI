@@ -1212,6 +1212,44 @@ function EABR.ApplyEatingVisual(f, m)
 end
 
 local ShowCampfireAddonMenu
+function EABR.UpdateIconItemCooldown(btn, itemID)
+    local swipe = btn._itemCooldown
+    if itemID and not InCombat() then
+        local start, duration, enabled = C_Item.GetItemCooldown(itemID)
+        -- Ignore the global cooldown. The buff expiration countdown is separate.
+        if not (I.isSecret(start) or I.isSecret(duration) or I.isSecret(enabled))
+            and (enabled == true or enabled == 1) and start and duration
+            and start > 0 and duration > 1.5 and start + duration > GetTime() then
+            if not swipe then
+                swipe = CreateFrame("Cooldown", nil, btn, "CooldownFrameTemplate")
+                swipe:SetAllPoints(btn._icon)
+                swipe:SetHideCountdownNumbers(true)
+                swipe:SetDrawEdge(false)
+                swipe:SetDrawBling(false)
+                btn._itemCooldown = swipe
+            end
+            if swipe._itemStart ~= start or swipe._itemDuration ~= duration then
+                swipe._itemStart, swipe._itemDuration = start, duration
+                swipe:SetCooldown(start, duration)
+                swipe:Show()
+            end
+            return
+        end
+    end
+    if swipe and swipe._itemStart then
+        swipe._itemStart, swipe._itemDuration = nil, nil
+        swipe:Clear()
+        swipe:Hide()
+    end
+end
+
+function EABR.FvUpdateStatItemCooldowns()
+    if InCombat() then return end
+    for _, btn in ipairs(activeIcons) do
+        if btn._cooldownItemID then EABR.UpdateIconItemCooldown(btn, btn._cooldownItemID) end
+    end
+end
+
 function EABR.ApplyIconExpiry(f, m)
     local expireAt = m and m.expireAt
     local swipe = f._expirySwipe
@@ -1718,6 +1756,7 @@ do
         e.mode = nil; e.spellID = nil; e.itemID = nil; e.macro = nil
         e.texture = nil; e.label = nil; e.unit = nil; e.desaturated = false
         e.tooltipItem = nil
+        e.cooldownItemID = nil
         e.cat = nil; e.data = nil; e.dismissKey = nil; e.petCycleTotal = nil
         e.isEating = nil; e.eatingExpirationTime = nil
         e.expireAt = nil; e.expireTotal = nil; e.expireSwipe = nil

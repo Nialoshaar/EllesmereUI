@@ -175,6 +175,7 @@ local function ShowIcon(iconIdx, m)
     btn._foreverFood = m.foreverFood
     btn._foreverStatItems = m.foreverStatItems
     btn._foreverStatFamily = m.foreverStatFamily
+    btn._cooldownItemID = m.cooldownItemID
     btn._foreverGroup = m.foreverGroup
     btn._requestKey = m.requestKey or nil
     btn._requestName = m.requestName or nil
@@ -203,6 +204,9 @@ local function ShowIcon(iconIdx, m)
     end
     EABR.SetIconHighlight(btn, not receiver)
     ApplySetup(btn, m)
+    if btn._cooldownItemID or btn._itemCooldown then
+        EABR.UpdateIconItemCooldown(btn, btn._cooldownItemID)
+    end
     local p = db.profile.display
     local baseScale = p.scale or 1.0
     local sz = floor(ICON_SIZE * baseScale + 0.5)
