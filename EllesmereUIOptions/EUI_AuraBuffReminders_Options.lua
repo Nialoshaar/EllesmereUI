@@ -1182,12 +1182,12 @@ initFrame:SetScript("OnEvent", function(self)
                           lockedFn = StaminaLocked,
                           lockedTooltip = EllesmereUI.L("Disabled because you already know Power Word: Fortitude."),
                           tooltip = EllesmereUI.L("Scroll of Stamina") .. "\n" .. EllesmereUI.L("Elixir of Brute Force") .. "\n\n"
-                              .. EllesmereUI.L("Stamina scrolls do not stack with Power Word: Fortitude or Prayer of Fortitude. First Aid Kit also conflicts with Power Word: Fortitude.") },
+                              .. EllesmereUI.L("Stamina scrolls compete with Power Word: Fortitude and Prayer of Fortitude. First Aid Kit can block a Rank 1 Stamina scroll.") },
                         { key = "spirit", label = EllesmereUI.L("Spirit"),
                           lockedFn = SpiritLocked,
                           lockedTooltip = EllesmereUI.L("Disabled because you already know Divine Spirit."),
                           tooltip = EllesmereUI.L("Scroll of Spirit") .. "\n" .. EllesmereUI.L("Spirit Elixirs") .. "\n\n"
-                              .. EllesmereUI.L("Does not stack with Divine Spirit or Prayer of Spirit. Faction Banner also conflicts with Divine Spirit.") },
+                              .. EllesmereUI.L("Competes with Divine Spirit and Prayer of Spirit. The Rank 1 scroll can be used with Faction Banner active.") },
                         { key = "protection", label = EllesmereUI.L("Protection"),
                           tooltip = EllesmereUI.L("Scroll of Protection") .. "\n" .. EllesmereUI.L("Armor Elixirs") .. "\n\n"
                               .. EllesmereUI.L("Can stack with Devotion Aura.") },

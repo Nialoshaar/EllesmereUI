@@ -454,6 +454,7 @@ Colors enemies you fight without this debuff.
 Combat Potion Icon
 Combat data stayed restricted for this run
 Comparisons
+Competes with Divine Spirit and Prayer of Spirit. The Rank 1 scroll can be used with Faction Banner active.
 Completed: %s
 Conditions on talents not shown above (they still apply):
 Conflicting Keybind
@@ -590,7 +591,6 @@ Divide.
 Do you want to continue?
 Dodge
 Does not stack with Arcane Intellect or Arcane Brilliance. Incense Candle also conflicts with Arcane Intellect.
-Does not stack with Divine Spirit or Prayer of Spirit. Faction Banner also conflicts with Divine Spirit.
 Done
 Dps
 Drag a bar to reorder it or move it into another group
@@ -1569,7 +1569,7 @@ Stack Thresholds
 Stack size: %d
 Stam
 Stamina
-Stamina scrolls do not stack with Power Word: Fortitude or Prayer of Fortitude. First Aid Kit also conflicts with Power Word: Fortitude.
+Stamina scrolls compete with Power Word: Fortitude and Prayer of Fortitude. First Aid Kit can block a Rank 1 Stamina scroll.
 Stance %d
 Standing
 Standing in fire
