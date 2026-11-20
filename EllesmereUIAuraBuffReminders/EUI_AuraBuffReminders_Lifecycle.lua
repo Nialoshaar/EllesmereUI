@@ -530,28 +530,25 @@ end
 -------------------------------------------------------------------------------
 --  MAIN EVENT HANDLER (OnEvent script for runtime events)
 -------------------------------------------------------------------------------
-local function ClearSleepProgress()
+function EABR.ClearSleepProgress()
     EABR._fvSleepStartedAt, EABR._fvSleepProgressEnd, EABR._fvSleepStacks = nil, nil, nil
-    EABR._fvSleepProfile = nil
-    mainFrame:UnregisterEvent("PLAYER_STARTED_MOVING")
+    EABR._fvSleepProfile, EABR._fvSleepAuraInstance, EABR._fvSleepReloaded = nil, nil, nil
     mainFrame:UnregisterEvent("PLAYER_LOGOUT")
 end
 
-local function StartSleepProgress(startedAt)
-    if not EABR._fvSleepStartedAt then
-        mainFrame:RegisterEvent("PLAYER_STARTED_MOVING")
-        mainFrame:RegisterEvent("PLAYER_LOGOUT")
-    end
+function EABR.StartSleepProgress(instanceID)
     EABR._fvSleepProfile = db.profile
-    EABR._fvSleepStartedAt = startedAt
+    EABR._fvSleepAuraInstance = instanceID
+    EABR._fvSleepStartedAt = GetTime()
     EABR._fvSleepProgressEnd, EABR._fvSleepStacks = nil, nil
+    mainFrame:RegisterEvent("PLAYER_LOGOUT")
 end
 
 mainFrame:SetScript("OnEvent", function(_, e, arg1, arg2, arg3)
     if e == "PLAYER_LOGOUT" then
         local startedAt = EABR._fvSleepStartedAt
         if startedAt and db and EABR._fvSleepProfile == db.profile
-            and db.profile.forever.sleepingBagShowProgress == true and IsResting() then
+            and db.profile.forever.sleepingBagShowProgress ~= false then
             local saved = EllesmereUI.CharData("sleepingBagProgress", true)
             if saved then
                 saved.startedAt = startedAt
@@ -561,42 +558,8 @@ mainFrame:SetScript("OnEvent", function(_, e, arg1, arg2, arg3)
         end
         return
     end
-    if e == "SPELL_UPDATE_COOLDOWN" then
-        if EABR._fvSleepProgressWatching and IsResting() and not InCombat()
-            and not I.isSecret(arg1) and arg1 == EABR.SLEEPING_BAG_TRACKING then
-            StartSleepProgress(GetTime())
-            RequestRefresh()
-        end
-        return
-    end
-    if EABR._fvSleepStartedAt and (e == "PLAYER_STARTED_MOVING"
-        or e == "PLAYER_ENTERING_WORLD" or e == "ZONE_CHANGED_NEW_AREA"
-        or (e == "PLAYER_UPDATE_RESTING" and not IsResting())) then
-        ClearSleepProgress()
-    end
-    if e == "PLAYER_STARTED_MOVING" then
-        RequestRefresh()
-        return
-    end
-    if EABR.FOREVER and e == "PLAYER_UPDATE_RESTING" then
-        if IsResting() then
-            EABR.FvSyncRestedSleepProgress()
-            if EABR._fvSleepProgressWatching and not EABR._fvSleepStartedAt and not InCombat() then
-                local cooldown = C_Spell.GetSpellCooldown(EABR.SLEEPING_BAG_TRACKING)
-                if not I.isSecret(cooldown) and cooldown and cooldown.isEnabled then
-                    local startedAt, duration = cooldown.startTime, cooldown.duration
-                    local now = GetTime()
-                    -- An enabled cooldown with zero start/duration is also returned when idle.
-                    if not I.isSecret(startedAt) and not I.isSecret(duration)
-                        and startedAt and startedAt > 0 and startedAt <= now
-                        and duration and duration >= 60 and startedAt + duration > now then
-                        StartSleepProgress(startedAt)
-                    end
-                end
-            end
-        elseif EABR._fvSleepProgressWatching then
-            EABR.FvSyncSleepProgress(false)
-        end
+    if EABR._fvSleepStartedAt and (e == "PLAYER_ENTERING_WORLD" or e == "ZONE_CHANGED_NEW_AREA") then
+        EABR.ClearSleepProgress()
     end
     if e == "ENCOUNTER_START" then
         SnapshotPlayerAuras()
@@ -701,6 +664,7 @@ mainFrame:SetScript("OnEvent", function(_, e, arg1, arg2, arg3)
             -- The minimap's trackers, the Sleeping Bag and the Arcane Censer
             -- are read afresh after a loading screen.
             EABR._fvTrackDirty = true
+            if EABR._fvHunterTrackingEvents then EABR._fvHunterMatchMask = nil end
             EABR._fvSleepBag, EABR._fvCenser = nil, nil
             local guid = EllesmereUI.CharGUID()
             local saved = guid and EllesmereUI.CharData("sleepingBagProgress")
@@ -708,20 +672,22 @@ mainFrame:SetScript("OnEvent", function(_, e, arg1, arg2, arg3)
                 EllesmereUI.ForgetCharField(guid, "sleepingBagProgress")
                 local fo = db and db.profile.forever
                 -- Resume only a confirmed session from a UI reload. A fresh login discards it.
-                if arg2 and fo and fo.sleepingBag == true and fo.sleepingBagShowProgress == true
-                    and db.profile.display.remindersEnabled ~= false and not InCombat() and IsResting()
+                if arg2 and fo and fo.sleepingBag == true and fo.sleepingBagShowProgress ~= false
+                    and db.profile.display.remindersEnabled ~= false and not InCombat()
                     and type(saved) == "table" and type(saved.startedAt) == "number"
                     and saved.startedAt >= 0 and saved.startedAt <= GetTime()
                     and (saved.endsAt == nil or saved.endsAt == false
                         or (type(saved.endsAt) == "number" and saved.endsAt >= saved.startedAt and saved.endsAt < math.huge))
                     and (saved.stacks == nil or (type(saved.stacks) == "number" and saved.stacks >= 0
                         and saved.stacks <= EABR.SLEEPING_BAG_STACKS and saved.stacks % 1 == 0)) then
-                    if not EABR._fvSleepProgressWatching then EABR.FvSyncSleepProgress(true) end
-                    EABR._fvSleepStartedAt, EABR._fvSleepProgressEnd, EABR._fvSleepStacks =
-                        saved.startedAt, saved.endsAt, saved.stacks
-                    EABR._fvSleepProfile = db.profile
-                    mainFrame:RegisterEvent("PLAYER_STARTED_MOVING")
-                    mainFrame:RegisterEvent("PLAYER_LOGOUT")
+                    local ok, aura = pcall(C_UnitAuras.GetPlayerAuraBySpellID, EABR.SLEEPING_BAG_TRACKING)
+                    if ok and not I.isSecret(aura) and aura then
+                        EABR._fvSleepStartedAt, EABR._fvSleepProgressEnd, EABR._fvSleepStacks =
+                            saved.startedAt, saved.endsAt, saved.stacks
+                        EABR._fvSleepProfile = db.profile
+                        mainFrame:RegisterEvent("PLAYER_LOGOUT")
+                        EABR._fvSleepReloaded = true
+                    end
                 end
             end
         end
@@ -827,9 +793,11 @@ mainFrame:SetScript("OnEvent", function(_, e, arg1, arg2, arg3)
     if e == "LEARNED_SPELL_IN_SKILL_LINE" or (EABR.FOREVER and e == "SPELLS_CHANGED") then
         EABR._fvFamDirty = true
         EABR._fvClassPickerGroups = nil
+        if EABR._fvHunterTrackingEvents then EABR._fvHunterMatchMask = nil end
         if e == "LEARNED_SPELL_IN_SKILL_LINE" then EABR._fvTrackDirty = true end
     elseif e == "MINIMAP_UPDATE_TRACKING" then
         EABR._fvTrackDirty = true
+        if EABR._fvHunterTrackingEvents then EABR._fvHunterMatchMask = nil end
     elseif e == "PLAYER_EQUIPMENT_CHANGED" and arg1 ~= 16 and arg1 ~= 17 then
         -- Weapon Buffs (its only registration): only a weapon slot matters.
         return
@@ -880,7 +848,8 @@ if EABR.FOREVER then
     -- families, a raid buff becomes castable). Raid Buffs adds its group
     -- events itself (EABR.FvSyncGroupWatch), the two trackers their minimap
     -- event (EABR.FvSyncTrackingEvent), the Action Picker its spellbook event
-    -- (EABR.FvSyncPickerSpellEvents).
+    -- (EABR.FvSyncPickerSpellEvents), Hunter tracking its target events
+    -- (EABR.FvSyncHunterTrackingEvents).
     mainFrame:RegisterEvent("PLAYER_UPDATE_RESTING")
     mainFrame:RegisterEvent("LEARNED_SPELL_IN_SKILL_LINE")
     mainFrame:RegisterEvent("ENCOUNTER_START")
@@ -907,6 +876,20 @@ if EABR.FOREVER then
             mainFrame:RegisterEvent("MINIMAP_UPDATE_TRACKING")
         else
             mainFrame:UnregisterEvent("MINIMAP_UPDATE_TRACKING")
+        end
+    end
+    function EABR.FvSyncHunterTrackingEvents(want)
+        if want == (EABR._fvHunterTrackingEvents or false) then return end
+        EABR._fvHunterTrackingEvents = want
+        EABR._fvHunterMatchMask = nil
+        if want then
+            mainFrame:RegisterEvent("PLAYER_TARGET_CHANGED")
+            mainFrame:RegisterUnitEvent("UNIT_FLAGS", "target")
+            mainFrame:RegisterUnitEvent("UNIT_FACTION", "target")
+        else
+            mainFrame:UnregisterEvent("PLAYER_TARGET_CHANGED")
+            mainFrame:UnregisterEvent("UNIT_FLAGS")
+            mainFrame:UnregisterEvent("UNIT_FACTION")
         end
     end
     -- The Action Picker's choices follow the spellbook: SPELLS_CHANGED is
@@ -944,16 +927,6 @@ if EABR.FOREVER then
             mainFrame:UnregisterEvent("BAG_UPDATE_DELAYED")
         end
     end
-    function EABR.FvSyncSleepProgress(want)
-        EABR._fvSleepProgressWatching = want or nil
-        if want then
-            mainFrame:RegisterEvent("SPELL_UPDATE_COOLDOWN")
-        else
-            mainFrame:UnregisterEvent("SPELL_UPDATE_COOLDOWN")
-            ClearSleepProgress()
-        end
-    end
-
     -- A Cozy Sleeping Bag or an Arcane Censer bought or looted while none is
     -- owned and the shared bag listener above is off: one frame, one item
     -- count per watched item per bag change until it shows up, which marks it
@@ -969,8 +942,9 @@ if EABR.FOREVER then
                     if EABR._fvSleepWatch and (C_Item.GetItemCount(EABR.SLEEPING_BAG_ITEM) or 0) > 0 then
                         EABR._fvSleepBag, EABR._fvSleepWatch, came = true, false, true
                     end
-                    if EABR._fvCenserWatch and (C_Item.GetItemCount(EABR.ARCANE_CENSER_ITEM) or 0) > 0 then
-                        EABR._fvCenser, EABR._fvCenserWatch, came = true, false, true
+                    local censer = EABR._fvCenserWatch and EABR.FvCenserInBags()
+                    if censer then
+                        EABR._fvCenser, EABR._fvCenserWatch, came = censer, false, true
                     end
                     if came then
                         SyncArrivalWatch()

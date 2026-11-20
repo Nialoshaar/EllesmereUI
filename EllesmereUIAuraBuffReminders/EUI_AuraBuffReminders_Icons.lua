@@ -396,8 +396,18 @@ local function SetVisualIconText(f, label, hideText)
 end
 
 local function ShowCombatIcon(m)
+    local hunter = m.dismissKey == "forever:huntertracking"
     local f
-    if EABR.IsReceiverRaidBuff(m) then
+    if hunter then
+        f = GetOrCreateReceiverIcon("HunterTracking")
+        f._hunterTracking = m
+        f:EnableMouse(not m.hunterTrackingStatus)
+        -- EnableMouse turns clicks back on: an icon built in combat lets
+        -- every click through until HideCombatIcons routes it.
+        if not f._routed then f:SetMouseClickEnabled(false) end
+        f._icon:SetAlpha(0)
+        f._eabrBorderFrame:SetAlpha(0)
+    elseif EABR.IsReceiverRaidBuff(m) then
         receiversShown = receiversShown + 1
         f = GetOrCreateReceiverIcon(receiversShown)
     else
@@ -407,7 +417,7 @@ local function ShowCombatIcon(m)
     f._dismissKey = m.dismissKey or nil
     local spellID = m.spellID or (m.data and m.data.castSpell)
     f._icon:SetTexture(m.texture or (spellID and Tex(spellID)) or 134400)
-    SetVisualIconText(f, m.label, m.isEating)
+    SetVisualIconText(f, m.label, m.isEating or hunter)
     EABR.ApplyEatingVisual(f, m)
     EABR.ApplyIconExpiry(f, m)
     EABR.ApplyIconTooltipData(f, m)
@@ -421,6 +431,63 @@ local function ShowCombatIcon(m)
     end
     f:Show()
     combatActiveIcons[#combatActiveIcons+1] = f
+end
+
+-- Native reverse fill slides seven built-in icons behind a fixed viewport.
+-- Lua only styles public cells; it never reads the fill's restricted geometry.
+local function PaintHunterTargetIcon(f, entry)
+    local s = f._hunterIcons
+    if not s then
+        local clip = CreateFrame("Frame", nil, f)
+        clip:SetClipsChildren(true)
+        clip:EnableMouse(false)
+        local ruler = CreateFrame("StatusBar", nil, clip)
+        ruler:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
+        ruler:SetMinMaxValues(0, 16)
+        ruler:SetReverseFill(true)
+        ruler:SetAlpha(0)
+        ruler:EnableMouse(false)
+        s = { clip = clip, ruler = ruler, fill = ruler:GetStatusBarTexture(), icons = {} }
+        f._hunterIcons = s
+        for spellID, creatureTypeID in pairs(EABR._fvHunterTrackingTypes) do
+            local cell = CreateFrame("Frame", nil, clip)
+            cell:EnableMouse(false)
+            cell._icon = cell:CreateTexture(nil, "ARTWORK")
+            cell._icon:SetAllPoints()
+            cell._icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+            cell._icon:SetTexture(Tex(spellID))
+            s.icons[creatureTypeID] = cell
+        end
+    end
+    local p = db.profile.display
+    local size, texture = p.borderSize or 1, p.borderTexture or "solid"
+    local scale = f:GetEffectiveScale()
+    local _, ox, oy, sx, sy = EllesmereUI.BorderPlacement(size, texture,
+        p.borderTextureOffset, p.borderTextureOffsetY, p.borderTextureShiftX, p.borderTextureShiftY,
+        "aurabuffreminders", size, EllesmereUI.BorderPx(p.borderSizePx, size, texture), nil, scale)
+    local pad = math.ceil(max(0, ox + math.abs(sx), oy + math.abs(sy))) + 1
+    local width, height = f:GetSize()
+    local step = width + 2 * pad
+    s.clip:ClearAllPoints()
+    s.clip:SetPoint("TOPLEFT", f, "TOPLEFT", -pad, pad)
+    s.clip:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", pad, -pad)
+    s.ruler:ClearAllPoints()
+    s.ruler:SetSize(16 * step, height + 2 * pad)
+    s.ruler:SetPoint("TOPRIGHT", s.clip, "TOPRIGHT")
+    s.clip:Show()
+    s.ruler:SetValue(entry.hunterTargetTypeID)
+    for creatureTypeID, cell in ipairs(s.icons) do
+        -- Restyle while anchored to the public owner, then restore native positioning.
+        cell:ClearAllPoints()
+        cell:SetPoint("TOPLEFT", f, "TOPLEFT")
+        cell:SetSize(width, height)
+        if s.scale ~= scale and cell._eabrBorderFrame then cell._eabrBorderFrame._eabrSize = nil end
+        EABR.ApplyIconBorder(cell, false)
+        cell:SetAlpha(bit.band(entry.hunterMatchMask, 2 ^ (creatureTypeID - 1)) == 0 and 1 or 0)
+        cell:ClearAllPoints()
+        cell:SetPoint("TOPLEFT", s.fill, "TOPLEFT", (creatureTypeID - 1) * step + pad, -pad)
+    end
+    s.scale = scale
 end
 
 -- Left-aligned from the anchor's left edge; Grow Left right-aligns from its
@@ -451,6 +518,7 @@ local function LayoutCombatIcons()
         EABR.SizeIconBagCount(f, sz)
         f:ClearAllPoints()
         f:SetPoint(pt, combatAnchor, pt, xOff + (i-1)*(sz+spacing), 0)
+        if f._hunterTracking then PaintHunterTargetIcon(f, f._hunterTracking) end
     end
 end
 
@@ -1235,10 +1303,14 @@ function EABR.ApplyIconExpiry(f, m)
             f._expirySwipe = swipe
         end
         swipe:SetReverse(m.expireSwipe == "reverse")
-        swipe:SetCooldown(expireAt - m.expireTotal, m.expireTotal)
+        if swipe._expiryEnd ~= expireAt or swipe._expiryTotal ~= m.expireTotal then
+            swipe:SetCooldown(expireAt - m.expireTotal, m.expireTotal)
+            swipe._expiryEnd, swipe._expiryTotal = expireAt, m.expireTotal
+        end
         swipe:Show()
     elseif swipe then
         swipe:Hide()
+        swipe._expiryEnd, swipe._expiryTotal = nil, nil
     end
     local binding = f._expiryBinding
     if not expireAt then
@@ -1701,6 +1773,10 @@ do
         e.campfireDuration = nil
         e.campfireAddonPicker = nil
         e.foreverFood = nil
+        e.hunterTrackingStatus = nil
+        e.hunterTargetTypeID = nil
+        e.hunterMatchMask = nil
+        e.fvExtra = nil
         return e
     end
 
