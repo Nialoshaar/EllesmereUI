@@ -1409,7 +1409,7 @@ local function GetOrCreateIcon(index)
             ShowForeverGroupMenu(self)
         elseif button == "RightButton" and self._campfireAddonPicker and not InCombat() then
             ShowCampfireAddonMenu(self)
-        elseif button == "RightButton" and (self._foreverFood or self._foreverStatItems) and not InCombat() then
+        elseif button == "RightButton" and (self._foreverFood or self._foreverWeapon or self._foreverStatItems) and not InCombat() then
             ShowForeverItemMenu(self)
         end
     end)
@@ -1700,11 +1700,12 @@ end
 ShowForeverItemMenu = function(btn)
     local profile = db.profile
     local fo = profile.forever
+    local weapon = btn._foreverWeapon
     local statItems = btn._foreverStatItems
     local automaticItem = btn._foreverStatAutomaticItem
     local statFamily = btn._foreverStatFamily
     local class = statItems and GetPlayerClass()
-    local items = statItems or btn._foreverFood
+    local items = weapon and weapon.items or statItems or btn._foreverFood
     if not items then return end
     local ids = {}
     -- The collector reuses the stat item table, so keep the counts shown by this menu.
@@ -1716,6 +1717,7 @@ ShowForeverItemMenu = function(btn)
     local function IsCurrent()
         if InCombat() or db.profile ~= profile or profile.forever ~= fo
             or not (fo and fo.pickerEnabled == true and btn:IsVisible()) then return false end
+        if weapon then return fo.weapon and btn._foreverWeapon == weapon end
         if statItems then
             if not class or GetPlayerClass() ~= class or btn._foreverStatItems ~= statItems
                 or btn._foreverStatFamily ~= statFamily or btn._foreverStatAutomaticItem ~= automaticItem
@@ -1735,6 +1737,12 @@ ShowForeverItemMenu = function(btn)
         if not IsCurrent() or not items[id] then return end
         local count = C_Item.GetItemCount(id)
         if not count or count <= 0 then return end
+        if weapon then
+            fo.weaponPickerItems = fo.weaponPickerItems or {}
+            fo.weaponPickerItems[weapon.slot] = id
+            if _G._EABR_RequestRefresh then _G._EABR_RequestRefresh() end
+            return
+        end
         if statItems then
             local pin = id ~= automaticItem and id or nil
             if statFamily then
@@ -1849,6 +1857,7 @@ do
         e.requestKey = nil; e.requestName = nil
         e.foreverGroup = nil
         e.spellRank = nil
+        e.foreverWeapon = nil
         e.stackText = nil
         e.campfireDuration = nil
         e.campfireAddonPicker = nil

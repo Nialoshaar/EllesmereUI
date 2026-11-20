@@ -234,6 +234,8 @@ if EABR.FOREVER then
         staminaConsumableByClass = {},
         spiritConsumableByClass = {},
         protectionConsumableByClass = {},
+        spellPowerConsumableByClass = {},
+        manaRegenConsumableByClass = {},
         statConsumableLowRank = false,
         statConsumableShowBelow = 0,
         statConsumableSeparateReminders = false,

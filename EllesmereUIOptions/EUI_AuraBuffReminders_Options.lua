@@ -1192,6 +1192,11 @@ initFrame:SetScript("OnEvent", function(self)
                         { key = "protection", label = EllesmereUI.L("Protection"),
                           tooltip = EllesmereUI.L("Scrolls of Protection I-IV") .. "\n" .. EllesmereUI.L("Armor Elixirs") .. "\n\n"
                               .. EllesmereUI.L("Can stack with Devotion Aura.") },
+                        { key = "spellPower", label = EllesmereUI.L("Spell Power"),
+                          tooltip = EllesmereUI.L("Arcane Elixirs") },
+                        { key = "manaRegen", label = EllesmereUI.L("Mana Regen (MP5)"),
+                          tooltip = EllesmereUI.L("Mageblood Elixirs") .. "\n" .. EllesmereUI.L("Elixir of Wicked Regeneration") .. "\n\n"
+                              .. EllesmereUI.L("Mageblood Elixir can stack with Blessing of Wisdom and Mana Well.") },
                     }
                     for _, item in ipairs(items) do
                         if item.lockedTooltip then

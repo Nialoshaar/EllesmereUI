@@ -855,10 +855,29 @@ local function FvLatestAuraExpiration(ids)
     return latest
 end
 
-local function FvWeaponEntry(missing, hand, label, dismissKey, buff, spellID, itemID, hideNoItem, left)
+local function FvWeaponPickerItems(choice, class, wcat)
+    local items
+    for _, buff in ipairs(EABR.FV_WEAPON_BUFFS) do
+        if buff.items and not buff.imbue and (not buff.class or buff.class == class)
+            and (not buff.weapon or buff.weapon == wcat)
+            and (not choice or choice == "auto" or choice == buff.key) then
+            for _, id in ipairs(buff.items) do
+                local count = CachedGetItemCount(id)
+                if count > 0 then
+                    items = items or {}
+                    items[id] = count
+                end
+            end
+        end
+    end
+    return items
+end
+
+local function FvWeaponEntry(missing, hand, label, dismissKey, buff, spellID, itemID, hideNoItem, left, pickerItems)
     if buff.spells and not spellID then return end
     if buff.items and not itemID and hideNoItem then return end
     local e = AcquireEntry()
+    if pickerItems then e.foreverWeapon = { items = pickerItems, slot = hand.slot } end
     if spellID then
         e.mode = "spell"; e.spellID = spellID
     else
@@ -904,9 +923,13 @@ function EABR.CollectForeverWeapons(missing, fo, class)
             if buff and FvNeeds(imbueLeft, warnSec) then
                 FvWeaponEntry(missing, hand, label, hand.imbueKey, buff, spellID, itemID, hideNoItem, imbueLeft)
             end
-            buff, spellID, itemID = FvPick(hands and hands[hand.temp], false, class, wcat, low)
+            local choice = hands and hands[hand.temp]
+            buff, spellID, itemID = FvPick(choice, false, class, wcat, low)
             if buff and FvNeeds(tempLeft, warnSec) then
-                FvWeaponEntry(missing, hand, label, hand.tempKey, buff, spellID, itemID, hideNoItem, tempLeft)
+                local items = PickerEnabled() and FvWeaponPickerItems(choice, class, wcat)
+                local selected = fo.weaponPickerItems and fo.weaponPickerItems[hand.slot]
+                if selected and items and items[selected] then itemID = selected end
+                FvWeaponEntry(missing, hand, label, hand.tempKey, buff, spellID, itemID, hideNoItem, tempLeft, items)
             end
         end
     end
@@ -1146,9 +1169,23 @@ local protectionConsumables = {
         { 4421, 180, 8095 }, { 3389, 150, 3220 }, { 1478, 120, 8094 }, { 3013, 60, 8091 }, { 5997, 50, 673 },
     },
 }
+local spellPowerConsumables = {
+    label = "Spell Power", dismissKey = "forever:spellPower", iconSpell = 1245244,
+    setting = "spellPowerConsumableByClass",
+    items = { { 13454, 35, 17539 }, { 9155, 20, 11390 }, { 250342, 15, 1250971 }, { 247754, 5, 1245244 } },
+}
+local manaRegenConsumables = {
+    label = "Mana Regen (MP5)", dismissKey = "forever:manaRegen", iconSpell = 24363,
+    setting = "manaRegenConsumableByClass",
+    items = {
+        { 250341, 20, 1250948 }, { 20007, 12, 24363 }, { 250336, 10, 1250932 },
+        { 250340, 6, 1250944 }, { 250339, 3, 1250942 },
+    },
+}
 -- The single reminder uses the first eligible stat in dropdown order.
 local statConsumables = {
     intellectConsumables, strengthConsumables, agilityConsumables, staminaConsumables, spiritConsumables, protectionConsumables,
+    spellPowerConsumables, manaRegenConsumables,
 }
 local statBonusesToBeat = {}
 local statExpirations = {}
