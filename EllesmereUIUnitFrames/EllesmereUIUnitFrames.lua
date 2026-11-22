@@ -371,6 +371,7 @@ local defaults = {
             btbClassIconLocation = "left",
             btbClassIconX = 0,
             btbClassIconY = 0,
+            pingSelfOnly = false,
             showPortrait = true,
             portraitStyle = "attached",
             portraitMode = "2d",
@@ -548,6 +549,7 @@ local defaults = {
             healthHeight = 46,
             powerHeight = 6,
             powerPosition = "below",
+            hideEmptyPower = false,  -- Hide Empty Power Bar (WoW Forever, opt-in)
             powerWidth = 0,
             powerX = 0,
             powerY = -4,
@@ -988,6 +990,7 @@ local defaults = {
             healthHeight = 34,
             powerHeight = 6,
             powerPosition = "below",
+            hideEmptyPower = false,  -- Hide Empty Power Bar (WoW Forever, opt-in)
             powerWidth = 0,
             powerX = 0,
             powerY = -4,
@@ -2423,8 +2426,40 @@ local function ApplyDarkTheme(health, unit)
         -- the element has not resolved one yet.
         if health.PostUpdateColor then health:PostUpdateColor(unit, nil) end
     end
+    -- Hide Empty Power Bar's second health bar takes the same paint (WoW
+    -- Forever; EUI_UnitFrames_ForeverEmptyPower.lua). Off: one field read.
+    if health._epMirror then ns.UF_EmptyPowerPaint(health, unit) end
+    -- The Forever druid combo row's health strip takes the same paint (EUI_UnitFrames_Init.lua).
+    if health._euiStrip then ns.UF_PaintHealthMirror(health, unit, "_euiStrip", "_euiStripChain") end
 end
 ns.ApplyDarkTheme = ApplyDarkTheme
+
+-- A second health bar of ours over part of the frame (Hide Empty Power Bar's,
+-- the WoW Forever druid combo row's strip), held in health[mirrorKey]: painted
+-- as the health bar is painted, its PostUpdateColor chained behind the health
+-- bar's (health[chainKey] marks the chain). Returns the bar, nil without one.
+function ns.UF_PaintHealthMirror(health, unit, mirrorKey, chainKey)
+    local m = health[mirrorKey]
+    if not m then return nil end
+    local key = health._euiUnitKey
+    m._euiUnitKey = key
+    ApplyHealthBarTexture(m, key)
+    m:SetStatusBarColor(health:GetStatusBarColor())
+    ApplyHealthBarAlpha(m, key)
+    m:SetReverseFill(health:GetReverseFill() and true or false)
+    ApplyDarkTheme(m, unit)
+    local puc = health.PostUpdateColor
+    if puc and puc ~= health[chainKey] then
+        local function chain(self, u, color)
+            puc(self, u, color)
+            local mm = self[mirrorKey]
+            if mm and mm.PostUpdateColor then mm:PostUpdateColor(u, color) end
+        end
+        health[chainKey] = chain
+        health.PostUpdateColor = chain
+    end
+    return m
+end
 
 -- Re-apply dark theme to every frame when the global Dark Mode palette changes
 -- (fill/bg colour + opacity). Class/power darken propagates via ApplyColorsToOUF,

@@ -84,6 +84,8 @@ initFrame:SetScript("OnEvent", function(self)
                 -- the roster's spellUprank, the ranks each character has had, is not a setting: it stays, so the
                 -- option turned on again swaps only ranks learned since
                 EllesmereUIDB.spellUprank = nil
+                EllesmereUIDB.lfgLanguages = nil
+                EllesmereUIDB.lfgZones = nil
                 EllesmereUIDB.junkList = nil
                 EllesmereUIDB.junkListExcluded = nil
                 EllesmereUIDB.simplifiedStats = nil
@@ -130,6 +132,7 @@ initFrame:SetScript("OnEvent", function(self)
                 LF.ApplyPosition()
             end
             if EllesmereUI._SpellUprank then EllesmereUI._SpellUprank.Apply() end
+            if EllesmereUI._LFGZones then EllesmereUI._LFGZones.Apply() end
             if EllesmereUI._JunkItems then EllesmereUI._JunkItems.Apply() end
             if EllesmereUI._ActiveForm then EllesmereUI._ActiveForm.Apply() end
             if EllesmereUI._ClassicSpellbook then EllesmereUI._ClassicSpellbook.Apply() end

@@ -27,7 +27,7 @@ if not ns then return end
 -------------------------------------------------------------------------------
 
 local UnitExists, UnitIsPlayer = UnitExists, UnitIsPlayer
-local UnitReaction = UnitReaction
+local UnitReaction, UnitIsFriend = UnitReaction, UnitIsFriend
 local UnitGUID, UnitPlayerControlled = UnitGUID, UnitPlayerControlled
 local UnitIsTapDenied = UnitIsTapDenied
 local UnitPlayerOrPetInParty = UnitPlayerOrPetInParty
@@ -278,11 +278,18 @@ end
 -- A player's override: the first enabled relationship that matches. A player
 -- you can attack never reaches here: that plate is the enemy system's.
 local function PlayerColor(unit, fp)
+    local friend   -- asked once, and only once an entry with a matcher is on
     for i = 1, #PLAYER_ENTRIES do
         local item = PLAYER_ENTRIES[i]
         -- Entries without a matcher (the pets') answer their own branch below.
         -- The matcher (a unit API call) runs only for an entry that is on.
-        if item.match and On(fp, item) and item.match(unit) then return EntryColor(fp, item) end
+        if item.match and On(fp, item) then
+            -- An unflagged opposite-faction player is not attackable but no
+            -- friend either: no friendly relationship colour reaches it.
+            if friend == nil then friend = UnitIsFriend("player", unit) and true or false end
+            if not friend then return nil end
+            if item.match(unit) then return EntryColor(fp, item) end
+        end
     end
     return nil
 end

@@ -86,6 +86,16 @@ local function PaintCell(w, slot, placeholder, showLabels, showCooldowns, wantLa
     w.icon:SetShown(not placeholder)
     w.plus:SetShown(placeholder)
 
+    -- An emote's name on its icon (every emote wears the same bubble), whatever
+    -- the label settings say; it stays inside the icon's square in every layout.
+    local named = not placeholder and slot ~= nil and slot.kind == "emote"
+        and name ~= nil
+    if named then
+        w.iconName:SetTextHeight(max(7, floor((iconSize or 40) * 0.24)))
+        w.iconName:SetText(name)
+    end
+    w.iconName:SetShown(named)
+
     local labelled = showLabels and wantLabel and name ~= nil
     w.label:SetText((labelled and EllesmereUI.L(name)) or "")
     w.label:SetShown(labelled or false)

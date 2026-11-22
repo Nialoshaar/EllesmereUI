@@ -181,8 +181,9 @@ _G._EUI_BuildForeverGeneralPage = function(pageName, parent, yOffset)
     --  Valuable Quest Reward (EllesmereUIForeverEssentials_QuestRewards.lua) |
     --  Gathering Skill in Tooltips (EllesmereUIForeverEssentials_GatherSkill.lua;
     --  its cog: Skinning), then Auto Summon Pet | Favorites per
-    --  Character. Every control reads and writes its feature's own key and
-    --  runs that feature's own apply.
+    --  Character, then Show Solo Player Zones
+    --  (EllesmereUIForeverEssentials_LFGZones.lua). Every control reads and
+    --  writes its feature's own key and runs that feature's own apply.
     ---------------------------------------------------------------------------
     local QR, GS = EllesmereUI._QuestRewards, EllesmereUI._GatherSkill
     _, h = W:SectionHeader(parent, "GENERAL", y);  y = y - h
@@ -311,6 +312,18 @@ _G._EUI_BuildForeverGeneralPage = function(pageName, parent, yOffset)
               end }
         );  y = y - h
     end
+
+    local LZ = EllesmereUI._LFGZones
+    _, h = W:DualRow(parent, y,
+        { type = "toggle", text = "Show Solo Player Zones",
+          tooltip = "Shows the zone of the players listed on their own (not in a group) on their row of the Looking For Group window.",
+          getValue = function() return LZ.Get("enabled") end,
+          setValue = function(v)
+              LZ.Cfg().enabled = v
+              LZ.Apply()
+          end },
+        BLANK()
+    );  y = y - h
 
     ---------------------------------------------------------------------------
     --  NAME FORMAT (while a module with a Name Format is on)

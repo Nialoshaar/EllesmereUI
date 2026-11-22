@@ -1603,6 +1603,7 @@ L["EllesmereUI"]                = true   -- nom de l'addon
 L["Elyndra"]                    = true   -- ⚠ PNJ à vérifier
 L["Embertide"]                  = true   -- ⚠ zone/PNJ introuvable
 L["Emerald Coach's Whistle"]    = "Sifflet d'entraînement d'émeraude"
+L["Emotes"]                     = "Émotes"
 L["Empty Bar Color"]            = "Couleur de barre vide"
 L["Empty Bar Overlay"]          = "Superposition de barre vide"
 L["Enable "]                    = "Activer "
@@ -2391,7 +2392,6 @@ L["Reputation and Honor"]       = "Réputation et honneur"
 L["Loot and Money"]             = "Butin et argent"
 L["System Messages"]            = "Messages système"
 L["NPC Speech"]                 = "Paroles de PNJ"
-L["Emotes"]                     = "Emotes"
 L["Idle Fade Strength"]         = "Intensité du fondu à l'inactivité"
 L["Ignore If Class Tracking Is Active"] = "Ignorer si un suivi de classe est actif"
 L["Ignored"]                    = "Ignoré"
@@ -7035,3 +7035,13 @@ L["Select a Talent"] = "Sélectionner un talent"
 L["Picked"] = "Choisi"
 L["Click: pick this talent"] = "Clic : choisir ce talent"
 L["Click the talent this reminder is for."] = "Cliquez sur le talent concerné par ce rappel."
+-- Unspent Legacy Points alert (EllesmereUIQoL_Alerts.lua, WoW Forever)
+L["Unspent Legacy points"] = "Points Legacy non dépensés"
+L["Unspent Legacy Points Alert"] = "Alerte de points Legacy non dépensés"
+L["Unspent Legacy Points Alert Settings"] = "Réglages de l'alerte de points Legacy"
+L["Shows on-screen text while you have Legacy points to spend, until you spend them or open the Legacy window."] = "Affiche un texte à l'écran tant qu'il vous reste des points Legacy à dépenser, jusqu'à ce que vous les dépensiez ou ouvriez la fenêtre Legacy."
+-- Choose Languages (EllesmereUIForeverEssentials_LFGLanguages.lua)
+L["Choose Languages"] = "Choix des langues"
+-- Show Solo Player Zones (EllesmereUIForeverEssentials_LFGZones.lua)
+L["Show Solo Player Zones"] = "Afficher la zone des joueurs seuls"
+L["Shows the zone of the players listed on their own (not in a group) on their row of the Looking For Group window."] = "Affiche la zone où se trouvent les joueurs inscrits seuls (hors groupe) sur leur ligne de la Recherche de groupe."
