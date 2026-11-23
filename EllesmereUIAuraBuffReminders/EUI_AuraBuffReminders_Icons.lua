@@ -1624,7 +1624,7 @@ ShowForeverItemMenu = function(btn)
     local statItems = btn._foreverStatItems
     local statFamily = btn._foreverStatFamily
     local class = statItems and GetPlayerClass()
-    local items = weapon and weapon.items or statItems or btn._foreverFood
+    local items = weapon and weapon.actions or statItems or btn._foreverFood
     if not items then return end
     local ids = {}
     -- The collector reuses the stat item table, so keep the counts shown by this menu.
@@ -1636,7 +1636,12 @@ ShowForeverItemMenu = function(btn)
     local function IsCurrent()
         if InCombat() or db.profile ~= profile or profile.forever ~= fo
             or not (fo and fo.pickerEnabled == true and btn:IsVisible()) then return false end
-        if weapon then return fo.weapon and btn._foreverWeapon == weapon end
+        if weapon then
+            local hands = fo.weaponHands and fo.weaponHands[weapon.class]
+            return fo.weapon and btn._foreverWeapon == weapon and GetPlayerClass() == weapon.class
+                and (hands and hands[weapon.field] or "auto") == weapon.choice
+                and GetInventoryItemID("player", weapon.slot) == weapon.weaponID
+        end
         if statItems then
             if not class or GetPlayerClass() ~= class or btn._foreverStatItems ~= statItems
                 or btn._foreverStatFamily ~= statFamily
@@ -1654,14 +1659,18 @@ ShowForeverItemMenu = function(btn)
     table.sort(ids)
     local function SelectItem(id)
         if not IsCurrent() or not items[id] then return end
-        local count = C_Item.GetItemCount(id)
-        if not count or count <= 0 then return end
         if weapon then
-            fo.weaponPickerItems = fo.weaponPickerItems or {}
-            fo.weaponPickerItems[weapon.slot] = id
+            if items[id] == true then
+                if not C_SpellBook.IsSpellKnown(id) then return end
+            elseif (C_Item.GetItemCount(id) or 0) <= 0 then
+                return
+            end
+            EABR.SelectForeverWeaponAction(weapon, id)
             if _G._EABR_RequestRefresh then _G._EABR_RequestRefresh() end
             return
         end
+        local count = C_Item.GetItemCount(id)
+        if not count or count <= 0 then return end
         if statItems then
             if statFamily then
                 fo.statConsumablePickerByFamily = fo.statConsumablePickerByFamily or {}
@@ -1684,15 +1693,21 @@ ShowForeverItemMenu = function(btn)
         for _, id in ipairs(ids) do
             local button = root:CreateButton("", SelectItem, id)
             button:AddInitializer(function(frame, description)
-                local itemID = description:GetData()
-                DrawPickerIcon(frame, C_Item.GetItemIconByID(itemID), btn._tooltipItem == itemID)
+                local actionID = description:GetData()
+                local spell = weapon and items[actionID] == true
+                if spell then
+                    DrawPickerIcon(frame, Tex(actionID), btn._tooltipSpell == actionID)
+                else
+                    DrawPickerIcon(frame, C_Item.GetItemIconByID(actionID), btn._tooltipItem == actionID)
+                end
                 local count = frame:AttachFontString()
                 count:SetFontObject(NumberFontNormalSmall)
                 count:SetDrawLayer("OVERLAY", 7)
                 count:SetWidth(30)
                 count:SetJustifyH("RIGHT")
                 count:SetPoint("CENTER", frame, "CENTER", 0, -10)
-                count:SetText(items[itemID])
+                count:SetText(spell and ((C_Spell.GetSpellSubtext(actionID) or ""):match("%d+") or "")
+                    or (statSnapshot or items)[actionID])
                 return 38, 38
             end)
             button:SetTooltip(function(tooltip, description)
@@ -1700,7 +1715,12 @@ ShowForeverItemMenu = function(btn)
                 tooltip:SetOwner(owner, "ANCHOR_NONE")
                 tooltip:ClearAllPoints()
                 tooltip:SetPoint("BOTTOMLEFT", owner, "TOPRIGHT", 4, 4)
-                tooltip:SetItemByID(description:GetData())
+                local actionID = description:GetData()
+                if weapon and items[actionID] == true then
+                    tooltip:SetSpellByID(actionID)
+                else
+                    tooltip:SetItemByID(actionID)
+                end
             end)
         end
     end)
