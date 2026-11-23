@@ -1259,7 +1259,7 @@ end
 
 local ShowForeverGroupMenu
 local iconPickerStyle
-local ShowForeverFoodMenu
+local ShowForeverItemMenu
 
 local function GetOrCreateIcon(index)
     if iconPool[index] then return iconPool[index] end
@@ -1289,8 +1289,8 @@ local function GetOrCreateIcon(index)
             if _G._EABR_RequestRefresh then _G._EABR_RequestRefresh() end
         elseif button == "RightButton" and self._foreverGroup and not InCombat() then
             ShowForeverGroupMenu(self)
-        elseif button == "RightButton" and self._foreverFood and not InCombat() then
-            ShowForeverFoodMenu(self)
+        elseif button == "RightButton" and (self._foreverFood or self._foreverWeapon) and not InCombat() then
+            ShowForeverItemMenu(self)
         elseif button == "RightButton" and self._campfireAddonPicker and not InCombat() then
             ShowCampfireAddonMenu(self)
         end
@@ -1579,22 +1579,39 @@ function EABR.ForeverFoodMacro(itemID)
     return macro
 end
 
-ShowForeverFoodMenu = function(btn)
+ShowForeverItemMenu = function(btn)
     local profile = db.profile
     local fo = profile.forever
-    local foods = btn._foreverFood
+    local weapon = btn._foreverWeapon
+    local items = weapon and weapon.actions or btn._foreverFood
     local function IsCurrent()
-        return not InCombat() and db.profile == profile and profile.forever == fo
-            and fo and fo.pickerEnabled == true and fo.wellFed
-            and foods and EABR.IsForeverFoodCurrent(foods) and btn._foreverFood == foods and btn:IsVisible()
+        if InCombat() or db.profile ~= profile or profile.forever ~= fo
+            or not (fo and fo.pickerEnabled == true and items and btn:IsVisible()) then return false end
+        if weapon then
+            local hands = fo.weaponHands and fo.weaponHands[weapon.class]
+            return fo.weapon and btn._foreverWeapon == weapon and GetPlayerClass() == weapon.class
+                and (hands and hands[weapon.field] or "auto") == weapon.choice
+                and GetInventoryItemID("player", weapon.slot) == weapon.weaponID
+        end
+        return fo.wellFed and EABR.IsForeverFoodCurrent(items) and btn._foreverFood == items
     end
     if not IsCurrent() then return end
     local ids = {}
-    for id in pairs(foods) do ids[#ids + 1] = id end
+    for id in pairs(items) do ids[#ids + 1] = id end
     if #ids == 0 then return end
     table.sort(ids)
-    local function SelectFood(id)
-        if not IsCurrent() or not foods[id] then return end
+    local function SelectItem(id)
+        if not IsCurrent() or not items[id] then return end
+        if weapon then
+            if items[id] == true then
+                if not C_SpellBook.IsSpellKnown(id) then return end
+            elseif (C_Item.GetItemCount(id) or 0) <= 0 then
+                return
+            end
+            EABR.SelectForeverWeaponAction(weapon, id)
+            if _G._EABR_RequestRefresh then _G._EABR_RequestRefresh() end
+            return
+        end
         local count = C_Item.GetItemCount(id)
         if not count or count <= 0 then return end
         fo.wellFedItem = id
@@ -1604,17 +1621,23 @@ ShowForeverFoodMenu = function(btn)
     end
     ShowPickerGrid(btn, ids, IsCurrent, function(root)
         for _, id in ipairs(ids) do
-            local button = root:CreateButton("", SelectFood, id)
+            local button = root:CreateButton("", SelectItem, id)
             button:AddInitializer(function(frame, description)
-                local itemID = description:GetData()
-                DrawPickerIcon(frame, C_Item.GetItemIconByID(itemID), btn._tooltipItem == itemID)
+                local actionID = description:GetData()
+                local spell = weapon and items[actionID] == true
+                if spell then
+                    DrawPickerIcon(frame, Tex(actionID), btn._tooltipSpell == actionID)
+                else
+                    DrawPickerIcon(frame, C_Item.GetItemIconByID(actionID), btn._tooltipItem == actionID)
+                end
                 local count = frame:AttachFontString()
                 count:SetFontObject(NumberFontNormalSmall)
                 count:SetDrawLayer("OVERLAY", 7)
                 count:SetWidth(30)
                 count:SetJustifyH("RIGHT")
                 count:SetPoint("CENTER", frame, "CENTER", 0, -10)
-                count:SetText(foods[itemID])
+                count:SetText(spell and ((C_Spell.GetSpellSubtext(actionID) or ""):match("%d+") or "")
+                    or items[actionID])
                 return 38, 38
             end)
             button:SetTooltip(function(tooltip, description)
@@ -1622,7 +1645,12 @@ ShowForeverFoodMenu = function(btn)
                 tooltip:SetOwner(owner, "ANCHOR_NONE")
                 tooltip:ClearAllPoints()
                 tooltip:SetPoint("BOTTOMLEFT", owner, "TOPRIGHT", 4, 4)
-                tooltip:SetItemByID(description:GetData())
+                local actionID = description:GetData()
+                if weapon and items[actionID] == true then
+                    tooltip:SetSpellByID(actionID)
+                else
+                    tooltip:SetItemByID(actionID)
+                end
             end)
         end
     end)
@@ -1690,6 +1718,7 @@ do
         e.foreverGroup = nil
         e.spellRank = nil
         e.foreverFood = nil
+        e.foreverWeapon = nil
         e.stackText = nil
         e.campfireDuration = nil
         e.campfireAddonPicker = nil

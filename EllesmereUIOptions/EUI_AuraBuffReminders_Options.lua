@@ -2114,6 +2114,7 @@ initFrame:SetScript("OnEvent", function(self)
                 end
                 local function HandRow(label, field, values, order)
                     return { type="dropdown", label=label, values=values, order=order, ddWidth=200,
+                      tooltip="With Action Picker enabled, right-click the reminder to choose an action. Auto and specific buffs use the choice for this reminder only. Off remembers your choice for future reminders. With Action Picker disabled, Off hides the reminder.",
                       get=function()
                           local f = FDB(); local t = f and f.weaponHands and f.weaponHands[class]
                           return t and t[field] or "auto"
