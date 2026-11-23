@@ -770,6 +770,7 @@ local FV_HANDS = {
       imbueKey = "forever:weapon_oh_imbue", tempKey = "forever:weapon_oh_temp", macros = {} },
 }
 local FISHING_POLE = 20
+local weaponPickerOverrides = {}
 
 local function FvWeaponCategory(slot)
     local cat = GetWeaponCategory(slot)
@@ -808,15 +809,18 @@ local function FvAvailable(buff, low)
     end
 end
 
+local function FvMatchesWeaponBuff(buff, choice, isImbue, class, wcat)
+    return (not choice or choice == "auto" or choice == buff.key) and (buff.imbue == true) == isImbue
+        and (not buff.class or buff.class == class) and (not buff.weapon or buff.weapon == wcat)
+end
+
 local function FvPick(choice, isImbue, class, wcat, low)
     if choice == "off" then return nil end
     local auto = choice == nil or choice == "auto"
     local list = EABR.FV_WEAPON_BUFFS
     for i = 1, #list do
         local buff = list[i]
-        if (auto or choice == buff.key) and (buff.imbue == true) == isImbue
-           and (not buff.class or buff.class == class)
-           and (not buff.weapon or buff.weapon == wcat) then
+        if FvMatchesWeaponBuff(buff, choice, isImbue, class, wcat) then
             local spellID, itemID = FvAvailable(buff, low)
             if spellID or itemID or not auto then return buff, spellID, itemID end
         end
@@ -855,41 +859,60 @@ local function FvLatestAuraExpiration(ids)
     return latest
 end
 
-local function FvWeaponPickerItems(choice, class, wcat)
-    local items
+local function FvWeaponPickerActions(choice, isImbue, class, wcat)
+    local actions
     for _, buff in ipairs(EABR.FV_WEAPON_BUFFS) do
-        if buff.items and not buff.imbue and (not buff.class or buff.class == class)
-            and (not buff.weapon or buff.weapon == wcat)
-            and (not choice or choice == "auto" or choice == buff.key) then
-            for _, id in ipairs(buff.items) do
-                local count = CachedGetItemCount(id)
-                if count > 0 then
-                    items = items or {}
-                    items[id] = count
+        if FvMatchesWeaponBuff(buff, choice, isImbue, class, wcat) then
+            if buff.spells then
+                for _, id in ipairs(buff.spells) do
+                    if C_SpellBook.IsSpellKnown(id) then
+                        actions = actions or {}
+                        actions[id] = true
+                    end
+                end
+            else
+                for _, id in ipairs(buff.items) do
+                    local count = CachedGetItemCount(id)
+                    if count > 0 then
+                        actions = actions or {}
+                        actions[id] = count
+                    end
                 end
             end
         end
     end
-    return items
+    return actions
 end
 
-local function FvWeaponEntry(missing, hand, label, dismissKey, buff, spellID, itemID, hideNoItem, left, pickerItems)
-    if buff.spells and not spellID then return end
-    if buff.items and not itemID and hideNoItem then return end
+function EABR.SelectForeverWeaponAction(picker, id)
+    if picker.choice == "off" then
+        local fo = picker.profile
+        local byClass = fo.weaponPickerByClass
+        if not byClass then byClass = {}; fo.weaponPickerByClass = byClass end
+        local picks = byClass[picker.class]
+        if not picks then picks = {}; byClass[picker.class] = picks end
+        picks[picker.field] = id
+    else
+        picker.selectedID = id
+        weaponPickerOverrides[picker.field] = picker
+    end
+end
+
+local function FvWeaponEntry(missing, hand, label, dismissKey, spellID, itemID, fallbackItem, left, picker)
     local e = AcquireEntry()
-    if pickerItems then e.foreverWeapon = { items = pickerItems, slot = hand.slot } end
+    e.foreverWeapon = picker
     if spellID then
         e.mode = "spell"; e.spellID = spellID
     else
-        local shown = itemID or buff.items[#buff.items]
-        e.texture = C_Item.GetItemIconByID(shown) or 134400
+        local shown = itemID or fallbackItem
+        e.texture = (shown and C_Item.GetItemIconByID(shown)) or 134400
         e.tooltipItem = shown
         e.bagCount = itemID and CachedGetItemCount(itemID) or 0
         e.desaturated = not itemID
         if itemID then
             local macro = hand.macros[itemID]
             if not macro then
-                macro = "/use item:" .. itemID .. "\n/use " .. hand.slot
+                macro = "/use [nocombat] item:" .. itemID .. "\n/use [nocombat] " .. hand.slot
                 hand.macros[itemID] = macro
             end
             e.mode = "macro"; e.macro = macro
@@ -903,10 +926,56 @@ local function FvWeaponEntry(missing, hand, label, dismissKey, buff, spellID, it
     missing[#missing+1] = e
 end
 
-function EABR.CollectForeverWeapons(missing, fo, class)
-    if not (C_Item.GetWeaponEnchantInfo and Enum.WeaponSlot and Enum.ItemEnchantType) then return end
+local function FvCollectWeaponBuff(missing, fo, hand, label, class, wcat, left, warnSec, isImbue)
+    local field = isImbue and hand.imbue or hand.temp
+    local dismissKey = isImbue and hand.imbueKey or hand.tempKey
     local hands = fo.weaponHands and fo.weaponHands[class]
-    local low, hideNoItem = fo.weaponLowRank == true, fo.weaponHideNoItem ~= false
+    local choice = hands and hands[field] or "auto"
+    local override = weaponPickerOverrides[field]
+    weaponPickerOverrides[field] = nil
+    local off = choice == "off"
+    if _dismissedUntilLoad[dismissKey] or (off and fo.pickerEnabled ~= true) then return end
+
+    local picker
+    local buff, spellID, itemID = FvPick(choice, isImbue, class, wcat, fo.weaponLowRank == true)
+    if (not off and not buff) or not FvNeeds(left, warnSec) then return end
+    if fo.pickerEnabled == true then
+        local actions = FvWeaponPickerActions(off and "auto" or choice, isImbue, class, wcat)
+        if actions then
+            local weaponID = GetInventoryItemID("player", hand.slot)
+            picker = { actions = actions, choice = choice, class = class, field = field,
+                profile = fo, weaponID = weaponID, slot = hand.slot }
+            local selected
+            if off then
+                local picks = fo.weaponPickerByClass and fo.weaponPickerByClass[class]
+                selected = picks and picks[field]
+                if not selected and not isImbue and fo.weaponPickerItems then
+                    selected = fo.weaponPickerItems[hand.slot]
+                end
+            elseif override and override.profile == fo and override.choice == choice
+                and override.class == class and override.weaponID == weaponID and actions[override.selectedID] then
+                selected = override.selectedID
+                weaponPickerOverrides[field] = override
+            end
+            if selected and actions[selected] == true then
+                spellID, itemID = selected, nil
+            elseif selected and actions[selected] then
+                spellID, itemID = nil, selected
+            end
+        end
+    end
+    local fallbackItem
+    if buff and buff.items and fo.weaponHideNoItem == false then fallbackItem = buff.items[#buff.items] end
+    if spellID or itemID or fallbackItem or (off and picker) then
+        FvWeaponEntry(missing, hand, label, dismissKey, spellID, itemID, fallbackItem, left, picker)
+    end
+end
+
+function EABR.CollectForeverWeapons(missing, fo, class)
+    if not (C_Item.GetWeaponEnchantInfo and Enum.WeaponSlot and Enum.ItemEnchantType) then
+        wipe(weaponPickerOverrides)
+        return
+    end
     local showBelow = fo.weaponShowBelow or 1
     local warnSec = showBelow > 0 and showBelow * 60 or nil
     local mhFull, ohFull = EllesmereUI.L(FV_HANDS[1].label), EllesmereUI.L(FV_HANDS[2].label)
@@ -919,18 +988,11 @@ function EABR.CollectForeverWeapons(missing, fo, class)
         if wcat then ok, imbueLeft, tempLeft = FvWeaponEnchants(hand.ws) end
         if ok then
             local label = i == 1 and mhLabel or ohLabel
-            local buff, spellID, itemID = FvPick(hands and hands[hand.imbue], true, class, wcat, low)
-            if buff and FvNeeds(imbueLeft, warnSec) then
-                FvWeaponEntry(missing, hand, label, hand.imbueKey, buff, spellID, itemID, hideNoItem, imbueLeft)
-            end
-            local choice = hands and hands[hand.temp]
-            buff, spellID, itemID = FvPick(choice, false, class, wcat, low)
-            if buff and FvNeeds(tempLeft, warnSec) then
-                local items = PickerEnabled() and FvWeaponPickerItems(choice, class, wcat)
-                local selected = fo.weaponPickerItems and fo.weaponPickerItems[hand.slot]
-                if selected and items and items[selected] then itemID = selected end
-                FvWeaponEntry(missing, hand, label, hand.tempKey, buff, spellID, itemID, hideNoItem, tempLeft, items)
-            end
+            FvCollectWeaponBuff(missing, fo, hand, label, class, wcat, imbueLeft, warnSec, true)
+            FvCollectWeaponBuff(missing, fo, hand, label, class, wcat, tempLeft, warnSec, false)
+        else
+            weaponPickerOverrides[hand.imbue] = nil
+            weaponPickerOverrides[hand.temp] = nil
         end
     end
 end
@@ -1489,6 +1551,7 @@ function EABR.CollectForever(missing, inInstance, inPvP, playerClass)
     end
     local watchFood = pickerEnabled and not inPvP and fo.wellFed or false
     if not shows then
+        wipe(weaponPickerOverrides)
         EABR.FvSyncConsumableItemEvents(false, false)
         EABR.SyncForeverFoodWatch(false)
         return
@@ -1714,6 +1777,8 @@ function EABR.CollectForever(missing, inInstance, inPvP, playerClass)
     end
     if fo.weapon == true then
         EABR.CollectForeverWeapons(missing, fo, GetPlayerClass())
+    else
+        wipe(weaponPickerOverrides)
     end
     local groups = fo.customGroups
     if groups and groups[1] then
@@ -1980,6 +2045,7 @@ end
 -- watch and the minimap, target, weapon and bag events); the next pass that can show
 -- re-arms them.
 function EABR.FvStandDown(keepSleepProgress)
+    wipe(weaponPickerOverrides)
     SyncCampfireWatch(false)
     EABR.SyncForeverFoodWatch(false)
     EABR.FvSyncGroupWatch(nil, false)
