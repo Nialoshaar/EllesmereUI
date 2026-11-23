@@ -1251,6 +1251,21 @@ local manaRegenConsumables = {
 local statConsumables = {
     intellectConsumables, strengthConsumables, agilityConsumables, staminaConsumables, spiritConsumables, protectionConsumables,
     spellPowerConsumables, manaRegenConsumables,
+    {
+        label = "Health Regen (HP5)", dismissKey = "forever:healthRegen", iconSpell = 24361,
+        setting = "healthRegenConsumableByClass",
+        items = { { 20004, 20, 24361 }, { 3826, 12, 3223 }, { 250336, 9, 1250932 }, { 3388, 6, 3222 }, { 3382, 2, 3219 } },
+    },
+    {
+        label = "Healing Done", dismissKey = "forever:healingDone", iconSpell = 1250926,
+        setting = "healingDoneConsumableByClass",
+        items = { { 250333, 40, 1250926 }, { 250332, 30, 1250925 }, { 250331, 20, 1250924 }, { 250330, 10, 1250922 } },
+    },
+    {
+        label = "Attack Power", dismissKey = "forever:attackPower", iconSpell = 17038,
+        setting = "attackPowerConsumableByClass",
+        items = { { 246948, 35, 17038 }, { 12820, 35, 17038 } },
+    },
 }
 local statBonusesToBeat = {}
 local statExpirations = {}
