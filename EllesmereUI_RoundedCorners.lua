@@ -342,6 +342,25 @@ local function SolidParts(st, cont)
     return sd
 end
 
+local function PaintSolidTint(sd, cont)
+    local gradient = cont._borderGradient
+    if gradient then
+        if sd.gradientRevision == gradient.revision then return end
+        sd.fill:SetVertexColor(1, 1, 1, 1)
+        sd.fill:SetGradient(gradient.direction, gradient.start, gradient.finish)
+        sd.gradientRevision = gradient.revision
+    else
+        sd.gradientRevision = nil
+        sd.fill:SetVertexColor(cont._top:GetVertexColor())
+    end
+end
+
+function EllesmereUI.SyncRoundedSolidTint(border, cont)
+    local st = byBorder[border]
+    local sd = st and st.solid
+    if sd and sd.on and sd.cont == cont then PaintSolidTint(sd, cont) end
+end
+
 -- radius: outer radius; inner: the body mask's radius (the hole is the same
 -- nine-slice shape at the same anchors, so body and border always meet
 -- without a gap, whatever size the client draws slice corners at).
@@ -380,6 +399,7 @@ local function SolidOn(st, cont, radius, inner)
     if sd.radius ~= radius or sd.corners ~= corners then
         SetRounded(sd.fill, radius, corners)
         sd.radius, sd.corners = radius, corners
+        sd.gradientRevision = nil
     end
     -- The layer draws where the container does.
     local layer = sd.layer
@@ -388,19 +408,46 @@ local function SolidOn(st, cont, radius, inner)
         local lvl = cont:GetFrameLevel()
         if layer:GetFrameLevel() ~= lvl then layer:SetFrameLevel(lvl) end
     end
-    sd.fill:SetVertexColor(cont._top:GetVertexColor())
+    PaintSolidTint(sd, cont)
     sd.fill:Show()
 end
 
 -------------------------------------------------------------------------------
 --  Glow / Shadow: the stock glow redrawn round
 -------------------------------------------------------------------------------
+local GLOW_BACKDROP_PARTS = {
+    "TopLeftCorner", "TopRightCorner", "BottomLeftCorner", "BottomRightCorner",
+    "TopEdge", "BottomEdge", "LeftEdge", "RightEdge",
+}
+
+local function HideSquareGlow(gl)
+    local bd = gl.bd
+    local hidden = gl.hiddenBackdropParts
+    -- Recolouring a backdrop touches its individual slices. Keep the square
+    -- art hidden while the rounded copy owns the visible border.
+    for _, key in ipairs(GLOW_BACKDROP_PARTS) do
+        local part = bd[key]
+        if part and part:IsShown() then
+            hidden[part] = true
+            part:Hide()
+        end
+    end
+    bd:SetAlpha(0)
+end
+
+local function RestoreSquareGlow(gl)
+    for part in pairs(gl.hiddenBackdropParts) do part:Show() end
+    wipe(gl.hiddenBackdropParts)
+    gl.bd:SetAlpha(1)
+end
+
 local function GlowOff(st)
     local gl = st.glow
     if not gl or not gl.on then return end
-    gl.bd:SetAlpha(1)
+    RestoreSquareGlow(gl)
     gl.frame:Hide()
     gl.on = nil
+    gl.gradientPainted = nil
 end
 
 local function GlowParts(st, border)
@@ -410,7 +457,7 @@ local function GlowParts(st, border)
     -- the state that holds it is dropped once that frame is dressed again.
     local f = POOL.CreateFrame("Frame", nil, border)
     f:EnableMouse(false)
-    gl = { frame = f, corner = {}, edge = {} }
+    gl = { frame = f, corner = {}, edge = {}, hiddenBackdropParts = {} }
     -- Corner pieces: art, size, place and crop are set per shape by GlowOn.
     for i = 1, 4 do
         local t = f:CreateTexture(nil, "BORDER")
@@ -467,7 +514,7 @@ local function GlowOn(st, border, bd, radius)
     local f = gl.frame
     -- A new border or backdrop: the old one gets its alpha back.
     if gl.bd ~= bd then
-        if gl.bd then gl.bd:SetAlpha(1) end
+        if gl.bd then RestoreSquareGlow(gl) end
         gl.bd = bd
         gl.S = nil
     end
@@ -484,6 +531,7 @@ local function GlowOn(st, border, bd, radius)
     local lvl = bd:GetFrameLevel()
     if gl.S ~= S or gl.E ~= E or gl.half ~= half or gl.lvl ~= lvl or gl.corners ~= corners then
         gl.S, gl.E, gl.half, gl.lvl, gl.corners = S, E, half, lvl, corners
+        gl.gradientPainted = nil
         f:ClearAllPoints()
         f:SetAllPoints(bd)
         f:SetFrameLevel(lvl)
@@ -532,14 +580,31 @@ local function GlowOn(st, border, bd, radius)
         right:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -o, runs[4])
         right:SetWidth(band)
     end
-    local r, g, b, a = bd:GetBackdropBorderColor()
-    for i = 1, 4 do
-        gl.corner[i]:SetVertexColor(r, g, b, a)
-        gl.edge[i]:SetVertexColor(r, g, b, a)
+    local paintGradient = bd._euiBackdropGradient and EllesmereUI.PaintBackdropBorderGradient
+    if paintGradient then
+        gl.gradientPainted = gl.gradientPainted or paintGradient(bd, gl.corner, gl.edge)
+        if not gl.gradientPainted then bd._euiBackdropGradient.painted = false end
+    else
+        gl.gradientPainted = nil
+        local r, g, b, a = bd:GetBackdropBorderColor()
+        for i = 1, 4 do
+            gl.corner[i]:SetVertexColor(r, g, b, a)
+            gl.edge[i]:SetVertexColor(r, g, b, a)
+        end
     end
-    bd:SetAlpha(0)
+    HideSquareGlow(gl)
     f:Show()
     gl.on = true
+end
+
+function EllesmereUI.SyncRoundedGlowGradient(border, bd)
+    local st = byBorder[border]
+    local gl = st and st.glow
+    if gl and gl.on and gl.bd == bd then
+        gl.gradientPainted = EllesmereUI.PaintBackdropBorderGradient(bd, gl.corner, gl.edge)
+        return gl.gradientPainted
+    end
+    return true
 end
 
 -------------------------------------------------------------------------------
@@ -566,9 +631,14 @@ local function OnBorderColor(borderFrame, r, g, b, a)
     if not st then return end
     a = a or 1
     local sd = st.solid
-    if sd and sd.on then sd.fill:SetVertexColor(r, g, b, a) end
+    if sd and sd.on then
+        sd.gradientRevision = nil
+        sd.fill:SetVertexColor(r, g, b, a)
+    end
     local gl = st.glow
     if gl and gl.on then
+        HideSquareGlow(gl)
+        gl.gradientPainted = nil
         for i = 1, 4 do
             gl.corner[i]:SetVertexColor(r, g, b, a)
             gl.edge[i]:SetVertexColor(r, g, b, a)
@@ -640,7 +710,7 @@ local function DropStale(owner, st)
         SolidOff(st)
         local managed = POOL.Managed
         local gl = st.glow
-        if gl and gl.on and gl.bd and not (managed and managed(gl.bd)) then gl.bd:SetAlpha(1) end
+        if gl and gl.on and gl.bd and not (managed and managed(gl.bd)) then RestoreSquareGlow(gl) end
         local clip = st.clip
         if clip and not (managed and managed(clip)) then clip:SetClipsChildren(true) end
         EllesmereUI.RegisterPxReapply(owner, nil)
