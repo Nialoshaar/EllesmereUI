@@ -712,6 +712,11 @@ function ns.UFO_BuildDisplaySection(parent, y, ctx)
 
     -- Border Color | Hover Borders
     local borderColorRow
+    local gradientUnit = optState.selectedUnit
+    local function GradientAvailable()
+        return ns.UF_BorderGradientPainter(UNIT_DB_MAP[gradientUnit]())
+    end
+    local gradientStyleTip = "Gradients are available for Solid, Glow, Shadow, Blizzard, Lightspark Border, Pixels and Pixels Textured."
     do
         local function IsClassColored()
             return SVal("borderClassColored", false)
@@ -731,8 +736,7 @@ function ns.UFO_BuildDisplaySection(parent, y, ctx)
             return color
         end
 
-        borderColorRow, h = W:DualRow(parent, y,
-            EllesmereUI.BlizzStyle.Gate("unitframes", { type="multiSwatch", text="Border Color",
+        local borderColorCfg = EllesmereUI.BlizzStyle.Gate("unitframes", { type="multiSwatch", text="Border Color",
               swatches = {
                 { tooltip = "Custom Color", hasAlpha = true,
                   getValue = function()
@@ -772,66 +776,127 @@ function ns.UFO_BuildDisplaySection(parent, y, ctx)
                       if not IsClassColored() then SetColorMode(self, true) end
                   end,
                   refreshAlpha = function() return IsClassColored() and 1 or 0.3 end },
-              } }),
+              } })
+        if ns.UF_BorderGradientUnit(gradientUnit) then
+            local GetGradientSettings = UNIT_DB_MAP[gradientUnit]
+            local function GradientEnabled(settings)
+                return settings.borderGradientEnabled and ns.UF_BorderGradientPainter(settings)
+            end
+            local function WriteGradientColor(settings, r, g, b)
+                local color = { r=r, g=g, b=b }
+                settings.borderGradientColor = color
+                ReloadAndUpdate()
+                return color
+            end
+            table.insert(borderColorCfg.swatches, 1, {
+                tooltip = gradientUnit == "player" and "Gradient End Color"
+                    or "Gradient End Color. Active Elite/Rare overrides use their own end color.",
+                disabled = function() return not GradientEnabled(GetGradientSettings()) end,
+                disabledTooltip = function() return GradientAvailable() and "Enable Gradient" or gradientStyleTip end,
+                rawTooltip = true,
+                getValue = function() return ns.UF_BorderGradientRGB(GetGradientSettings()) end,
+                setValue = function(r, g, b)
+                    local settings = GetGradientSettings()
+                    if optState.selectedUnit == gradientUnit and GradientEnabled(settings) then
+                        WriteGradientColor(settings, r, g, b)
+                    end
+                end,
+                bindPicker = function()
+                    local profile, settings = db.profile, GetGradientSettings()
+                    local oldColor = settings.borderGradientColor
+                    local lastColor
+                    return function(r, g, b)
+                        if optState.selectedUnit ~= gradientUnit or db.profile ~= profile
+                            or GetGradientSettings() ~= settings or not GradientEnabled(settings) then return false end
+                        lastColor = WriteGradientColor(settings, r, g, b)
+                    end, function()
+                        if profile[gradientUnit] ~= settings or settings.borderGradientColor ~= lastColor then return false end
+                        settings.borderGradientColor = oldColor
+                        if db.profile ~= profile then return false end
+                        ReloadAndUpdate()
+                    end
+                end,
+            })
+        end
+        borderColorRow, h = W:DualRow(parent, y, borderColorCfg,
             { type="dropdown", text="Hover Borders",
               values={ __placeholder = "All" }, order={ "__placeholder" },
               getValue=function() return "__placeholder" end,
               setValue=function() end });  y = y - h
     end
 
-    if optState.selectedUnit == "target" or optState.selectedUnit == "focus" then
+    if ns.UF_BorderGradientUnit(gradientUnit) then
         local rgn = borderColorRow._leftRegion
-        local unit = optState.selectedUnit
+        local unit = gradientUnit
         local GetSettings = UNIT_DB_MAP[unit]
-        local function SetOverride(key, value)
-            GetSettings()[key] = value
-            ReloadAndUpdate()
+        local profile, settings = db.profile, GetSettings()
+        local function SetGradientOption(key, value)
+            if optState.selectedUnit ~= unit or db.profile ~= profile or GetSettings() ~= settings
+                or not GradientAvailable() then return end
+            SSet(key, value)
+            EllesmereUI:RefreshPage()
         end
-        local function OverrideSwatch(label, enabledKey, colorKey)
-            local function Enabled() return GetSettings()[enabledKey] == true end
-            local function ColorOverride(r, g, b)
-                local dr, dg, db = ns.UF_ClassificationBorderRGB(nil, colorKey)
-                local function Channel(v) return math.floor(v * 255 + 0.5) end
-                -- Match the picker's hex representation when restoring the default.
-                if Channel(r) == Channel(dr) and Channel(g) == Channel(dg) and Channel(b) == Channel(db) then
-                    return nil
-                end
-                return { r=r, g=g, b=b }
+        local rows = {
+            { type = "toggle", label = "Enable Gradient",
+              tooltip = "Blends from your Custom or Class color to the Gradient End Color.",
+              disabled = function() return not GradientAvailable() end,
+              disabledTooltip = gradientStyleTip, rawTooltip = true,
+              get = function() return GetSettings().borderGradientEnabled end,
+              set = function(v) SetGradientOption("borderGradientEnabled", v) end },
+            { type = "dropdown", label = "Gradient Direction",
+              values = { HORIZONTAL = "Horizontal", VERTICAL = "Vertical" },
+              order = { "HORIZONTAL", "VERTICAL" },
+              disabled = function() return not GradientAvailable() end,
+              disabledTooltip = gradientStyleTip, rawTooltip = true,
+              get = function() return GetSettings().borderGradientDir or "HORIZONTAL" end,
+              set = function(v) SetGradientOption("borderGradientDir", v) end },
+        }
+        if unit ~= "player" then
+            local function SetOverride(key, value)
+                GetSettings()[key] = value
+                ReloadAndUpdate()
             end
-            return {
-                tooltip = label,
-                getValue = function() return ns.UF_ClassificationBorderRGB(GetSettings(), colorKey) end,
-                setValue = function(r, g, b)
-                    if Enabled() then SetOverride(colorKey, ColorOverride(r, g, b)) end
-                end,
-                bindPicker = function()
-                    local profile, settings = db.profile, GetSettings()
-                    local oldColor = settings[colorKey]
-                    local lastColor
-                    return function(r, g, b)
-                        if optState.selectedUnit ~= unit or db.profile ~= profile
-                            or GetSettings() ~= settings or not settings[enabledKey] then return false end
-                        lastColor = ColorOverride(r, g, b)
-                        settings[colorKey] = lastColor
-                        ReloadAndUpdate()
-                    end, function()
-                        if profile[unit] ~= settings or settings[colorKey] ~= lastColor then return false end
-                        settings[colorKey] = oldColor
-                        if db.profile ~= profile then return false end
-                        ReloadAndUpdate()
+            local function OverrideSwatch(label, enabledKey, colorKey)
+                local function Enabled() return GetSettings()[enabledKey] == true end
+                local function ColorOverride(r, g, b)
+                    local dr, dg, db = ns.UF_ClassificationBorderRGB(nil, colorKey)
+                    local function Channel(v) return math.floor(v * 255 + 0.5) end
+                    -- Match the picker's hex representation when restoring the default.
+                    if Channel(r) == Channel(dr) and Channel(g) == Channel(dg) and Channel(b) == Channel(db) then
+                        return nil
                     end
-                end,
-                onClick = function(self)
-                    if Enabled() and self._eabOrigClick then self._eabOrigClick(self) end
-                end,
-                refreshAlpha = function() return Enabled() and 1 or 0.3 end,
-            }
-        end
-        EllesmereUI.BuildInlineCog(rgn, {
-            title = "Border Color Settings",
-            disabled = function() return EllesmereUI.BlizzStyle.Get("unitframes") end,
-            disabledTooltip = function() return EllesmereUI.BlizzStyle.Label("unitframes") end,
-            rows = {
+                    return { r=r, g=g, b=b }
+                end
+                return {
+                    tooltip = label,
+                    getValue = function() return ns.UF_ClassificationBorderRGB(GetSettings(), colorKey) end,
+                    setValue = function(r, g, b)
+                        if Enabled() then SetOverride(colorKey, ColorOverride(r, g, b)) end
+                    end,
+                    bindPicker = function()
+                        local profile, settings = db.profile, GetSettings()
+                        local oldColor = settings[colorKey]
+                        local lastColor
+                        return function(r, g, b)
+                            if optState.selectedUnit ~= unit or db.profile ~= profile
+                                or GetSettings() ~= settings or not settings[enabledKey] then return false end
+                            lastColor = ColorOverride(r, g, b)
+                            settings[colorKey] = lastColor
+                            ReloadAndUpdate()
+                        end, function()
+                            if profile[unit] ~= settings or settings[colorKey] ~= lastColor then return false end
+                            settings[colorKey] = oldColor
+                            if db.profile ~= profile then return false end
+                            ReloadAndUpdate()
+                        end
+                    end,
+                    onClick = function(self)
+                        if Enabled() and self._eabOrigClick then self._eabOrigClick(self) end
+                    end,
+                    refreshAlpha = function() return Enabled() and 1 or 0.3 end,
+                }
+            end
+            local overrides = {
                 { type = "reordercheck", label = "Color Overrides", ddWidth = 170, hint = "Target Types",
                   items = {
                     { key = "borderEliteColored", label = "Elite", fixed = true },
@@ -853,7 +918,14 @@ function ns.UFO_BuildDisplaySection(parent, y, ctx)
                   tooltip = "Friendly elites and rares keep their custom or class/reaction border color.",
                   get = function() return GetSettings().borderExcludeFriendly == true end,
                   set = function(v) SetOverride("borderExcludeFriendly", v) end },
-            },
+            }
+            for _, row in ipairs(overrides) do rows[#rows + 1] = row end
+        end
+        EllesmereUI.BuildInlineCog(rgn, {
+            title = "Border Color Settings",
+            disabled = function() return EllesmereUI.BlizzStyle.Get("unitframes") end,
+            disabledTooltip = function() return EllesmereUI.BlizzStyle.Label("unitframes") end,
+            rows = rows,
         })
     end
 
