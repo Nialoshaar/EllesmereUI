@@ -526,7 +526,7 @@ TagFns.level = function(u)
     if UnitIsWildBattlePet(u) or UnitIsBattlePetCompanion(u) then
         l = UnitBattlePetLevel(u)
     end
-    if l and issecretvalue and issecretvalue(l) then return l end
+    if issecretvalue(l) then return l end
     if not l or l <= 0 then return "??" end
     return l
 end
@@ -1111,6 +1111,47 @@ do
         [P.name] = "id", [P.level] = "id", [P.levelcol] = "id", [P.levelcolall] = "id",
         [P.group] = "roster",
     }
+    local CLASSIFICATION_SUFFIX = { elite = "+", rare = "R", rareelite = "R+" }
+    local CLASSIFICATION_LABEL = { elite = "Elite", rare = "Rare", rareelite = "Rare Elite" }
+    local function ReadClassification(unit)
+        local classification = UnitClassification(unit)
+        if not issecretvalue(classification) then return classification end
+    end
+    P.classification = function(unit)
+        local label = CLASSIFICATION_LABEL[ReadClassification(unit)]
+        return label and EllesmereUI.L(label) or ""
+    end
+    P.classificationabbr = function(unit)
+        return CLASSIFICATION_SUFFIX[ReadClassification(unit)] or ""
+    end
+    PIECE_READS[P.classification] = "classification"
+    PIECE_READS[P.classificationabbr] = "classification"
+
+    local classifiedLevelPieces = {}
+    local function LevelPiece(settings)
+        local colored = settings and settings.levelDifficultyColor
+        local friendly = colored and settings.levelDifficultyColorFriendly
+        local base = colored and (friendly and P.levelcolall or P.levelcol) or P.level
+        if not (settings and settings.levelClassification) then return base end
+
+        local piece = classifiedLevelPieces[base]
+        if not piece then
+            piece = function(unit)
+                local level = P.level(unit)
+                if issecretvalue(level) or level == "" then return level end
+                local suffix = P.classificationabbr(unit)
+                local levelText = suffix ~= "" and (level .. suffix) or level
+                if colored then
+                    local r, g, b = EllesmereUI.GetLevelColor(unit, level == "??" and -1 or level, friendly)
+                    return EllesmereUI.ColorText(levelText, r, g, b)
+                end
+                return levelText
+            end
+            classifiedLevelPieces[base] = piece
+            PIECE_READS[piece] = "classification"
+        end
+        return piece
+    end
     -- The tags' Name Format modifiers ([name:abbr]): they shape the plain name,
     -- whatever the slot's own Name Format says. [name:last] and [target:last]
     -- show nothing for your own unit while your name is your first name alone
@@ -1145,6 +1186,7 @@ do
         ["name"] = P.name, ["name:first"] = P.namefirst, ["name:last"] = P.namelast, ["name:abbr"] = P.nameabbr,
         ["target"] = P.tgtname, ["target:first"] = P.tgtfirst, ["target:last"] = P.tgtlast, ["target:abbr"] = P.tgtabbr,
         ["level"] = P.level, ["group"] = P.group,
+        ["classification"] = P.classification, ["classification:abbr"] = P.classificationabbr,
     })
     ns.UF_TextTags = TAG_CATALOG
 
@@ -1155,14 +1197,9 @@ do
             local parsed = EllesmereUI.TextTags.Parse(TAG_CATALOG, settings and settings[prefix .. "CustomFormat"])
             if not parsed then return nil end
             local keys, map, pieces = parsed.keys, TAG_CATALOG.map, {}
-            local lvlCol = settings.levelDifficultyColor
             for i = 1, #keys do
                 local key = keys[i]
-                if key == "level" and lvlCol then
-                    pieces[i] = settings.levelDifficultyColorFriendly and P.levelcolall or P.levelcol
-                else
-                    pieces[i] = map[key]
-                end
+                pieces[i] = key == "level" and LevelPiece(settings) or map[key]
             end
             -- Static (identity repaints only) unless a tag reads a value.
             local static = true
@@ -1190,13 +1227,9 @@ do
         local def = ZONE_STATIC[content]
         if not def then return nil end
         local pieces = { }
-        local lvlCol = settings and settings.levelDifficultyColor
         for i = 2, #def do
             local key = def[i]
-            if key == "level" and lvlCol then
-                key = settings.levelDifficultyColorFriendly and "levelcolall" or "levelcol"
-            end
-            pieces[#pieces + 1] = P[key]
+            pieces[#pieces + 1] = key == "level" and LevelPiece(settings) or P[key]
         end
         return def[1], pieces, ZONE_IDENTITY[content] or nil
     end
@@ -1270,6 +1303,9 @@ do
     end
     ns.UF_PaintText = PaintText
     ns.Engine.SetPainter("text", PaintText)
+    ns.Engine.SetPainter("textclassification", function(frame, unit, event)
+        if event == "UNIT_CLASSIFICATION_CHANGED" then PaintText(frame, unit, event) end
+    end)
 
     -- Power-only text repaint for the power value pass: renders just the
     -- zones whose pieces read the unit's power (flagged when the zone is set).
@@ -1311,42 +1347,44 @@ do
         return z
     end
 
-    --- Registers/updates one text zone on a frame: resolves the content key
-    --- and stores the def the text painter renders. nil/none content removes
-    --- the zone (the position code hides the fontstring separately, as
-    --- before). Zones are keyed by fontstring; re-apply replaces in place.
-    function ns.SetTextZone(frame, fs, content, prefix, settings)
+    local function ApplyTextZone(frame, fs, fmt, pieces, static)
         local zones = frame._euiTextZones
         if not zones then zones = {}; frame._euiTextZones = zones end
-        local fmt, pieces, static
-        if content then fmt, pieces, static = ns.ContentToZone(content, prefix, settings) end
+        local previous
         for i = #zones, 1, -1 do
-            if zones[i].fs == fs then table.remove(zones, i) end
+            if zones[i].fs == fs then previous = table.remove(zones, i) end
         end
+        local zone
         if fmt then
-            zones[#zones + 1] = MarkReads({ fs = fs, fmt = fmt, pieces = pieces, static = static })
+            zone = MarkReads({ fs = fs, fmt = fmt, pieces = pieces, static = static })
+            zones[#zones + 1] = zone
         else
             fs:SetText("")
+        end
+        if (previous and previous.classification) or (zone and zone.classification) then
+            local on = false
+            for i = 1, #zones do
+                if zones[i].classification then on = true; break end
+            end
+            frame._euiTextClassification = on
+            ns.Engine.SetChannelOn(frame, "textclassification", on)
         end
         -- A power text zone added or removed can switch the player's power
         -- value channel, and a hidden power bar's element (UF_PowerElementSync).
         ns.UF_PowerElementSync(frame)
     end
 
+    --- Resolves the content key and replaces the fontstring's text zone.
+    function ns.SetTextZone(frame, fs, content, prefix, settings)
+        local fmt, pieces, static
+        if content then fmt, pieces, static = ns.ContentToZone(content, prefix, settings) end
+        ApplyTextZone(frame, fs, fmt, pieces, static)
+    end
+
     --- Raw-zone variant for callers that assemble their own format (the power
     --- percent text's curpp/perpp/smart combinations). nil fmt removes.
     function ns.SetTextZoneRaw(frame, fs, fmt, pieces)
-        local zones = frame._euiTextZones
-        if not zones then zones = {}; frame._euiTextZones = zones end
-        for i = #zones, 1, -1 do
-            if zones[i].fs == fs then table.remove(zones, i) end
-        end
-        if fmt then
-            zones[#zones + 1] = MarkReads({ fs = fs, fmt = fmt, pieces = pieces })
-        else
-            fs:SetText("")
-        end
-        ns.UF_PowerElementSync(frame)
+        ApplyTextZone(frame, fs, fmt, pieces)
     end
 
     -- A raid subgroup move fires only GROUP_ROSTER_UPDATE: no unit event and
