@@ -82,7 +82,7 @@ TextTags.UNIT = {
                 pct = EllesmereUI.L("Percent, number only"),
                 first = EllesmereUI.L("First word"),
                 last = EllesmereUI.L("Last word"),
-                abbr = EllesmereUI.L("Abbreviated"),
+                abbr = EllesmereUI.L("Initials, last word whole (I. Stormrage)"),
             },
             -- Short, for the suggestion list.
             keys = {
