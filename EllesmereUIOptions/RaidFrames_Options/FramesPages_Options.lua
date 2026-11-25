@@ -346,9 +346,20 @@ end
 ---------------------------------------------------------------------------
 --  Page Builder
 ---------------------------------------------------------------------------
+local BORDER_GRADIENT_STYLE_TIP = "Gradients are available for Solid, Glow, Shadow, Blizzard, Lightspark Border, Pixels and Pixels Textured."
+
 local function BorderColorCfg()
     local env = ns._RFO_OptEnv
     local SGet, SVal, SWrite = env.SGet, env.SVal, env.SWrite
+    local function GradientEnabled(profile)
+        return profile.borderGradientEnabled and ns.RF_BorderGradientPainter(profile)
+    end
+    local function WriteGradientColor(r, g, b)
+        local color = { r=r, g=g, b=b }
+        SWrite("borderGradientColor", color)
+        env.ReloadAndUpdate()
+        return color
+    end
     local function IsClassColored()
         return SVal("borderClassColored", false)
     end
@@ -360,6 +371,32 @@ local function BorderColorCfg()
         EllesmereUI:RefreshPage()
     end
     local cfg = { type = "multiSwatch", text = "Border Color", swatches = {
+        { tooltip = "Gradient End Color",
+          disabled = function() return not GradientEnabled(env.db.profile) end,
+          disabledTooltip = function()
+              return ns.RF_BorderGradientPainter(env.db.profile) and "Enable Gradient" or BORDER_GRADIENT_STYLE_TIP
+          end,
+          rawTooltip = true,
+          getValue = function() return ns.RF_BorderGradientRGB(env.db.profile) end,
+          setValue = function(r, g, b)
+              if not env.optState._partyCtx and GradientEnabled(env.db.profile) then WriteGradientColor(r, g, b) end
+          end,
+          bindPicker = function()
+              local profile = env.db.profile
+              local oldColor = profile.borderGradientColor
+              local lastColor
+              return function(r, g, b)
+                  if env.db.profile ~= profile or env.optState._partyCtx
+                      or not GradientEnabled(profile) then return false end
+                  lastColor = WriteGradientColor(r, g, b)
+              end, function()
+                  if profile.borderGradientColor ~= lastColor then return false end
+                  profile.borderGradientColor = oldColor
+                  if env.db.profile ~= profile then return false end
+                  if ns._BumpAbsorbGen then ns._BumpAbsorbGen() end
+                  env.ReloadAndUpdate()
+              end
+          end },
         { tooltip = "Custom Color", hasAlpha = true,
           getValue = function() return ns.RF_BaseBorderColor(nil, SGet("borderColor"), SVal("borderAlpha", 1)) end,
           setValue = function(r, g, b, a)
@@ -1021,6 +1058,35 @@ local function BuildMainPage(pageName, parent, yOffset)
           values={ __placeholder = "All" }, order={ "__placeholder" },
           getValue=function() return "__placeholder" end,
           setValue=function() end });  y = y - h
+    do
+        local profile = db.profile
+        local function GradientUnavailable()
+            return not ns.RF_BorderGradientPainter(profile)
+        end
+        local function SetGradientOption(key, value)
+            if db.profile ~= profile or optState._partyCtx or GradientUnavailable() then return end
+            SSet(key, value)
+            EllesmereUI:RefreshPage()
+        end
+        EllesmereUI.BuildInlineCog(hoverBordersRow._leftRegion, {
+            title = "Border Color Settings",
+            disabled = function() return EllesmereUI.BlizzStyle.Get("raidframes") end,
+            disabledTooltip = function() return EllesmereUI.BlizzStyle.Label("raidframes") end,
+            rows = {
+                { type = "toggle", label = "Enable Gradient",
+                  tooltip = "Blends from your Custom or Class color to the Gradient End Color.",
+                  disabled = GradientUnavailable, disabledTooltip = BORDER_GRADIENT_STYLE_TIP, rawTooltip = true,
+                  get = function() return profile.borderGradientEnabled end,
+                  set = function(v) SetGradientOption("borderGradientEnabled", v) end },
+                { type = "dropdown", label = "Gradient Direction",
+                  values = { HORIZONTAL = "Horizontal", VERTICAL = "Vertical" },
+                  order = { "HORIZONTAL", "VERTICAL" },
+                  disabled = GradientUnavailable, disabledTooltip = BORDER_GRADIENT_STYLE_TIP, rawTooltip = true,
+                  get = function() return profile.borderGradientDir or "HORIZONTAL" end,
+                  set = function(v) SetGradientOption("borderGradientDir", v) end },
+            },
+        })
+    end
     do
         local rightRgn = hoverBordersRow._rightRegion
         local UpdateHBSwatchVis  -- forward declare; assigned after swatches

@@ -76,23 +76,13 @@ local function BaseBorderRGB(settings, unit, previewKey)
     return 0, 0, 0
 end
 
-local GRADIENT_BACKDROPS = {
-    glow = true,
-    shadow = true,
-    blizz = true,
-    lightspark = true,
-    pixels = true,
-    ["pixels-textured"] = true,
-}
-
 function ns.UF_BorderGradientUnit(unitKey)
     return unitKey == "player" or unitKey == "target" or unitKey == "focus"
 end
 
 function ns.UF_BorderGradientPainter(settings)
-    local style = settings.borderTexture or "solid"
-    if style == "solid" then return PP.SetBorderGradient end
-    if GRADIENT_BACKDROPS[style] then return EllesmereUI.SetBackdropBorderGradient end
+    local getPainter = EllesmereUI.GetBorderGradientPainter
+    if getPainter then return getPainter(settings.borderTexture) end
 end
 
 function ns.UF_BorderGradientRGB(settings)

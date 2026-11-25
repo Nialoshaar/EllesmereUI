@@ -1824,6 +1824,16 @@ do
         return true
     end
 
+    local gradientBackdrops = {
+        glow = true, shadow = true, blizz = true, lightspark = true,
+        pixels = true, ["pixels-textured"] = true,
+    }
+
+    function EllesmereUI.GetBorderGradientPainter(style)
+        if not style or style == "solid" then return EllesmereUI.PP.SetBorderGradient end
+        if gradientBackdrops[style] then return EllesmereUI.SetBackdropBorderGradient end
+    end
+
     function EllesmereUI.ApplyBorderStyle(borderFrame, size, r, g, b, a, textureKey, offsetOverride, offsetYOverride, shiftX, shiftY, addonKey, sizeKey, normalizeScale, edgePx, keepGradient)
         local PP = EllesmereUI.PP
         if not PP or not borderFrame then return end

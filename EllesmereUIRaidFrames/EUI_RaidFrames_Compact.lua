@@ -162,6 +162,15 @@ local function UpdateStyle(st, s)
     PutStyle(st, "shiftX", s.borderTextureShiftX); PutStyle(st, "shiftY", s.borderTextureShiftY)
     PutStyle(st, "behind", s.borderBehind); PutStyle(st, "r", c.r); PutStyle(st, "g", c.g); PutStyle(st, "b", c.b)
     PutStyle(st, "a", s.borderAlpha or 1); PutStyle(st, "bgR", r); PutStyle(st, "bgG", g); PutStyle(st, "bgB", b); PutStyle(st, "bgA", a)
+    local paint = not st.isPet and s.borderGradientEnabled and ns.RF_BorderGradientPainter(s)
+    local er, eg, eb, direction
+    if paint then
+        er, eg, eb = ns.RF_BorderGradientRGB(s)
+        direction = s.borderGradientDir == "VERTICAL" and "VERTICAL" or "HORIZONTAL"
+    end
+    PutStyle(st, "gradient", paint or nil)
+    PutStyle(st, "endR", er); PutStyle(st, "endG", eg); PutStyle(st, "endB", eb)
+    PutStyle(st, "gradientDir", direction)
     PutStyle(st, "one", EUI.PP.perfect / st.owner:GetEffectiveScale())
     PutStyle(st, "grid", grid)
     -- Textured Background on the empty backgrounds, as on the frames.
@@ -216,7 +225,8 @@ local function Host(st, index, first, x, y, w, h)
     if host._sg ~= st.styleGen or host._w ~= w or host._h ~= h then
         host._sg, host._w, host._h = st.styleGen, w, h
         EUI.ApplyBorderStyle(host, v.size, v.r, v.g, v.b, v.a, v.tex,
-            v.offX, v.offY, v.shiftX, v.shiftY, "unitframes", v.size, nil, v.px)
+            v.offX, v.offY, v.shiftX, v.shiftY, "unitframes", v.size, nil, v.px, v.gradient)
+        if v.gradient then v.gradient(host, v.r, v.g, v.b, v.endR, v.endG, v.endB, v.a, v.gradientDir) end
     end
     host:Show()
 end
