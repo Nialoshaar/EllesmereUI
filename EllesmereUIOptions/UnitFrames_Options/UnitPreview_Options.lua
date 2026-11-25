@@ -60,13 +60,12 @@ function ns.UFO_BuildUnitPreview(parent, unitKey, side)
 
     side = side or "left"
 
-    -- Mini frames (ToT/FoT/Pet) have no power bar, cast bar or auras at
-    -- runtime, so the preview draws none, except the pet's opt-in buffs and
-    -- debuffs (drawn while their Location is set) and, on WoW Forever, the
-    -- pet's power bar in the EUI look (the stock styles paint their own).
+    -- Mini frames (ToT/FoT/Pet) have no cast bar or auras at runtime, except
+    -- the pet's opt-in buffs and debuffs. Their EUI-look power bar is drawn
+    -- (ToT/FoT, and the pet on WoW Forever); stock styles paint their own.
     local isMiniPreview = (unitKey == "targettarget" or unitKey == "focustarget" or unitKey == "pet")
     local noPowerPreview = isMiniPreview
-        and not (unitKey == "pet" and ns.UF_PetHasPower and not ResolveBlizzPreview(unitKey, settings))
+        and not (ns.UF_MiniHasPower(unitKey) and not ResolveBlizzPreview(unitKey, settings))
     local noDebuffPreview = isMiniPreview and unitKey ~= "pet"
     local noCastbarPreview = isMiniPreview
 
@@ -485,7 +484,7 @@ function ns.UFO_BuildUnitPreview(parent, unitKey, side)
             return n
         end
         -- literal: the Target content's padded prefix in place of the
-        -- separator ("" = none); plain: the name in the slot colour.
+        -- separator ("" = none); plain: the name in the slot color.
         local function _pvTargetSuffix(literal, plain)
             local _, ct = UnitClass("player")
             local cc = ct and EllesmereUI.GetClassColor(ct)
@@ -1807,7 +1806,7 @@ function ns.UFO_BuildUnitPreview(parent, unitKey, side)
         if pf._levelOv then pf._levelOv:SetShown(lvOn and true or false) end
 
         -- Health bar at the stock spot; horizontal fill (the stock track has
-        -- no vertical variant); colours, texture, gradient, opacity as set.
+        -- no vertical variant); colors, texture, gradient, opacity as set.
         health:ClearAllPoints()
         ns.UF_BlizzPoint(health, "TOPLEFT", barArea, "TOPLEFT", HB.x, -HB.y, mirror)
         health:SetSize(HB.w, HB.h)
@@ -2208,21 +2207,34 @@ function ns.UFO_BuildUnitPreview(parent, unitKey, side)
         local as = s
         if unitKey == "pet" then as = ns.UF_AuraSettings("pet") or s end
 
-        -- Aura preview: mirror the live shared aura border style.
+        -- Apply after the preview's icon sizes and fit scale settle.
+        local applyPreviewAuraBorder
         if unitKey == "player" or unitKey == "target" or unitKey == "focus" or unitKey == "boss" or unitKey == "pet" then
             -- Blizzard Style: the live frames draw no custom aura border, so
             -- the preview keeps the plain 1px edge and hides it too.
             local blizzAura = blizzG ~= nil
-            local function ApplyPreviewAuraBorder(icon)
-                if icon._iconTex then
-                    icon._iconTex:ClearAllPoints()
-                    local inset = (blizzAura or (as.auraBorderSize or 1) > 0) and 1 or 0
-                    PP.Point(icon._iconTex, "TOPLEFT", icon, "TOPLEFT", inset, -inset)
-                    PP.Point(icon._iconTex, "BOTTOMRIGHT", icon, "BOTTOMRIGHT", -inset, inset)
+            local function layoutArt(icon, inset)
+                local rounded = icon.auraRound and icon.auraRound.on
+                -- The square fallback shows through the cut corners unless its fill is cleared.
+                if icon._previewRoundedArt ~= rounded then
+                    icon:SetBackdropColor(0, 0, 0, rounded and 0 or 1)
+                    icon._previewRoundedArt = rounded
                 end
+                local tex = icon._iconTex
+                tex:ClearAllPoints()
+                if rounded then
+                    tex:SetAllPoints(icon)
+                else
+                    PP.Point(tex, "TOPLEFT", icon, "TOPLEFT", inset, -inset)
+                    PP.Point(tex, "BOTTOMRIGHT", icon, "BOTTOMRIGHT", -inset, inset)
+                end
+            end
+            applyPreviewAuraBorder = function(icon)
                 local border = icon._euiAuraBorder
                 if blizzAura then
+                    EllesmereUI.PreviewAuraCorners(icon, icon._iconTex, icon._previewCD, border, 0)
                     if border then border:Hide() end
+                    layoutArt(icon, 1)
                     return
                 end
                 if not border then
@@ -2251,9 +2263,10 @@ function ns.UFO_BuildUnitPreview(parent, unitKey, side)
                     as.auraBorderTextureShiftX, as.auraBorderTextureShiftY,
                     "unitframes", as.auraBorderSize or 1, nil,
                     EllesmereUI.BorderPx(as.auraBorderSizePx, as.auraBorderSize or 1, as.auraBorderTexture or "solid"))
+                EllesmereUI.PreviewAuraCorners(icon, icon._iconTex, icon._previewCD, border,
+                    as.auraBorderCornerRadius, as.auraBorderTexture, as.auraBorderSize, 1)
+                layoutArt(icon, (as.auraBorderSize or 1) > 0 and 1 or 0)
             end
-            for i = 1, #buffIcons do ApplyPreviewAuraBorder(buffIcons[i]) end
-            for i = 1, #debuffIcons do ApplyPreviewAuraBorder(debuffIcons[i]) end
         end
 
         -- Donor settings for mini frames (border/texture inherit from the
@@ -3062,8 +3075,9 @@ function ns.UFO_BuildUnitPreview(parent, unitKey, side)
         border:SetPoint("TOPLEFT", barArea, "TOPLEFT", 0, 0)
         border:SetPoint("TOPRIGHT", barArea, "TOPRIGHT", 0, 0)
         border:SetHeight(borderH)
-        EllesmereUI.ApplyBorderStyle(border, bs, bc.r, bc.g, bc.b, bds.borderAlpha or 1, bTexKey, bds.borderTextureOffset, bds.borderTextureOffsetY, bds.borderTextureShiftX, bds.borderTextureShiftY, "unitframes", bs, nil,
-            EllesmereUI.BorderPx((not s.borderSizeOverride) and bds.borderSizePx, bs, bTexKey),
+        local box, boy = ns.UF_BorderOffsets(unitKey, s, bds)
+        EllesmereUI.ApplyBorderStyle(border, bs, bc.r, bc.g, bc.b, bds.borderAlpha or 1, bTexKey, box, boy, bds.borderTextureShiftX, bds.borderTextureShiftY, "unitframes", bs, nil,
+            EllesmereUI.BorderPx(bds.borderSizePx, bs, bTexKey),
             ns.UF_KeepBorderGradient(bds, unitKey))
 
         -- Class Power Pips update (player only)
@@ -3855,13 +3869,18 @@ function ns.UFO_BuildUnitPreview(parent, unitKey, side)
         end
         local combinedScale = baseScale * fitScale
         pf:SetScale(combinedScale)
+        if applyPreviewAuraBorder then
+            for i = 1, #buffIcons do applyPreviewAuraBorder(buffIcons[i]) end
+            for i = 1, #debuffIcons do applyPreviewAuraBorder(debuffIcons[i]) end
+        end
 
         -- Recalculate border sizes after scale change so they stay pixel-perfect
         if border then
             local bs2 = s.borderSizeOverride or bds.borderSize or 1
             local bTex2 = bds.borderTexture or "solid"
-            EllesmereUI.ApplyBorderStyle(border, bs2, (bds.borderColor or {r=0,g=0,b=0}).r, (bds.borderColor or {r=0,g=0,b=0}).g, (bds.borderColor or {r=0,g=0,b=0}).b, bds.borderAlpha or 1, bTex2, bds.borderTextureOffset, bds.borderTextureOffsetY, bds.borderTextureShiftX, bds.borderTextureShiftY, "unitframes", bs2, nil,
-                EllesmereUI.BorderPx((not s.borderSizeOverride) and bds.borderSizePx, bs2, bTex2),
+            local box2, boy2 = ns.UF_BorderOffsets(unitKey, s, bds)
+            EllesmereUI.ApplyBorderStyle(border, bs2, (bds.borderColor or {r=0,g=0,b=0}).r, (bds.borderColor or {r=0,g=0,b=0}).g, (bds.borderColor or {r=0,g=0,b=0}).b, bds.borderAlpha or 1, bTex2, box2, boy2, bds.borderTextureShiftX, bds.borderTextureShiftY, "unitframes", bs2, nil,
+                EllesmereUI.BorderPx(bds.borderSizePx, bs2, bTex2),
                 ns.UF_KeepBorderGradient(bds, unitKey))
         end
         -- Rounded corners, as on the live frame: the border frame is the shape
@@ -3993,7 +4012,7 @@ function ns.UFO_BuildUnitPreview(parent, unitKey, side)
         ns.UF_PaintBorderPreview(pf, border, bds, unitKey)
         -- Color Custom Borders: while the Magic border copy shows, both
         -- separators are tinted Magic at full opacity in place, as the live
-        -- copies draw them (the two passes above reset the border colour
+        -- copies draw them (the two passes above reset the border color
         -- first), so the preview does not depend on copy-frame draw order
         -- inside the options panel.
         if pf._pvDispelBorder and pf._pvDispelBorder:IsShown() then
@@ -4160,7 +4179,7 @@ function ns.UFO_BuildUnitPreview(parent, unitKey, side)
                 end
                 local _, classToken = UnitClass("player")
                 -- Custom combat icons (combat0..5) render untinted; Standard/Class
-                -- Theme are tinted by the colour mode below.
+                -- Theme are tinted by the color mode below.
                 if ciStyle:find("^combat%d") then
                     combatInd:SetTexture(COMBAT_MEDIA_P .. ciStyle .. ".tga")
                     combatInd:SetTexCoord(0, 1, 0, 1)

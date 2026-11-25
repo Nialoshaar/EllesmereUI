@@ -514,7 +514,7 @@ EllesmereUI.RegisterSyncExclusions("EllesmereUIDragonRiding", {
 })
 
 -- QoL Secondary Stats/FPS/Target Distance/alert positions, the cursor slice (GCD ring, cast circle, at
--- profile.cursor) and the Battle Res and Bloodlust positions stay per-profile on
+-- profile.cursor) and the Battle Res, Bloodlust and Loot Roll Frame positions stay per-profile on
 -- sync: exported intact, never push-overwritten.
 EllesmereUI.RegisterSyncExclusions("EllesmereUIQoL", {
     "secondaryStatsPos",
@@ -528,6 +528,7 @@ EllesmereUI.RegisterSyncExclusions("EllesmereUIQoL", {
     "cursor.castCircle.pos",
     "battleRes.pos",
     "bloodlust.pos",
+    "lootRolls.pos",
 })
 
 -- Minimap settings nest under profile.minimap.
@@ -872,7 +873,7 @@ do
 
         popup:SetSize(POPUP_W, popupH)
         -- The popup's border, header, profile rows (pooled by position) and action
-        -- button are built once; every open re-applies their fonts, texts, colours,
+        -- button are built once; every open re-applies their fonts, texts, colors,
         -- positions and actions.
         local ui = popup._ui
         if not ui then

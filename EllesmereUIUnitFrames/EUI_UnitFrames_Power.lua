@@ -38,7 +38,7 @@ I.dbSetters[#I.dbSetters + 1] = function(v) db = v end
 -- border is above 0 and its style has seam art; flipped for a bar above health.
 -- It rides power._pbSeam, our own frame anchored to the power bar, built on first
 -- enable and parented outside the bar clip so its ends can overlap the border,
--- tinted with the frame border colour, which FrameBorderEnter / Leave recolour
+-- tinted with the frame border color, which FrameBorderEnter / Leave recolor
 -- with the border. Thickness follows the border's edge (exact size, else the
 -- step's), height and offsets snapped at the bar's effective scale; re-laid on
 -- every pass (a pass on a zero-height bar leaves no resolved rect) and, for an
@@ -100,8 +100,9 @@ function ns.UpdatePowerSeam(power, s, stock, preview)
     seam:SetFrameLevel(math.max(power:GetFrameLevel() + 1,
         border and math.min(border:GetFrameLevel() + 1, owner:GetFrameLevel() + 11) or 0))
     local key, size = b.borderTexture, sizeOverride or b.borderSize or 1
-    local px
-    if not sizeOverride then px = EllesmereUI.BorderPx(b.borderSizePx, size, key) end
+    -- The exact size rides along while the step is the source's own (BorderPx checks),
+    -- as the frame border's does.
+    local px = EllesmereUI.BorderPx(b.borderSizePx, size, key)
     seam._key, seam._step, seam._px, seam._path = key, size, px, path
     seam._above = (s.powerPosition == "above")
     local c = b.borderColor
@@ -154,7 +155,7 @@ end
 
 -- Attached portrait divider: reuse the border style's vertical companion art.
 -- A sibling of the portrait avoids clipping the strip where it crosses into the
--- bars. Built only on opt-in; layout and colour updates use existing passes.
+-- bars. Built only on opt-in; layout and color updates use existing passes.
 function ns.UpdatePortraitSeparator(frame, portrait, s, side, attached, stock, preview, borderSettings)
     local seam = frame._portraitSeparator
     local power = frame.Power or frame._power
@@ -187,8 +188,9 @@ function ns.UpdatePortraitSeparator(frame, portrait, s, side, attached, stock, p
     seam:SetFrameLevel(math.max(frame:GetFrameLevel() + (preview and 4 or 9),
         border and border:GetFrameLevel() + 1 or 0))
     seam._key, seam._step = b.borderTexture, size
-    seam._px = nil
-    if not sizeOverride then seam._px = EllesmereUI.BorderPx(b.borderSizePx, size, seam._key) end
+    -- The exact size rides along while the step is the donor's own (BorderPx checks), as the
+    -- frame border's does (PR #3619): an override at the donor's step keeps it.
+    seam._px = EllesmereUI.BorderPx(b.borderSizePx, size, seam._key)
     seam._right = side == "right"
     local c = b.borderColor
     seam._tex:SetVertexColor(c and c.r or 0, c and c.g or 0, c and c.b or 0, b.borderAlpha or 1)

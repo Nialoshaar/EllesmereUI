@@ -50,7 +50,9 @@ local function BuildMiniTextAndSize(W, parent, y, settingsTable, unitKey, enable
     local TexBgRowCfg = env.TexBgRowCfg
     local _, h
     opts = opts or {}
-
+    -- The power click targets belong to this build alone: an inactive frame
+    -- returns before its POWER BAR section, so clear the ones a page built earlier left.
+    parent._powerHeaderFrame, parent._powerHeightRow, parent._powerTextRow = nil, nil, nil
 
     -- Shorthand accessors for this mini frame's settings
     local function MGet(key) return settingsTable[key] end
@@ -293,11 +295,63 @@ local function BuildMiniTextAndSize(W, parent, y, settingsTable, unitKey, enable
                   local donor = GetMiniDonorSettings(unitKey)
                   return settingsTable.borderSizeOverride or (donor and donor.borderSize) or 1
               end,
-              setValue=function(v) settingsTable.borderSizeOverride = v; ReloadAndUpdate() end }),
+              setValue=function(v)
+                  settingsTable.borderSizeOverride = v; ReloadAndUpdate()
+                  -- The offset sliders show the size's defaults.
+                  EllesmereUI:RefreshPage()
+              end }),
             { type="toggle", text="Show Highlight Border",
               tooltip="Show the main frames' hover highlight border on this frame. Turn off so this frame never recolors on mouseover. No effect when Highlight is off in the main frames' Hover Borders.",
               getValue=function() return settingsTable.showHighlightBorder ~= false end,
               setValue=function(v) settingsTable.showHighlightBorder = v end });  y = y - h
+        -- Width / Height Offset under the donor's textured style (ns.UF_BorderOffsets: an
+        -- unset offset follows the main frames' at any size). A pick equal to what following
+        -- shows (the donor's offset, else the texture's default) stores nothing, so the frame
+        -- follows the main frames again; any other pick is stored.
+        local donorTex = GetMiniDonorSettings(unitKey).borderTexture or "solid"
+        if donorTex ~= "solid" and donorTex ~= "" then
+            local function Donor() return GetMiniDonorSettings(unitKey) end
+            local function Size() return settingsTable.borderSizeOverride or Donor().borderSize or 1 end
+            local function DonorSolid()
+                local t = Donor().borderTexture or "solid"
+                return t == "solid" or t == ""
+            end
+            -- atDefault: the helper found the pick equal to the texture's default for the size.
+            local function Pick(pick, atDefault, donorVal)
+                if donorVal == nil then return (not atDefault) and pick or nil end
+                return pick ~= math.floor(donorVal + 0.5) and pick or nil
+            end
+            local pickX, pickY
+            local ocfgL, ocfgR = EllesmereUI.BorderOffsetRowCfgs({
+                addonKey = "unitframes",
+                tooltip = "Overrides the border offset from the main frames for this frame only.",
+                getTex = function() return Donor().borderTexture or "solid" end,
+                getStep = Size,
+                getSizeKey = Size,
+                getPx = function() return Donor().borderSizePx end,
+                getX = function() return (ns.UF_BorderOffsets(unitKey, settingsTable, Donor())) end,
+                setX = function(v)
+                    settingsTable.borderOffsetOverride = Pick(pickX, v == nil, Donor().borderTextureOffset)
+                end,
+                getY = function()
+                    local _, oy = ns.UF_BorderOffsets(unitKey, settingsTable, Donor())
+                    return oy
+                end,
+                setY = function(v)
+                    settingsTable.borderOffsetYOverride = Pick(pickY, v == nil, Donor().borderTextureOffsetY)
+                end,
+                apply = ReloadAndUpdate,
+                -- Built only for a textured donor; a cached page whose donor went Solid since greys out.
+                disabled = DonorSolid,
+                disabledTooltip = "This option requires a textured Border Style on the Main Frames.",
+            })
+            local setL, setR = ocfgL.setValue, ocfgR.setValue
+            ocfgL.setValue = function(v) pickX = math.floor(v + 0.5); setL(v) end
+            ocfgR.setValue = function(v) pickY = math.floor(v + 0.5); setR(v) end
+            _, h = W:DualRow(parent, y,
+                EllesmereUI.BlizzStyle.Gate("unitframes", ocfgL),
+                EllesmereUI.BlizzStyle.Gate("unitframes", ocfgR));  y = y - h
+        end
         local darkRow
         darkRow, h = W:DualRow(parent, y, darkCfg, EllesmereUI.BlankRowCfg());  y = y - h
         LockDark(darkRow._leftRegion)
@@ -1047,14 +1101,27 @@ local function BuildMiniTextAndSize(W, parent, y, settingsTable, unitKey, enable
         apply=ReloadAndUpdate,
     })
 
-    -- POWER BAR section (mini units with a power bar: boss, and the pet on WoW Forever).
-    -- Fill always uses the unit's power color (powerPercentPowerColor default on);
-    -- a height of 0 effectively hides the bar.
+    -- POWER BAR section (mini units with a power bar: boss, ToT, FoT, and the
+    -- pet on WoW Forever). Fill always uses the unit's power color
+    -- (powerPercentPowerColor default on); a height of 0 effectively hides the bar.
     if opts.hasPowerBar then
         local powerHeader
         powerHeader, h = W:SectionHeader(parent, "POWER BAR", y); y = y - h
 
-        -- Row 1: Power Bar Height (+ Reverse Fill cog) | Above Health Bar toggle
+        -- Row 1: Power Bar Height (+ Reverse Fill cog) | Above Health Bar toggle,
+        -- or the Main Frames' Bar Position dropdown (opts.powerPositionMenu).
+        local posCfg
+        if opts.powerPositionMenu then
+            posCfg = { type="dropdown", text="Bar Position",
+              values={ ["below"]="Below Health Bar", ["above"]="Above Health Bar", ["detached_bottom"]="Detached Bottom", ["detached_top"]="Detached Top", ["none"]="None" },
+              order={ "below", "above", "---", "detached_bottom", "detached_top", "---", "none" },
+              getValue=function() return MVal("powerPosition", "none") end,
+              setValue=function(v) MSet("powerPosition", v); EllesmereUI:RefreshPage() end }
+        else
+            posCfg = { type="toggle", text="Above Health Bar",
+              getValue=function() return MVal("powerPosition", "below") == "above" end,
+              setValue=function(v) MSet("powerPosition", v and "above" or "below") end }
+        end
         local pwrRow1
         pwrRow1, h = W:DualRow(parent, y,
             -- Blizzard Style: the stock track fixes height and spot; the
@@ -1062,9 +1129,28 @@ local function BuildMiniTextAndSize(W, parent, y, settingsTable, unitKey, enable
             EllesmereUI.BlizzStyle.Gate("unitframes", { type="slider", text="Power Bar Height", min=0, max=100, step=1,
               getValue=function() return MVal("powerHeight", 6) end,
               setValue=function(v) MSet("powerHeight", v) end }, true),
-            EllesmereUI.BlizzStyle.Gate("unitframes", { type="toggle", text="Above Health Bar",
-              getValue=function() return MVal("powerPosition", "below") == "above" end,
-              setValue=function(v) MSet("powerPosition", v and "above" or "below") end }));  y = y - h
+            EllesmereUI.BlizzStyle.Gate("unitframes", posCfg));  y = y - h
+        -- Width + X/Y offsets cog on Bar Position (detached only), as on Main Frames.
+        if opts.powerPositionMenu then
+            EllesmereUI.BuildInlineCog(pwrRow1._rightRegion, {
+                disabled = function()
+                    local pos = MVal("powerPosition", "none"); return pos ~= "detached_top" and pos ~= "detached_bottom"
+                end,
+                disabledTooltip = "This option requires a detached position to be active.",
+                title = "Position Settings",
+                rows = {
+                    { type="slider", label="Width", min=0, max=400, step=1,
+                      get=function() return MVal("powerWidth", 0) end,
+                      set=function(v) MSet("powerWidth", v) end },
+                    { type="slider", label="X Offset", min=-200, max=200, step=1,
+                      get=function() return MVal("powerX", 0) end,
+                      set=function(v) MSet("powerX", v) end },
+                    { type="slider", label="Y Offset", min=-200, max=200, step=1,
+                      get=function() return MVal("powerY", 0) end,
+                      set=function(v) MSet("powerY", v) end },
+                },
+            })
+        end
         -- Expose the Power Bar Height row + POWER BAR header so the boss
         -- preview's power-bar click overlay can scroll here.
         parent._powerHeaderFrame = powerHeader
@@ -1546,8 +1632,11 @@ function ns.UFO_BuildFoTToTOptions(W, parent, y, settingsTable, unitKey)
         return portraitRow, h
     end
 
+    -- Power bar in the EUI look only (the stock styles paint their own).
+    local totPower = not EllesmereUI.BlizzStyle.Get("unitframes")
     local displayHeader, sizeRow, textHeader, textRow
-    y, displayHeader, sizeRow, textHeader, textRow = BuildMiniTextAndSize(W, parent, y, settingsTable, unitKey, enableRow)
+    y, displayHeader, sizeRow, textHeader, textRow = BuildMiniTextAndSize(W, parent, y, settingsTable, unitKey, enableRow, nil,
+        totPower and { hasPowerBar = true, powerPositionMenu = true } or nil)
 
     -- Store click targets for hover highlight system
     parent._ufClickTargets = {
@@ -1558,6 +1647,11 @@ function ns.UFO_BuildFoTToTOptions(W, parent, y, settingsTable, unitKey)
         centerText = ns.UFO_TextClickTarget(parent, "centerText", textHeader or displayHeader, textRow or sizeRow),
         extraText = ns.UFO_TextClickTarget(parent, "extraText", textHeader or displayHeader, textRow or sizeRow),
     }
+    if totPower and parent._powerHeaderFrame then
+        local tg = parent._ufClickTargets
+        tg.powerBar     = { section = parent._powerHeaderFrame, target = parent._powerHeightRow, slotSide = "left" }
+        tg.powerBarText = { section = parent._powerHeaderFrame, target = parent._powerTextRow, slotSide = "left" }
+    end
 
     return abs(y)
 end
@@ -2640,9 +2734,16 @@ function ns.UFO_BuildBossOptions(W, parent, y)
                             EllesmereUI.BlizzStyle.Gate("unitframes", ocfgR)); yy = yy - hh
                     end
                 end
-                do
-                    local rgn=borderRow._leftRegion
-                    local btn = EllesmereUI.BuildInlineCog(rgn, { title="Border Options", rows={
+                local auraBorderTex = B.auraBorderTexture or "solid"
+                EllesmereUI.BuildInlineCog(borderRow._rightRegion, EllesmereUI.AuraRadiusCogCfg(auraBorderTex,
+                    function() return B.auraBorderCornerRadius or 0 end,
+                    function(v) B.auraBorderCornerRadius=v; ReloadAndUpdate() end,
+                    function() return EllesmereUI.BlizzStyle.Get("unitframes") end,
+                    function() return EllesmereUI.BlizzStyle.Label("unitframes") end))
+                if EllesmereUI._prebuilding or (auraBorderTex ~= "solid" and auraBorderTex ~= "") then
+                    EllesmereUI.BuildInlineCog(borderRow._leftRegion, { title="Border Options",
+                        disabled=function() return EllesmereUI.BlizzStyle.Get("unitframes") end,
+                        rows={
                         { type="slider",label="Shift X",min=-10,max=10,step=1,
                           get=function() local v=B.auraBorderTextureShiftX;if v~=nil then return v end;local _,_,x=EllesmereUI.GetBorderDefaults("unitframes",B.auraBorderTexture or "solid",B.auraBorderSize or 1);return x end,
                           set=function(v) B.auraBorderTextureShiftX=v==0 and nil or v;ReloadAndUpdate() end },
@@ -2663,17 +2764,14 @@ function ns.UFO_BuildBossOptions(W, parent, y)
                           get=function() return B.auraBorderAboveEffects == true end,
                           set=function(v) B.auraBorderAboveEffects=v;ReloadAndUpdate() end },
                     } })
-                    if not EllesmereUI._prebuilding then
-                        local function vis() if (B.auraBorderTexture or "solid")=="solid" then btn:Hide() else btn:Show() end end
-                        EllesmereUI.RegisterWidgetRefresh(vis);vis()
-                    end
                 end
                 if not EllesmereUI._prebuilding then
                     local rgn=borderRow._rightRegion
                     local sw,upd=EllesmereUI.BuildColorSwatch(rgn,borderRow:GetFrameLevel()+3,
                         function() return B.auraBorderR or 0,B.auraBorderG or 0,B.auraBorderB or 0,B.auraBorderA or 1 end,
                         function(r,g,b,a) B.auraBorderR=r;B.auraBorderG=g;B.auraBorderB=b;B.auraBorderA=a;ReloadAndUpdate() end,true,20)
-                    PP.Point(sw,"RIGHT",rgn._control,"LEFT",-8,0)
+                    PP.Point(sw,"RIGHT",rgn._lastInline or rgn._control,"LEFT",-8,0)
+                    rgn._lastInline=sw
                     EllesmereUI.RegisterWidgetRefresh(upd)
                 end
             end

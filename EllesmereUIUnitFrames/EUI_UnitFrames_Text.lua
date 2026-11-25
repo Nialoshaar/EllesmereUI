@@ -169,7 +169,7 @@ do
 
     -- Power value pass (the player's powerval channel, UNIT_POWER_FREQUENT):
     -- the bar value and the text zones that read power, nothing else. Bounds,
-    -- colours, the gray-out, the display-type override and the regen spark's
+    -- colors, the gray-out, the display-type override and the regen spark's
     -- mana flag follow the power type, the unit or the settings, never the
     -- value, and stay on the full pass (UNIT_POWER_UPDATE, UNIT_MAXPOWER,
     -- UNIT_DISPLAYPOWER and every identity repaint), which also refreshes the
@@ -826,9 +826,9 @@ end
 -- oUF tag); [eui-tgtsep] = indicator shown only when the unit has a target (per-slot
 -- separator/color ride in tag ARGS, see BuildTgtSepTag; no args = " > "); [eui-tgtcol] =
 -- target's class/reaction COLOR escape (no name involved); [eui-tgtname] = target's name,
--- returned RAW. The colour escape precedes the raw name and runs to end of string, so
--- the target name colours IDENTICALLY to the ToT frame name (both via
--- ns.ResolveUnitNameColor) -- works for a SECRET name only because colour and name are
+-- returned RAW. The color escape precedes the raw name and runs to end of string, so
+-- the target name colors IDENTICALLY to the ToT frame name (both via
+-- ns.ResolveUnitNameColor) -- works for a SECRET name only because color and name are
 -- SEPARATE tags joined by SetFormattedText, never touched together in Lua.
 --
 -- PLAYER_TARGET_CHANGED is unitless in oUF (refreshes every frame), covering the player
@@ -845,7 +845,7 @@ end
 -- ns.MakeTgtSepPiece in the formatter block below; it closes over the decoded
 -- separator and color mode from settings and recolors class-mode per call.)
 
--- The target's class/reaction colour escape (e.g. "|cffc41f3b"), or "". Uses
+-- The target's class/reaction color escape (e.g. "|cffc41f3b"), or "". Uses
 -- ns.ResolveUnitNameColor, the SAME resolver ApplyClassColor uses for the Target
 -- of Target name. No unit NAME is touched, so it is fully secret-safe.
 TagFns.tgtcol = function(unit)
@@ -868,7 +868,7 @@ TagFns.tgtcol = function(unit)
                 end
             end
         end
-        -- Still nothing usable: the plain reaction colour instead of "".
+        -- Still nothing usable: the plain reaction color instead of "".
         local reaction = UnitReaction(tunit, "player")
         if reaction and not issecretvalue(reaction) then
             local c = (ns.Colors and ns.Colors.reaction and ns.Colors.reaction[reaction])
@@ -883,7 +883,7 @@ end
 
 -- The unit's target NAME (nickname-aware via ResolveUnitNickname; otherwise the
 -- raw, possibly secret name -- display-safe via SetFormattedText, never
--- inspected). Colour comes from [eui-tgtcol] in front of it.
+-- inspected). Color comes from [eui-tgtcol] in front of it.
 TagFns.tgtname = function(unit)
     local tunit = unit and (unit .. "target")
     if not tunit or not UnitExists(tunit) then return "" end
@@ -1111,18 +1111,21 @@ do
         [P.name] = "id", [P.level] = "id", [P.levelcol] = "id", [P.levelcolall] = "id",
         [P.group] = "roster",
     }
-    local CLASSIFICATION_SUFFIX = { elite = "+", rare = "R", rareelite = "R+" }
-    local CLASSIFICATION_LABEL = { elite = "Elite", rare = "Rare", rareelite = "Rare Elite" }
+    -- A world boss reads as an elite, as the Border Color overrides and the game's
+    -- own nameplate classification show it.
+    local CLASSIFICATION_SUFFIX = { elite = "+", worldboss = "+", rare = "R", rareelite = "R+" }
+    local CLASSIFICATION_LABEL = { elite = "Elite", worldboss = "Elite", rare = "Rare", rareelite = "Rare Elite" }
     local function ReadClassification(unit)
         local classification = UnitClassification(unit)
-        if not issecretvalue(classification) then return classification end
+        if issecretvalue(classification) then return "" end
+        return classification or ""
     end
-    P.classification = function(unit)
-        local label = CLASSIFICATION_LABEL[ReadClassification(unit)]
+    P.classification = function(unit, classification)
+        local label = CLASSIFICATION_LABEL[classification or ReadClassification(unit)]
         return label and EllesmereUI.L(label) or ""
     end
-    P.classificationabbr = function(unit)
-        return CLASSIFICATION_SUFFIX[ReadClassification(unit)] or ""
+    P.classificationabbr = function(unit, classification)
+        return CLASSIFICATION_SUFFIX[classification or ReadClassification(unit)] or ""
     end
     PIECE_READS[P.classification] = "classification"
     PIECE_READS[P.classificationabbr] = "classification"
@@ -1136,10 +1139,10 @@ do
 
         local piece = classifiedLevelPieces[base]
         if not piece then
-            piece = function(unit)
+            piece = function(unit, classification)
                 local level = P.level(unit)
                 if issecretvalue(level) or level == "" then return level end
-                local suffix = P.classificationabbr(unit)
+                local suffix = P.classificationabbr(unit, classification)
                 local levelText = suffix ~= "" and (level .. suffix) or level
                 if colored then
                     local r, g, b = EllesmereUI.GetLevelColor(unit, level == "??" and -1 or level, friendly)
@@ -1212,9 +1215,9 @@ do
             return "%s%s%s%s", { P.name, ns.MakeTgtSepPiece(prefix, settings), P.tgtcol, P.tgtname }
         end
         -- Target: the unit's target name alone, after the slot's Prefix
-        -- (nil = "T:", "" = none) in the Indicator Color. The target's colour
+        -- (nil = "T:", "" = none) in the Indicator Color. The target's color
         -- escape rides only while the slot is Class Colored; otherwise the
-        -- name keeps the slot colour. Every piece is "" without a target.
+        -- name keeps the slot color. Every piece is "" without a target.
         if content == "targetname" then
             local pieces = {}
             local pre = settings[prefix .. "TargetPrefix"]
@@ -1236,7 +1239,7 @@ do
 
     -- Name Format: a slot set to one (<prefix>NameFormat) gets short-name twins
     -- of its name pieces when the zone is applied, so the painter and every
-    -- unset slot run as before. Level, separator and colour pieces stay; Name >
+    -- unset slot run as before. Level, separator and color pieces stay; Name >
     -- Target shortens both names. ShortName passes a secret name through whole
     -- and caches the short forms, so a zone repainted on every health tick
     -- builds no strings. A mode's twins are made the first time a slot uses it.
@@ -1275,6 +1278,21 @@ do
     -- a health paint must not swallow a power repaint landing in the same frame.
     local scratch = {}
     local GetTime = GetTime
+    local function PaintZone(frame, zone, unit)
+        local classification
+        if zone.classification then
+            if frame._euiClassificationUnit ~= unit then
+                frame._euiClassification = ReadClassification(unit)
+                frame._euiClassificationUnit = unit
+            end
+            classification = frame._euiClassification
+        end
+        local pieces = zone.pieces
+        local n = #pieces
+        for k = 1, n do scratch[k] = pieces[k](unit, classification) end
+        zone.fs:SetFormattedText(zone.fmt, unpack(scratch, 1, n))
+    end
+
     local function PaintText(frame, unit, event)
         local zones = frame._euiTextZones
         if not zones then return end
@@ -1282,29 +1300,34 @@ do
         -- gap: the unit watch is a 0.2s poll, so the frame is still shown while
         -- its slot sits between units. Same probe the health painter pays.
         if not (unit and UnitExists(unit)) then return end
-        -- Faction flip: slot colour is set by ApplyClassColor, never by the
-        -- pieces below, so recolour first (the health bar recolours on this
-        -- same event); the render then refreshes any target-colour piece.
+        -- Faction flip: slot color is set by ApplyClassColor, never by the
+        -- pieces below, so recolor first (the health bar recolors on this
+        -- same event); the render then refreshes any target-color piece.
         if event == "UNIT_FACTION" and ns.UF_RecolorTexts then
             ns.UF_RecolorTexts(frame, unit)
         end
         local cls = event ~= nil and VALUE_CLASS[event]
+        -- Identity refreshes invalidate classification. Value-only paints reuse it.
+        if not cls and frame._euiTextClassification then frame._euiClassificationUnit = nil end
         local now = GetTime()
         for i = 1, #zones do
             local z = zones[i]
             if not cls or (not z.static and (z.any or z[cls]) and z.at ~= now) then
                 z.at = now
-                local pieces = z.pieces
-                local n = #pieces
-                for k = 1, n do scratch[k] = pieces[k](unit) end
-                z.fs:SetFormattedText(z.fmt, unpack(scratch, 1, n))
+                PaintZone(frame, z, unit)
             end
         end
     end
     ns.UF_PaintText = PaintText
     ns.Engine.SetPainter("text", PaintText)
     ns.Engine.SetPainter("textclassification", function(frame, unit, event)
-        if event == "UNIT_CLASSIFICATION_CHANGED" then PaintText(frame, unit, event) end
+        if event ~= "UNIT_CLASSIFICATION_CHANGED" or not (unit and UnitExists(unit)) then return end
+        frame._euiClassificationUnit = nil
+        local zones = frame._euiTextZones
+        for i = 1, #zones do
+            local z = zones[i]
+            if z.classification then PaintZone(frame, z, unit) end
+        end
     end)
 
     -- Power-only text repaint for the power value pass: renders just the
@@ -1314,12 +1337,7 @@ do
         if not zones then return end
         for i = 1, #zones do
             local z = zones[i]
-            if z.power then
-                local pieces = z.pieces
-                local n = #pieces
-                for k = 1, n do scratch[k] = pieces[k](unit) end
-                z.fs:SetFormattedText(z.fmt, unpack(scratch, 1, n))
-            end
+            if z.power then PaintZone(frame, z, unit) end
         end
     end
 
@@ -1366,8 +1384,13 @@ do
             for i = 1, #zones do
                 if zones[i].classification then on = true; break end
             end
-            frame._euiTextClassification = on
-            ns.Engine.SetChannelOn(frame, "textclassification", on)
+            if on ~= (frame._euiTextClassification == true) then
+                frame._euiTextClassification = on or nil
+                if not on then
+                    frame._euiClassification, frame._euiClassificationUnit = nil, nil
+                end
+                ns.Engine.SetChannelOn(frame, "textclassification", on)
+            end
         end
         -- A power text zone added or removed can switch the player's power
         -- value channel, and a hidden power bar's element (UF_PowerElementSync).
@@ -1405,12 +1428,7 @@ do
                     local z = zones[i]
                     if z.roster then
                         kept = true
-                        if live then
-                            local pieces = z.pieces
-                            local n = #pieces
-                            for k = 1, n do scratch[k] = pieces[k](unit) end
-                            z.fs:SetFormattedText(z.fmt, unpack(scratch, 1, n))
-                        end
+                        if live then PaintZone(f, z, unit) end
                     end
                 end
             end

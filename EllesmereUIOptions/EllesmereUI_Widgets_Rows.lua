@@ -163,6 +163,8 @@ end
 -- tooltip, disabled + disabledTip (string, or fn returning one), mouse (armed clicks bind mouse chords),
 -- plainMouse (with mouse: an armed bare left/right click binds too, so unbind
 -- is a right-click from rest), canArm (returns false to refuse arming).
+-- wheel (while armed, a wheel tick over the button binds MOUSEWHEELUP / MOUSEWHEELDOWN with its
+-- modifiers; the wheel is taken only while armed, so the page scrolls over the button at rest).
 -- Returns btn, refresh.
 function EllesmereUI.BuildKeybindButton(parent, opts)
     local btn = CreateFrame("Button", nil, parent)
@@ -186,9 +188,13 @@ function EllesmereUI.BuildKeybindButton(parent, opts)
     -- Controller buttons: padArmed while they are captured; padHeld is the button
     -- whose press ended capture, kept captured until its release.
     local padArmed, padWired, padHeld = false, false, nil
+    local OnWheel  -- opts.wheel: set below, on the button only while armed
     local function Stop()
         listening = false
         btn:EnableKeyboard(false)
+        -- Setting a wheel script takes the wheel by itself (Blizzard's own key
+        -- binding capture turns it on and off this way), so clear it as well.
+        if OnWheel then btn:SetScript("OnMouseWheel", nil); btn:EnableMouseWheel(false) end
         if padArmed and not padHeld then padArmed = false; btn:EnableGamePadButton(false) end
         -- OnLeave keeps the hover look while armed; drop it once capture ends.
         if not btn:IsMouseOver() then
@@ -202,7 +208,10 @@ function EllesmereUI.BuildKeybindButton(parent, opts)
         for mod in key:gmatch("(%u+)%-") do
             parts[#parts + 1] = mod:sub(1, 1) .. mod:sub(2):lower()
         end
-        parts[#parts + 1] = key:match("[^%-]+$") or key
+        local base = key:match("[^%-]+$") or key
+        if base == "MOUSEWHEELUP" then base = EllesmereUI.L("Wheel Up")
+        elseif base == "MOUSEWHEELDOWN" then base = EllesmereUI.L("Wheel Down") end
+        parts[#parts + 1] = base
         return table.concat(parts, " + ")
     end
     local function Refresh()
@@ -238,6 +247,7 @@ function EllesmereUI.BuildKeybindButton(parent, opts)
         if button ~= "LeftButton" or listening then return end
         if opts.canArm and not opts.canArm() then return end
         listening = true
+        if OnWheel then self:SetScript("OnMouseWheel", OnWheel); self:EnableMouseWheel(true) end
         lbl:SetText(EllesmereUI.L("Press a key..."))
         self:EnableKeyboard(true)
         -- Controller in use: its buttons are captured too, only while armed (Stop turns it off).
@@ -300,6 +310,13 @@ function EllesmereUI.BuildKeybindButton(parent, opts)
         if key == "ESCAPE" then Stop(); Refresh(); return end
         Commit(CreateKeyChordStringUsingMetaKeyState(key))
     end)
+    if opts.wheel then
+        OnWheel = function(_, delta)
+            if InCombatLockdown() or not listening or delta == 0 then return end
+            if disabled and disabled() then return end
+            Commit(CreateKeyChordStringUsingMetaKeyState(delta > 0 and "MOUSEWHEELUP" or "MOUSEWHEELDOWN"))
+        end
+    end
     btn:SetScript("OnEnter", function(self)
         if disabled and disabled() then
             local tip = opts.disabledTip
@@ -600,16 +617,22 @@ function WidgetFactory:DualRow(parent, yOffset, leftCfg, rightCfg)
             ApplyDisabledState()
 
         elseif t == "labeledButton" then
-            -- Standard left label, button anchored right
+            -- Standard left label, button anchored right. buttonText may be a
+            -- function: the page refresh reads it again (a label that swaps).
             local btn = CreateFrame("Button", nil, region)
             PP.Size(btn, cfg.width or 180, 32)
             PP.Point(btn, "RIGHT", region, "RIGHT", -SIDE_PAD, 0)
             btn:SetFrameLevel(frame:GetFrameLevel() + 2)
-            MakeStyledButton(btn, cfg.buttonText or cfg.text or "", 13, RB_COLOURS, cfg.onClick)
+            local textFn = type(cfg.buttonText) == "function" and cfg.buttonText or nil
+            local text0 = textFn and (textFn() or "") or (cfg.buttonText or cfg.text or "")
+            local _, _, btnLbl = MakeStyledButton(btn, text0, 13, RB_COLOURS, cfg.onClick)
             controlFrame = btn
             controlAnchor = btn
             AddControlDisabledTooltip(btn, cfg)
-            RegisterWidgetRefresh(function() ApplyDisabledState() end)
+            RegisterWidgetRefresh(function()
+                if textFn then btnLbl:SetText(EllesmereUI.L(textFn() or "")) end
+                ApplyDisabledState()
+            end)
             ApplyDisabledState()
 
         elseif t == "multiSwatch" then
@@ -1002,8 +1025,8 @@ function WidgetFactory:TripleRow(parent, yOffset, leftCfg, midCfg, rightCfg, spl
                     local off = cfg.disabled()
                     label:SetAlpha(1)
                     -- Gray the button label when the current value is disabled,
-                    -- through the text colour's alpha (the label's resting alpha);
-                    -- _valueDimA keeps the hover colours on that alpha too.
+                    -- through the text color's alpha (the label's resting alpha);
+                    -- _valueDimA keeps the hover colors on that alpha too.
                     if cfg.disabledValues then
                         local curVal = cfg.getValue()
                         local dimA = cfg.disabledValues(curVal) and 0.15 or nil
@@ -1438,7 +1461,7 @@ function WidgetFactory:WideDropdown(parent, title, yOffset, values, getValue, se
     local bg = SolidTex(ddBtn, "BACKGROUND", DD_BG_R, DD_BG_G, DD_BG_B, DD_BG_A)
     bg:SetAllPoints()
     local brd = MakeRoundedBorder(ddBtn, 1, 1, 1, DD_BRD_A, bg)
-    -- Resting alpha on the text colour, the channel the hover colours write.
+    -- Resting alpha on the text color, the channel the hover colors write.
     local ddLbl = MakeFont(ddBtn, 13, nil, 1, 1, 1, DD_TXT_A)
     ddLbl:SetPoint("LEFT", ddBtn, "LEFT", 14, 0)
     local arrow = MakeDropdownArrow(ddBtn, 14, PP)
@@ -1454,7 +1477,7 @@ function WidgetFactory:WideDropdown(parent, title, yOffset, values, getValue, se
         ddLbl:SetText(DDResolveLabel(values, order, getValue()))
         if disabledValuesFn then
             -- A disabled current value rests greyed; _valueDimA keeps the
-            -- hover colours on that alpha too.
+            -- hover colors on that alpha too.
             local dimA = disabledValuesFn(getValue()) and 0.15 or nil
             ddBtn._valueDimA = dimA
             ddLbl:SetTextColor(1, 1, 1, dimA or DD_TXT_A)

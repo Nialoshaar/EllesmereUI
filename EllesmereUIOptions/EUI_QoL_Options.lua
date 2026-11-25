@@ -22,6 +22,7 @@ local PAGE_UPGCALC  = "Upgrader"
 local PAGE_SHIFTER  = "Shifter"
 local PAGE_MOVEMENT = "MoveAlert"
 local PAGE_RAIDTOOLS = "Raid Tools"
+local PAGE_LOOT     = "Loot"
 
 -------------------------------------------------------------------------------
 --  Hide Item Transforms picker popup
@@ -295,7 +296,7 @@ local function BuildSelfCombatTextSection(parent, y)
           getValue=function() return SCTGet(key) end,
           setValue=function(v) SCTSet(key, v) end }
     end
-    -- A category toggle's colour, locked while the feature or that category is off
+    -- A category toggle's color, locked while the feature or that category is off
     local function sctSwatch(rgn, key, colorKey, label)
         if EllesmereUI._prebuilding then return end
         EllesmereUI.BuildInlineSwatches(rgn, { {
@@ -1028,12 +1029,12 @@ initFrame:SetScript("OnEvent", function(self)
                 return not EllesmereUI.QoLExtrasGet("showFPS")
             end
 
-            -- Inline class + custom colour swatches, the same convention as the
+            -- Inline class + custom color swatches, the same convention as the
             -- Secondary Stats row: the active mode renders at full alpha, the
             -- other dimmed, each with a naming tooltip.
             local function fpsMode()
                 -- No mode saved: custom -- the look before the mode existed,
-                -- which is white until a colour is actually picked.
+                -- which is white until a color is actually picked.
                 return EllesmereUI.QoLExtrasGet("fpsColorMode") or "custom"
             end
             local fpsUpdateState   -- forward: swatches reference it from OnClick
@@ -1139,7 +1140,7 @@ initFrame:SetScript("OnEvent", function(self)
                 PP.Point(fpsSwatch, "RIGHT", leftRgn._lastInline or leftRgn._control, "LEFT", -8, 0)
                 leftRgn._lastInline = fpsSwatch
 
-                -- Class-colour swatch: live player class colour.
+                -- Class-color swatch: live player class color.
                 local fpsClassSw, fpsUpdClass = EllesmereUI.BuildColorSwatch(
                     leftRgn, leftRgn:GetFrameLevel() + 5,
                     function()
@@ -1678,7 +1679,7 @@ initFrame:SetScript("OnEvent", function(self)
             })
 
             if not EllesmereUI._prebuilding then
-                -- Inline default + class + custom colour swatches, following the
+                -- Inline default + class + custom color swatches, following the
                 -- minimap border's swatch-row convention: the active mode renders
                 -- at full alpha, the others dimmed, each with a naming tooltip.
                 local function ssMode()
@@ -1695,7 +1696,7 @@ initFrame:SetScript("OnEvent", function(self)
                     if ssUpdateState then ssUpdateState() end
                 end
 
-                -- Custom swatch (nearest the cog): stored custom colour. A
+                -- Custom swatch (nearest the cog): stored custom color. A
                 -- click switches to custom mode first; a second click opens the
                 -- picker (same two-step as the minimap border swatches).
                 local ssCustom, ssUpdCustom = EllesmereUI.BuildColorSwatch(
@@ -1721,7 +1722,7 @@ initFrame:SetScript("OnEvent", function(self)
                 PP.Point(ssCustom, "RIGHT", leftRgn._lastInline or leftRgn._control, "LEFT", -8, 0)
                 leftRgn._lastInline = ssCustom
 
-                -- Class-colour swatch: live player class colour.
+                -- Class-color swatch: live player class color.
                 local ssClass, ssUpdClass = EllesmereUI.BuildColorSwatch(
                     leftRgn, leftRgn:GetFrameLevel() + 5,
                     function()
@@ -2634,10 +2635,12 @@ initFrame:SetScript("OnEvent", function(self)
         return math.abs(y)
     end
 
-    local pages = { PAGE_QOL, PAGE_RAIDTOOLS, PAGE_CURSOR, PAGE_SHIFTER, PAGE_MOVEMENT }
+    local pages = { PAGE_QOL, PAGE_RAIDTOOLS, PAGE_LOOT, PAGE_CURSOR, PAGE_SHIFTER, PAGE_MOVEMENT }
     -- No item upgrade system on WoW Forever: the Upgrader tab is not offered there
     -- (its resident file returns at load, so the page builder never exists either).
-    if not EllesmereUI.IS_FOREVER then pages[#pages + 1] = PAGE_UPGCALC end
+    if not EllesmereUI.IS_FOREVER then
+        pages[#pages + 1] = PAGE_UPGCALC
+    end
     local searchTerms = { "brez", "bres", "battle res", "combat res", "cursor", "macro", "fps", "logging", "combat log", "warcraft logs", "upgrade", "ilvl", "item level", "crest", "upgrade calculator", "upgrade tooltips", "tooltip", "shifter", "move", "drag", "position", "demodal", "drift", "combat alert", "enter combat", "leave combat", "in combat", "combat text", "combat notification", "transform", "transforms", "costume", "disguise", "chef's hat", "noggenfogger", "target distance", "distance to target", "range text", "yard", "yards", "movement", "mobility", "gap closer", "blink", "gateway", "warlock gateway", "control shard", "time spiral", "free movement", "raid tools", "raid", "pull timer", "pull", "ready check", "role check", "raid marker", "target marker", "world marker", "flare", "disband", "convert to raid", "countdown" }
     -- Terms for features WoW Forever does not have (the Battle Res indicator)
     -- are dropped there, so a sidebar search for them does not list this
@@ -2650,6 +2653,12 @@ initFrame:SetScript("OnEvent", function(self)
         -- The Unspent Legacy Points alert exists only there.
         searchTerms[#searchTerms + 1] = "legacy"
         searchTerms[#searchTerms + 1] = "legacy points"
+    else
+        -- Transmog rolls are retail only.
+        searchTerms[#searchTerms + 1] = "transmog"
+    end
+    for _, term in ipairs({ "loot", "loot roll", "roll", "need", "greed", "item level", "item quality", "timer", "bop", "boe", "pass", "winner", "roll count" }) do
+        searchTerms[#searchTerms + 1] = term
     end
     EllesmereUI:RegisterModule("EllesmereUIQoL", {
         title       = "Quality of Life",
@@ -2664,6 +2673,12 @@ initFrame:SetScript("OnEvent", function(self)
             if pageName ~= PAGE_RAIDTOOLS and not EllesmereUI._prebuilding
                and _G._EUI_RaidTools_Preview then
                 _G._EUI_RaidTools_Preview(false)
+            end
+            -- Likewise the Loot page's on-screen preview (its eye button).
+            local lootRolls = EllesmereUI._LootRolls
+            if pageName ~= PAGE_LOOT and not EllesmereUI._prebuilding
+               and lootRolls and lootRolls.SamplesShown() then
+                lootRolls.ShowSamples(false)
             end
             if pageName == PAGE_QOL then
                 return BuildQoLPage(pageName, parent, yOffset)
@@ -2683,6 +2698,14 @@ initFrame:SetScript("OnEvent", function(self)
             if pageName == PAGE_RAIDTOOLS and _G._EUI_BuildRaidToolsPage then
                 return _G._EUI_BuildRaidToolsPage(pageName, parent, yOffset)
             end
+            if pageName == PAGE_LOOT and _G._EUI_BuildLootPage then
+                return _G._EUI_BuildLootPage(pageName, parent, yOffset)
+            end
+        end,
+        -- The Loot page's preview lives in the content header; declaring its
+        -- builder makes a cached page whose header was dropped rebuild with it.
+        getHeaderBuilder = function(pageName)
+            if pageName == PAGE_LOOT then return _G._EUI_LootRollsHeaderBuilder end
         end,
         -- Cached pages are restored WITHOUT a rebuild, so buildPage never runs
         -- on the warm path -- reopening the window onto Raid Tools would leave
@@ -2690,6 +2713,10 @@ initFrame:SetScript("OnEvent", function(self)
         -- arrangement: mirror the flag on BOTH paths).
         onPageCacheRestore = function(pageName)
             if EllesmereUI._prebuilding then return end
+            local lootRolls = EllesmereUI._LootRolls
+            if pageName ~= PAGE_LOOT and lootRolls and lootRolls.SamplesShown() then
+                lootRolls.ShowSamples(false)
+            end
             if _G._EUI_RaidTools_Preview then
                 _G._EUI_RaidTools_Preview(pageName == PAGE_RAIDTOOLS)
             end
@@ -2826,6 +2853,7 @@ initFrame:SetScript("OnEvent", function(self)
                     EllesmereUIDB.unlockAnchors.EUI_CombatAlert = nil
                     EllesmereUIDB.unlockAnchors.EUI_BattleRes = nil
                     EllesmereUIDB.unlockAnchors.EUI_Bloodlust = nil
+                    EllesmereUIDB.unlockAnchors.EUI_LootRolls = nil
                 end
                 EllesmereUIDB.hideTransforms = false
                 EllesmereUIDB.hideTransformItems = nil
@@ -2840,6 +2868,8 @@ initFrame:SetScript("OnEvent", function(self)
             if _G._EBS_ResetCursor then _G._EBS_ResetCursor() end
             -- Battle Res and Bloodlust do not exist on WoW Forever.
             if _G._EUI_BattleRes_Reset then _G._EUI_BattleRes_Reset() end
+            -- The Loot Roll Frame, on both clients.
+            if _G._EUI_LootRolls_Reset then _G._EUI_LootRolls_Reset() end
             EllesmereUI._applyHideBlizzardPartyFrame()
             if EllesmereUI._applyBonusRollConfirmation then EllesmereUI._applyBonusRollConfirmation() end
             if EllesmereUI._applyHideErrorMessages then EllesmereUI._applyHideErrorMessages() end
@@ -2862,12 +2892,13 @@ initFrame:SetScript("OnEvent", function(self)
             EllesmereUI._ModuleNS["EllesmereUIQoL"].SCT_Reset()
             EllesmereUI:InvalidatePageCache()
         end,
-        -- Tears down Duration Warning, Raid Tools, and Movement Alert
-        -- previews on module switch (Movement Alert also stops its ticker).
+        -- Tears down Duration Warning, Raid Tools, Movement Alert, and Loot
+        -- Roll previews on module switch (Movement Alert also stops its ticker).
         onModuleLeave = function()
             if EllesmereUI._durWarnHidePreview then EllesmereUI._durWarnHidePreview() end
             if _G._EUI_RaidTools_Preview then _G._EUI_RaidTools_Preview(false) end
             if EllesmereUI._MovementAlertPreview then EllesmereUI._MovementAlertPreview(false) end
+            if EllesmereUI._LootRolls then EllesmereUI._LootRolls.ShowSamples(false) end
         end,
     })
 

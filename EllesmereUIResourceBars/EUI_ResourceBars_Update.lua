@@ -103,8 +103,8 @@ local function UpdateHealthBar()
         pctRaw = 0
     end
 
-    -- Color: threshold via ColorCurve (same as the power bar), from the
-    -- per-spec threshold entry.
+    -- Color: threshold ColorCurve from the per-spec entry, read from predicted
+    -- health like the fill and text (unpredicted lags with no event after).
     local _hpTsEntry = ResolveThresholdSpecEntry(hp)
     local _hpTsEnabled = _hpTsEntry and (_hpTsEntry.thresholdEnabled ~= false) or false
     local _hpBandOn, _hpBands, _hpBandMode, _hpBandRev = ResolveBandConfig(hp, _hpTsEntry)
@@ -139,7 +139,7 @@ local function UpdateHealthBar()
                 curve = GetBarThresholdCurve(tbR, tbG, tbB, tR, tG, tB, _hpTsEntry.thresholdPct or hp.thresholdPct or 30)
             end
             if curve and healthBar._text then
-                local ok, colorResult = pcall(UnitHealthPercent, "player", false, curve)
+                local ok, colorResult = pcall(UnitHealthPercent, "player", true, curve)
                 if ok and colorResult and colorResult.GetRGBA then
                     healthBar._text:SetTextColor(colorResult:GetRGBA())
                 end
@@ -162,7 +162,7 @@ local function UpdateHealthBar()
                 curve = GetBarThresholdCurve(baseR, baseG, baseB, tR, tG, tB, _hpTsEntry.thresholdPct or hp.thresholdPct or 30)
             end
             if curve then
-                local ok, colorResult = pcall(UnitHealthPercent, "player", false, curve)
+                local ok, colorResult = pcall(UnitHealthPercent, "player", true, curve)
                 if ok and colorResult and colorResult.GetRGBA then
                     ft:SetVertexColor(colorResult:GetRGBA())
                 end
@@ -217,7 +217,7 @@ local function UpdatePrimaryBar()
     -- Config resolution cache: ResolvePowerCfg/ResolveThresholdSpecEntry/
     -- ResolveBandConfig walk profile tables and only change on a profile edit,
     -- spec swap or form change, but power events fire a dozen times/sec while
-    -- casting -- and this pair sat above the "is threshold colouring even on"
+    -- casting -- and this pair sat above the "is threshold coloring even on"
     -- branch, so it ran in full for users with the feature off. Resolve once per
     -- config generation (bumped by ApplyAll).
     local pc = ns.PPC
@@ -2288,7 +2288,7 @@ local function UpdateSecondaryResource()
                     -- fill's moving edge so it covers only the empty remainder,
                     -- never reading the secret value. _fillOp is nil at 100.
                     -- Factor 1 (Background on individual pips) keeps the
-                    -- colour alpha each SetStatusBarColor above wrote.
+                    -- color alpha each SetStatusBarColor above wrote.
                     if pip._fillOp then
                         local _fo = pip._fillOp < 1 and pip._fillOp
                         local _sft = pip._secretBar:GetStatusBarTexture()

@@ -776,7 +776,7 @@ ReloadFramesBody = function()
                                 btb.bg:SetColorTexture(bgc.r, bgc.g, bgc.b, bga)
                             end
                             if btb._applyBTBTextTags then
-                                btb._applyBTBTextTags(settings.btbLeftContent or "none", settings.btbRightContent or "none", settings.btbCenterContent or "none")
+                                btb._applyBTBTextTags(settings)
                             end
                             if btb._applyBTBTextPositions then
                                 btb._applyBTBTextPositions(settings)
@@ -785,7 +785,7 @@ ReloadFramesBody = function()
                             btb:Show()
                         end
                     elseif frame.BottomTextBar then
-                        frame.BottomTextBar:Hide()
+                        ns.UF_HideBottomTextBar(frame.BottomTextBar)
                     end
 
                     UpdateBordersForScale(frame, unit)
@@ -935,7 +935,7 @@ ReloadFramesBody = function()
                                 btb.bg:SetColorTexture(bgc.r, bgc.g, bgc.b, bga)
                             end
                             if btb._applyBTBTextTags then
-                                btb._applyBTBTextTags(settings.btbLeftContent or "none", settings.btbRightContent or "none", settings.btbCenterContent or "none")
+                                btb._applyBTBTextTags(settings)
                             end
                             if btb._applyBTBTextPositions then
                                 btb._applyBTBTextPositions(settings)
@@ -944,7 +944,7 @@ ReloadFramesBody = function()
                             btb:Show()
                         end
                     elseif frame.BottomTextBar then
-                        frame.BottomTextBar:Hide()
+                        ns.UF_HideBottomTextBar(frame.BottomTextBar)
                     end
 
                     -- Castbar (target)
@@ -1213,7 +1213,7 @@ ReloadFramesBody = function()
                             btb.bg:SetColorTexture(bgc.r, bgc.g, bgc.b, bga)
                         end
                         if btb._applyBTBTextTags then
-                            btb._applyBTBTextTags(settings.btbLeftContent or "none", settings.btbRightContent or "none", settings.btbCenterContent or "none")
+                            btb._applyBTBTextTags(settings)
                         end
                         if btb._applyBTBTextPositions then
                             btb._applyBTBTextPositions(settings)
@@ -1222,7 +1222,7 @@ ReloadFramesBody = function()
                         btb:Show()
                     end
                 elseif frame.BottomTextBar then
-                    frame.BottomTextBar:Hide()
+                    ns.UF_HideBottomTextBar(frame.BottomTextBar)
                 end
 
                 -- Castbar (focus)
@@ -1234,9 +1234,9 @@ ReloadFramesBody = function()
             elseif unit == "pet" or unit == "targettarget" or unit == "focustarget" then
                 -- Pet, ToT and FoT all share the same simple-frame layout:
                 -- optional portrait on either side, health bar filling the rest.
-                -- A WoW Forever pet adds its own power bar (built at spawn): an
-                -- attached bar grows the stack and the portrait squares off it.
-                local miniPower = (unit == "pet" and ns.UF_PetHasPower and not ns.UF_Blizz()) and frame.Power or nil
+                -- An EUI mini power bar (built at spawn), when attached, grows
+                -- the stack and the portrait squares off it.
+                local miniPower = (ns.UF_MiniHasPower(unit) and not ns.UF_Blizz()) and frame.Power or nil
                 local miniPpPos = miniPower and (settings.powerPosition or "below") or "none"
                 local miniPowerH = (miniPpPos == "below" or miniPpPos == "above") and (settings.powerHeight or 6) or 0
                 local miniAboveOff = (miniPpPos == "above") and miniPowerH or 0
@@ -1649,9 +1649,10 @@ ReloadFramesBody = function()
 
             if frame.unifiedBorder then
                 frame.unifiedBorder:ClearAllPoints()
-                -- Mini frames (ToT/Focus Target/Pet) may override ONLY the border
-                -- size per frame (settings.borderSizeOverride); color and texture
-                -- still inherit from the donor. nil = inherit the donor size.
+                -- Mini frames (ToT/Focus Target/Pet) may override the border size
+                -- (settings.borderSizeOverride) and its Width / Height Offset
+                -- (ns.UF_BorderOffsets) per frame; color and texture still inherit
+                -- from the donor. nil = inherit the donor's.
                 -- Boss frames paint from ns.UF_BossBorderSettings: the donor's
                 -- border until the boss Border Style leaves Inherit.
                 -- ns.UF_FrameBorderPad mirrors this apply for size matching: change the two together.
@@ -1660,15 +1661,12 @@ ReloadFramesBody = function()
                 local bs = settings.borderSizeOverride or bsrc.borderSize or 1
                 local bc = bsrc.borderColor or { r = 0, g = 0, b = 0 }
                 local btex = bsrc.borderTexture or "solid"
-                -- The donor's exact size rides along only while the size IS the
-                -- donor's own; a per-frame override is a substitute step (legacy path).
-                local bpx = nil
-                if not settings.borderSizeOverride then
-                    bpx = EllesmereUI.BorderPx(bsrc.borderSizePx, bs, btex)
-                end
+                -- The donor's exact size applies while the step matches its own (BorderPx checks).
+                local bpx = EllesmereUI.BorderPx(bsrc.borderSizePx, bs, btex)
+                local box, boy = ns.UF_BorderOffsets(UnitToSettingsKey(unit), settings, bsrc)
                 PP.Point(frame.unifiedBorder, "TOPLEFT", frame, "TOPLEFT", 0, 0)
                 PP.Point(frame.unifiedBorder, "BOTTOMRIGHT", frame, "BOTTOMRIGHT", 0, 0)
-                EllesmereUI.ApplyBorderStyle(frame.unifiedBorder, bs, bc.r, bc.g, bc.b, bsrc.borderAlpha or 1, btex, bsrc.borderTextureOffset, bsrc.borderTextureOffsetY, bsrc.borderTextureShiftX, bsrc.borderTextureShiftY, "unitframes", bs, nil, bpx,
+                EllesmereUI.ApplyBorderStyle(frame.unifiedBorder, bs, bc.r, bc.g, bc.b, bsrc.borderAlpha or 1, btex, box, boy, bsrc.borderTextureShiftX, bsrc.borderTextureShiftY, "unitframes", bs, nil, bpx,
                     ns.UF_KeepBorderGradient(bsrc, unit, frame))
                 if bsrc.borderGradientEnabled then
                     ns.UF_ApplyBorderGradient(frame.unifiedBorder, bsrc, unit, frame)
@@ -1954,7 +1952,7 @@ ns.UF_PAD_KEYS = { "player", "target", "focus", "pet", "targettarget", "focustar
 -- Size matching: the width and height the unit frame's textured border draws
 -- OUTSIDE the frame, from exactly what the reload sweep's unified border apply
 -- passes (the paint that lands last: the minis take the donor's border, and a
--- per-frame Border Size override drops the donor's exact size). The border
+-- per-frame Border Size at another step drops the donor's exact size). The border
 -- wraps the frame getSize measures. nil for a solid border, under the stock
 -- looks (no EllesmereUI border), for the class resource bar and the boss
 -- stack. Reads settings only. Change together with the sweep.
@@ -1967,11 +1965,9 @@ function ns.UF_FrameBorderPad(k)
     local btex = d.borderTexture or "solid"
     if btex == "solid" then return nil end
     local bs = settings.borderSizeOverride or d.borderSize or 1
-    local bpx = nil
-    if not settings.borderSizeOverride then
-        bpx = EllesmereUI.BorderPx(d.borderSizePx, bs, btex)
-    end
-    return EllesmereUI.BorderMatchPad(bs, btex, d.borderTextureOffset, d.borderTextureOffsetY,
+    local bpx = EllesmereUI.BorderPx(d.borderSizePx, bs, btex)
+    local ox, oy = ns.UF_BorderOffsets(k, settings, d)
+    return EllesmereUI.BorderMatchPad(bs, btex, ox, oy,
         d.borderTextureShiftX, d.borderTextureShiftY, "unitframes", bs, bpx, nil, d.borderAlpha or 1)
 end
 

@@ -348,7 +348,9 @@ end
 ---------------------------------------------------------------------------
 local BORDER_GRADIENT_STYLE_TIP = "Gradients are available for Solid, Glow, Shadow, Blizzard, Lightspark Border, Pixels and Pixels Textured."
 
-local function BorderColorCfg()
+-- The Border Size slot's inline swatches (Custom | Class Colored): the two pick
+-- the mode, a click on the dimmed one switches to it. rgn = the slot.
+local function BorderColorSwatches(rgn)
     local env = ns._RFO_OptEnv
     local SGet, SVal, SWrite = env.SGet, env.SVal, env.SWrite
     local function GradientEnabled(profile)
@@ -363,14 +365,14 @@ local function BorderColorCfg()
     local function IsClassColored()
         return SVal("borderClassColored", false)
     end
-    local function SetColorMode(swatch, enabled)
-        local snap = EllesmereUI._SOAttribution(swatch)
+    local function SetColorMode(enabled)
+        local snap = EllesmereUI._SOAttribution(rgn)
         env.SSet("borderClassColored", enabled)
         EllesmereUI._settingsChanged = true
-        EllesmereUI._NotifySettingWrite(swatch, snap)
+        EllesmereUI._NotifySettingWrite(rgn, snap)
         EllesmereUI:RefreshPage()
     end
-    local cfg = { type = "multiSwatch", text = "Border Color", swatches = {
+    return {
         { tooltip = "Gradient End Color",
           disabled = function() return not GradientEnabled(env.db.profile) end,
           disabledTooltip = function()
@@ -424,7 +426,7 @@ local function BorderColorCfg()
           end,
           onClick = function(self)
               if IsClassColored() then
-                  SetColorMode(self, false)
+                  SetColorMode(false)
               elseif self._eabOrigClick then
                   self._eabOrigClick(self)
               end
@@ -432,21 +434,18 @@ local function BorderColorCfg()
           refreshAlpha = function() return IsClassColored() and 0.3 or 1 end },
         { tooltip = "Class Colored", hasAlpha = false,
           disabled = function() return ns.RF_CompactOnTab(false) end,
-          disabledTooltip = "Class colors require individual frame borders. Disable Compact Mode first.",
-          rawTooltip = true,
+          disabledTooltip = "Compact Mode", requireState = "disabled",
           getValue = function()
               local c = EllesmereUI.GetClassColor(EllesmereUI._playerClass)
               if c then return c.r, c.g, c.b end
               return 1, 1, 1
           end,
           setValue = function() end,
-          onClick = function(self)
-              if not IsClassColored() then SetColorMode(self, true) end
+          onClick = function()
+              if not IsClassColored() then SetColorMode(true) end
           end,
           refreshAlpha = function() return IsClassColored() and 1 or 0.3 end },
-    } }
-    if EllesmereUI.BlizzStyle then cfg = EllesmereUI.BlizzStyle.Gate("raidframes", cfg) end
-    return cfg
+    }
 end
 
 local function BuildMainPage(pageName, parent, yOffset)
@@ -460,27 +459,50 @@ local function BuildMainPage(pageName, parent, yOffset)
     local _, h, hdr
     local row
 
-    -- Both Group Growth menus grey out the grid flow while groups are merged,
-    -- where it would render as Right (ReadGroupGrowth).
+    -- Both Group Growth menus grey out the grid flows while groups are merged,
+    -- where they would render as Right (ReadGroupGrowth).
     local function GridFlowOff(v)
-        if v == "DOWNRIGHT" and SVal("mergeGroups", false) then
+        if ns._RFIsGridFlow(v) and SVal("mergeGroups", false) then
             return EllesmereUI.DisabledTooltip("Merge Groups", "disabled")
         end
     end
 
-    -- Center Groups (base and per-tier): the grid flow never centers
+    -- Center Groups (base and per-tier): the grid flows never center
     -- (ns._RFGroupCentered), read through the runtime's own self-heal, which
-    -- renders it as Right in merged mode. Locked in combat: the layout pass
+    -- renders them as Right in merged mode. Locked in combat: the layout pass
     -- bails there and would not pick the change up afterwards.
     local CENTER_TIP = "Keeps the shown groups centered on the raid frame area along the group growth direction, so fewer groups sit in the middle instead of starting at one edge."
     local CENTER_OFF_TIP = "This option is not available with the Down and then Right group growth."
+    local CENTER_OFF_TIP_RD = "This option is not available with the Right and then Down group growth."
+    local function EffectiveGroupGrowth(gg)
+        local _, eg = ns._RFEffectiveGrowth("DOWN", gg, SVal("mergeGroups", false))
+        return eg
+    end
+    local function IsEffectiveGrid(gg)
+        return ns._RFIsGridFlow(EffectiveGroupGrowth(gg))
+    end
     local function CenterBlocked(gg)
         if InCombatLockdown() then return true end
-        local _, eg = ns._RFEffectiveGrowth("DOWN", gg, SVal("mergeGroups", false))
-        return eg == "DOWNRIGHT"
+        return IsEffectiveGrid(gg)
     end
-    local function CenterBlockedTip()
-        return InCombatLockdown() and "Unavailable in combat" or CENTER_OFF_TIP
+    -- getGG returns the Group Growth the toggle belongs to (base or tier).
+    local function CenterBlockedTip(getGG)
+        return function()
+            if InCombatLockdown() then return "Unavailable in combat" end
+            return EffectiveGroupGrowth(getGG()) == "RIGHTDOWN" and CENTER_OFF_TIP_RD or CENTER_OFF_TIP
+        end
+    end
+
+    -- Groups Before Wrap (base and per-tier): only the grid flows wrap. Locked
+    -- in combat like Center Groups.
+    local GRID_TIP = "How many groups fill each row or column before the next one starts."
+    local GRID_OFF_TIP = "This option is only available with the Down and then Right or Right and then Down group growth."
+    local function GridSizeBlocked(gg)
+        if InCombatLockdown() then return true end
+        return not IsEffectiveGrid(gg)
+    end
+    local function GridSizeBlockedTip()
+        return InCombatLockdown() and "Unavailable in combat" or GRID_OFF_TIP
     end
 
     parent._showRowDivider = true
@@ -679,6 +701,11 @@ local function BuildMainPage(pageName, parent, yOffset)
                         end
                         return ovs[tier]
                     end
+                    local function TierGroupGrowth()
+                        local ovs = db.profile.raidSizeOverrides
+                        return ovs and ovs[tier] and ovs[tier].groupGrowth
+                            or db.profile.groupGrowth or "RIGHT"
+                    end
                     local function TierGrowthChanged()
                         -- ReloadAndUpdate reloads the live frames (including the growth-corner anchor) AND re-shows the active size preview, so the two never diverge.
                         ReloadAndUpdate()
@@ -748,12 +775,21 @@ local function BuildMainPage(pageName, parent, yOffset)
                                   EnsureTierOv().groupGrowthCentered = v
                                   TierGrowthChanged()
                               end,
-                              disabled=function()
+                              disabled=function() return CenterBlocked(TierGroupGrowth()) end,
+                              disabledTooltip=CenterBlockedTip(TierGroupGrowth), rawTooltip=true },
+                            { type="slider", label="Groups Before Wrap", min=1, max=7, step=1,
+                              tooltip=GRID_TIP,
+                              get=function()
                                   local ovs = db.profile.raidSizeOverrides
-                                  return CenterBlocked(ovs and ovs[tier] and ovs[tier].groupGrowth
-                                      or db.profile.groupGrowth or "RIGHT")
+                                  return ns._RFGridSize(ovs and ovs[tier])
                               end,
-                              disabledTooltip=CenterBlockedTip, rawTooltip=true },
+                              set=function(v)
+                                  if InCombatLockdown() then return end
+                                  EnsureTierOv().groupGridSize = v
+                                  TierGrowthChanged()
+                              end,
+                              disabled=function() return GridSizeBlocked(TierGroupGrowth()) end,
+                              disabledTooltip=GridSizeBlockedTip, rawTooltip=true },
                             { type="dropdown", label="Unit Growth",
                               values=growthValues, order=allGrowthOrder,
                               get=function()
@@ -931,7 +967,7 @@ local function BuildMainPage(pageName, parent, yOffset)
         } })
     end
 
-    -- Border Style | Border Size
+    -- Border Style (+ options cog) | Border Size (+ Border swatches). Mirrors Unit Frames: ONE border recolored by state (hover/target), full SharedMedia support. Hover/Target swatches live on the row below.
     local bdrTexValues, bdrTexOrder = EllesmereUI.GetBorderTextureDropdown()
     local borderStyleRow
     borderStyleRow, h = W:DualRow(parent, y,
@@ -996,17 +1032,54 @@ local function BuildMainPage(pageName, parent, yOffset)
     end
     do
         local rgn = borderStyleRow._rightRegion
-        -- Corner Radius (EllesmereUI_RoundedCorners.lua).
-        EllesmereUI.BuildInlineCog(rgn, {
-            title = "Corner Radius", tip = "Corner Radius",
-            disabled = function() return not EllesmereUI.RoundedStyleOK(SGet("borderTexture")) end,
-            disabledTooltip = "This option requires the Solid, Glow or Shadow border style.",
-            rows = EllesmereUI.RoundedCornerRows({
+        local profile = db.profile
+        local function GradientUnavailable()
+            return optState._partyCtx or not ns.RF_BorderGradientPainter(profile)
+        end
+        local function SetGradientOption(key, value)
+            if db.profile ~= profile or GradientUnavailable() then return end
+            SSet(key, value)
+            EllesmereUI:RefreshPage()
+        end
+        local roundedRows = EllesmereUI.RoundedCornerRows({
                 { type = "slider", label = "Corner Radius", min = 0, max = EllesmereUI.ROUNDED_MAX_RADIUS, step = 1,
                   get = function() return SVal("cornerRadius", 0) end,
                   set = function(v) SSet("cornerRadius", v) end },
-            }, function() return SGet("cornerMask") end, function(v) SSet("cornerMask", v) end),
+            }, function() return SGet("cornerMask") end, function(v) SSet("cornerMask", v) end)
+        local function NotRounded() return not EllesmereUI.RoundedStyleOK(SGet("borderTexture")) end
+        for _, row in ipairs(roundedRows) do
+            local disabled, tip = row.disabled, row.disabledTooltip
+            row.disabled = function() return NotRounded() or (disabled and disabled()) end
+            row.disabledTooltip = function()
+                if NotRounded() then return "This option requires the Solid, Glow or Shadow border style." end
+                return tip
+            end
+        end
+        local function GradientTip()
+            if optState._partyCtx then return "Configure gradients on the Raid Frames tab." end
+            return BORDER_GRADIENT_STYLE_TIP
+        end
+        local gradientRows = {
+            { type = "toggle", label = "Enable Gradient",
+              tooltip = "Blends from your Custom or Class color to the Gradient End Color.",
+              disabled = GradientUnavailable, disabledTooltip = GradientTip, rawTooltip = true,
+              get = function() return profile.borderGradientEnabled end,
+              set = function(v) SetGradientOption("borderGradientEnabled", v) end },
+            { type = "dropdown", label = "Gradient Direction",
+              values = { HORIZONTAL = "Horizontal", VERTICAL = "Vertical" },
+              order = { "HORIZONTAL", "VERTICAL" },
+              disabled = GradientUnavailable, disabledTooltip = GradientTip, rawTooltip = true,
+              get = function() return profile.borderGradientDir or "HORIZONTAL" end,
+              set = function(v) SetGradientOption("borderGradientDir", v) end },
+        }
+        for _, row in ipairs(gradientRows) do roundedRows[#roundedRows + 1] = row end
+        EllesmereUI.BuildInlineCog(rgn, {
+            title = "Border Settings", tip = "Border Settings",
+            disabled = function() return EllesmereUI.BlizzStyle.Get("raidframes") end,
+            disabledTooltip = function() return EllesmereUI.BlizzStyle.Label("raidframes") end,
+            rows = roundedRows,
         })
+        EllesmereUI.BuildInlineSwatches(rgn, BorderColorSwatches(rgn))
     end
 
     -- Width Offset | Height Offset: the textured edge's outward offsets as their
@@ -1050,43 +1123,26 @@ local function BuildMainPage(pageName, parent, yOffset)
         _, h = W:DualRow(parent, y, StockGate(ocfgL), StockGate(ocfgR));  y = y - h
     end
 
-    -- Border Color | Hover Borders
+    -- Show When Solo | Hover Borders: which highlight states are active. Disabling one skips that recolor entirely and the frame keeps its normal border. Hover + Target swatches are inline here.
     local hoverBordersRow
     hoverBordersRow, h = W:DualRow(parent, y,
-        BorderColorCfg(),
+        { type="toggle", text="Show When Solo",
+          -- Disabled only while Party's is the ONE that is on: a profile holding both
+          -- flags (older profile, override swap, import) shows the player twice, and
+          -- each toggle must stay clickable to switch itself off.
+          disabled=function() return db.profile.partyShowWhenSolo and not db.profile.showWhenSolo end,
+          disabledTooltip="Party Frames Show When Solo", requireState="disabled",
+          getValue=function() return SVal("showWhenSolo", false) end,
+          setValue=function(v)
+              SSet("showWhenSolo", v)
+              if ns.UpdateVisibility then ns.UpdateVisibility() end
+              if ns._UpdatePartyVisibility then ns._UpdatePartyVisibility() end
+              EllesmereUI:RefreshPage()
+          end },
         { type="dropdown", text="Hover Borders",
           values={ __placeholder = "All" }, order={ "__placeholder" },
           getValue=function() return "__placeholder" end,
           setValue=function() end });  y = y - h
-    do
-        local profile = db.profile
-        local function GradientUnavailable()
-            return not ns.RF_BorderGradientPainter(profile)
-        end
-        local function SetGradientOption(key, value)
-            if db.profile ~= profile or optState._partyCtx or GradientUnavailable() then return end
-            SSet(key, value)
-            EllesmereUI:RefreshPage()
-        end
-        EllesmereUI.BuildInlineCog(hoverBordersRow._leftRegion, {
-            title = "Border Color Settings",
-            disabled = function() return EllesmereUI.BlizzStyle.Get("raidframes") end,
-            disabledTooltip = function() return EllesmereUI.BlizzStyle.Label("raidframes") end,
-            rows = {
-                { type = "toggle", label = "Enable Gradient",
-                  tooltip = "Blends from your Custom or Class color to the Gradient End Color.",
-                  disabled = GradientUnavailable, disabledTooltip = BORDER_GRADIENT_STYLE_TIP, rawTooltip = true,
-                  get = function() return profile.borderGradientEnabled end,
-                  set = function(v) SetGradientOption("borderGradientEnabled", v) end },
-                { type = "dropdown", label = "Gradient Direction",
-                  values = { HORIZONTAL = "Horizontal", VERTICAL = "Vertical" },
-                  order = { "HORIZONTAL", "VERTICAL" },
-                  disabled = GradientUnavailable, disabledTooltip = BORDER_GRADIENT_STYLE_TIP, rawTooltip = true,
-                  get = function() return profile.borderGradientDir or "HORIZONTAL" end,
-                  set = function(v) SetGradientOption("borderGradientDir", v) end },
-            },
-        })
-    end
     do
         local rightRgn = hoverBordersRow._rightRegion
         local UpdateHBSwatchVis  -- forward declare; assigned after swatches
@@ -1181,7 +1237,7 @@ local function BuildMainPage(pageName, parent, yOffset)
             rightRgn._lastInline = targetSwatch
             targetSwatch:SetScript("OnEnter", function() EllesmereUI.ShowWidgetTooltip(targetSwatch, "Target") end)
             targetSwatch:SetScript("OnLeave", function() EllesmereUI.HideWidgetTooltip() end)
-            -- Stock styles: the stock selection ring carries its own colour.
+            -- Stock styles: the stock selection ring carries its own color.
             local targetBlocked = EllesmereUI.BlizzStyle
                 and EllesmereUI.BlizzStyle.BlockInline("raidframes", targetSwatch) or false
 
@@ -1213,32 +1269,16 @@ local function BuildMainPage(pageName, parent, yOffset)
         end
     end
 
-    _, h = W:DualRow(parent, y,
-        { type="toggle", text="Show When Solo",
-          -- Disabled only while Party's is the ONE that is on: a profile holding both
-          -- flags (older profile, override swap, import) shows the player twice, and
-          -- each toggle must stay clickable to switch itself off.
-          disabled=function() return db.profile.partyShowWhenSolo and not db.profile.showWhenSolo end,
-          disabledTooltip="Party Frames Show When Solo", requireState="disabled",
-          getValue=function() return SVal("showWhenSolo", false) end,
-          setValue=function(v)
-              SSet("showWhenSolo", v)
-              if ns.UpdateVisibility then ns.UpdateVisibility() end
-              if ns._UpdatePartyVisibility then ns._UpdatePartyVisibility() end
-              EllesmereUI:RefreshPage()
-          end },
-        EllesmereUI.BlankRowCfg());  y = y - h
-
     -------------------------------------------------------------------
     --  LAYOUT
     -------------------------------------------------------------------
     _, h = W:SectionHeader(parent, "LAYOUT", y); y = y - h
 
     -- Group Growth | Unit Growth: separated groups (Merge Groups off) support every
-    -- combination of the two axes (5 Group Growth values x 4 Unit Growth ones), but
+    -- combination of the two axes (6 Group Growth values x 4 Unit Growth ones), but
     -- merged mode's single Blizzard flat header can only make its column direction
     -- perpendicular to Unit Growth, so a same-axis pair -- and the two-axis grid
-    -- flow, which it renders as a plain RIGHT run (see ReadGroupGrowth in
+    -- flows, which it renders as a plain RIGHT run (see ReadGroupGrowth in
     -- EUI_RaidFrames_Options.lua) -- gets silently reinterpreted (see the colAnchor
     -- comment in EUI_RaidFrames_Layout.lua)
     -- -- KeepGrowthPerpendicular bumps the other axis instead. A base edit can also
@@ -1297,7 +1337,17 @@ local function BuildMainPage(pageName, parent, yOffset)
               ReloadAndUpdate()
           end,
           disabled=function() return CenterBlocked(SVal("groupGrowth", "RIGHT")) end,
-          disabledTooltip=CenterBlockedTip, rawTooltip=true },
+          disabledTooltip=CenterBlockedTip(function() return SVal("groupGrowth", "RIGHT") end),
+          rawTooltip=true },
+        { type="slider", label="Groups Before Wrap", min=1, max=7, step=1, tooltip=GRID_TIP,
+          get=function() return ns._RFGridSize(nil, db.profile) end,
+          set=function(v)
+              if InCombatLockdown() then return end
+              db.profile.groupGridSize = v
+              ReloadAndUpdate()
+          end,
+          disabled=function() return GridSizeBlocked(SVal("groupGrowth", "RIGHT")) end,
+          disabledTooltip=GridSizeBlockedTip, rawTooltip=true },
     } })
 
     -- Row 4: Sort By (custom dropdown with drag-to-reorder roles) | Self Position

@@ -390,7 +390,8 @@ _G._EUI_BuildForeverGeneralPage = function(pageName, parent, yOffset)
     --  Reveal Unexplored Areas with its color in the cog | Show Zone Levels,
     --  then Show Map Markers with its sets in the cog:
     --  EllesmereUIForeverEssentials_MapTravel.lua | Show Fishing Skill:
-    --  EllesmereUIForeverEssentials_ZoneLevels.lua)
+    --  EllesmereUIForeverEssentials_ZoneLevels.lua, then Show Waypoints in the
+    --  World alone: EllesmereUIForeverEssentials_InGameNavigation.lua)
     ---------------------------------------------------------------------------
     local MR = EllesmereUI._MapReveal
     local ZL = EllesmereUI._ZoneLevels
@@ -476,6 +477,18 @@ _G._EUI_BuildForeverGeneralPage = function(pageName, parent, yOffset)
               ZL.Apply()
           end }
     );  y = y - h
+
+    -- Show Waypoints in the World. Runtime in
+    -- EllesmereUIForeverEssentials_InGameNavigation.lua.
+    local NG = EllesmereUI._InGameNavigation
+    _, h = W:DualRow(parent, y,
+        { type = "toggle", text = "Show Waypoints in the World",
+          tooltip = "Shows a marker in the world over your tracked quest or map pin.",
+          getValue = function() return NG.Get("enabled") end,
+          setValue = function(v) NG.Set(v) end },
+        BLANK()
+    );  y = y - h
+
     do
         EllesmereUI.BuildInlineCog(revealRow._leftRegion, {
             title = "Reveal Unexplored Areas Settings",
@@ -871,13 +884,13 @@ _G._EUI_BuildForeverGeneralPage = function(pageName, parent, yOffset)
         if not EllesmereUI._prebuilding then
         local refresh
         kbBtn, refresh = EllesmereUI.BuildKeybindButton(rgn, {
-            w = 140, h = 30, font = 13,
+            w = 140, h = 30, font = 13, wheel = true,
             get = function() return FI.Get("key") end,
             set = function(v)
                 SetFish("key", v)
                 EllesmereUI:RefreshPage()  -- the cog's disabled state
             end,
-            tooltip = "Left-click to set a keybind.\nRight-click to unbind.",
+            tooltip = "Left-click, then press a key or scroll.\nRight-click to unbind.",
         })
         EllesmereUI.PanelPP.Point(kbBtn, "RIGHT", rgn, "RIGHT", -20, 0)
         EllesmereUI.RegisterWidgetRefresh(refresh)
