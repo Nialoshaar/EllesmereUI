@@ -1722,7 +1722,7 @@ ShowForeverItemMenu = function(btn)
             or not (fo and fo.pickerEnabled == true and btn:IsVisible()) then return false end
         if weapon then
             local hands = fo.weaponHands and fo.weaponHands[weapon.class]
-            return fo.weapon and btn._foreverWeapon == weapon and GetPlayerClass() == weapon.class
+            return fo[weapon.enabledField] == true and btn._foreverWeapon == weapon and GetPlayerClass() == weapon.class
                 and (hands and hands[weapon.field] or "auto") == weapon.choice
                 and GetInventoryItemID("player", weapon.slot) == weapon.weaponID
         end
@@ -1878,7 +1878,7 @@ do
         e.groupHave = nil
         e.groupTotal = nil
         e.requestKey = nil; e.requestName = nil
-        e.foreverGroup = nil
+        e.foreverGroup = nil; e.fvSelf = nil
         e.spellRank = nil
         e.foreverWeapon = nil
         e.stackText = nil
