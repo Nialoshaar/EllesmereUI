@@ -3860,7 +3860,9 @@ initFrame:SetScript("OnEvent", function(self)
         y = y - h
         _, h = W:DualRow(parent, y,
             RestockToggle("junk", "Junk", "Show how many bag slots contain poor-quality items with a vendor sell price in rested areas."),
-            EllesmereUI.BlankRowCfg())
+            FOREVER and RestockToggle("auctionSuppliesCapitalOnly", "AH Supplies in Capitals Only",
+                "Show Health Potions, Mana Potions, Potions, Elixirs (including scrolls), and Weapon Buffs only while rested in Stormwind, Ironforge, Darnassus, Orgrimmar, Thunder Bluff, or Undercity.")
+                or EllesmereUI.BlankRowCfg())
         return math.abs(y - h)
     end
 

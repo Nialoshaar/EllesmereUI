@@ -9,6 +9,16 @@ local EABR = I.EABR
 local KEY = "EABR_Restock"
 local FOOD_DRINK = Enum.ItemConsumableSubclass.Fooddrink
 local POTION = Enum.ItemConsumableSubclass.Potion
+local CAPITAL_AREAS = { 1519, 1537, 1657, 1637, 1638, 1497 }
+
+local function IsInCapital()
+    local zone = GetRealZoneText()
+    if not zone or zone == "" then return false end
+    for _, areaID in ipairs(CAPITAL_AREAS) do
+        if zone == C_Map.GetAreaInfo(areaID) then return true end
+    end
+    return false
+end
 local bagSpace = { key = "bagSpace", minimum = "bagSpaceMinimum", texture = 133633,
     label = function() return EllesmereUI.L("Bag Space") end }
 local junk = { key = "junk", texture = 133784, label = function() return EllesmereUI.L("Junk") end }
@@ -19,14 +29,14 @@ local elixirs = { key = "elixirs", closest = "elixirsClosestLevel", texture = 13
 local potions = { key = "potions", closest = "potionsClosestLevel", texture = 134712,
     groupMinimum = "potionsMinimum", label = function() return EllesmereUI.L("Potions") end }
 local ELIXIR_TYPES = {
-    { key = "strength", label = "Strength", ids = { 2454, 3391, 250349, 9206 } },
-    { key = "agility", label = "Agility", ids = { 2457, 3390, 8949, 9187, 13452 } },
-    { key = "intellect", label = "Intellect", ids = { 3383, 250353, 250354, 9179 } },
+    { key = "strength", label = "Strength", ids = { 2454, 3391, 250349, 9206, 954, 2289, 4426, 10310 } },
+    { key = "agility", label = "Agility", ids = { 2457, 3390, 8949, 9187, 13452, 3012, 1477, 4425, 10309 } },
+    { key = "intellect", label = "Intellect", ids = { 3383, 250353, 250354, 9179, 955, 2290, 4419, 10308 } },
     { key = "spellPower", label = "Spell Power", ids = { 247754, 250342, 9155, 13454 } },
-    { key = "armor", label = "Armor", ids = { 5997, 3389, 8951, 13445 } },
-    { key = "fortitude", label = "Max Health", ids = { 2458, 3825, 250334, 250335 } },
+    { key = "armor", label = "Armor", ids = { 5997, 3389, 8951, 13445, 3013, 1478, 4421, 10305 } },
+    { key = "fortitude", label = "Max Health", ids = { 2458, 3825, 250334, 250335, 1180, 1711, 4422, 10307 } },
     { key = "healthRegen", label = "Health Regen", ids = { 3382, 3388, 3826, 20004 } },
-    { key = "spirit", label = "Spirit", ids = { 250344, 250345, 250346, 250347 } },
+    { key = "spirit", label = "Spirit", ids = { 250344, 250345, 250346, 250347, 1181, 1712, 4424, 10306 } },
     { key = "healing", label = "Healing Done", ids = { 250330, 250331, 250332, 250333 } },
     { key = "manaRegen", label = "Mana Regen", ids = { 250339, 250340, 250341, 20007 } },
 }
@@ -284,9 +294,11 @@ local function CountBagItems()
     waitingForSpellText = false
     wipe(descriptionKinds)
     local countFood, countPotions = false, false
+    local manaDrink
     for _, reminder in ipairs(reminders) do
         if reminder.items then wipe(reminder.items) end
         if reminder.enabled and reminder ~= bagSpace and not reminder.items then reminder.items = {} end
+        if reminder.key == "manaDrink" and reminder.enabled then manaDrink = reminder end
         if reminder.spell and reminder.enabled then
             -- Reference spells supply the localized wording for the whole effect.
             local plain = GetSupplyDescription(reminder.spell)
@@ -358,6 +370,7 @@ local function CountBagItems()
                         local description
                         if matchDescription and not isNutritious then description = GetSupplyDescription(spellID) end
                         local reminder = description and descriptionKinds[description]
+                        if EABR.FOREVER and id == 13724 and manaDrink then reminder = manaDrink end
                         if reminder and reminder.subclass == subclass then
                             AddInventoryCount(reminder, id, info.stackCount)
                             local requiredLevel = 0
@@ -565,6 +578,7 @@ function I.RefreshRestock()
         anchor:RegisterEvent("BAG_UPDATE_DELAYED")
         anchor:RegisterEvent("PLAYER_UPDATE_RESTING")
         anchor:RegisterEvent("PLAYER_ENTERING_WORLD")
+        if EABR.FOREVER then anchor:RegisterEvent("ZONE_CHANGED_NEW_AREA") end
         if EABR.FOREVER then
             anchor:RegisterEvent("SPELL_UPDATE_COOLDOWN")
         end
@@ -598,9 +612,14 @@ function I.RefreshRestock()
         anchor:SetSize(anchorWidth, h)
         styleDirty = true
     end
+    local capitalRequired = EABR.FOREVER and restock.auctionSuppliesCapitalOnly ~= false
+    local auctionSuppliesAllowed = not capitalRequired or IsInCapital()
     local wantLevel = false
     for _, reminder in ipairs(reminders) do
         local enabled = IsReminderEnabled(reminder, restock)
+        if reminder.families or reminder.subclass == POTION then
+            enabled = enabled and auctionSuppliesAllowed
+        end
         local closest = enabled and reminder.closest ~= nil and restock[reminder.closest] ~= false
         if enabled ~= reminder.enabled or closest ~= reminder.closestLevel then
             reminder.enabled, reminder.closestLevel = enabled, closest

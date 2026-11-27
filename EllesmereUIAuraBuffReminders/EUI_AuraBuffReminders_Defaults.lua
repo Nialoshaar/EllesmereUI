@@ -74,6 +74,7 @@ end
 local defaults = {
     profile = {
         restock = {
+            auctionSuppliesCapitalOnly = true,
             healthFood = false,
             healthFoodMinimum = 5,
             healthFoodClosestLevel = true,
