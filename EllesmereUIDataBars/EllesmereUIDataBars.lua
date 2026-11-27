@@ -25,6 +25,7 @@ if EUI_CLIENT_BLOCKED then return end -- pre-12.1 client failsafe (EllesmereUI_C
 --   ns.RenameBar(id, name)
 --   ns.ApplyBar(id)                        idempotent cfg -> runtime
 --   ns.ApplyTheme(id)                      theme-only fast path
+--   ns.ApplyBarBorder(id)                  border-only fast path
 --   ns.RequestLayout(id)                   coalesced relayout
 --   ns.AddBlock(barId, typeKey) -> blockCfg
 --   ns.RemoveBlock(barId, blockId)
@@ -44,7 +45,8 @@ if EUI_CLIENT_BLOCKED then return end -- pre-12.1 client failsafe (EllesmereUI_C
 --   ns.LOC_MAX_WIDTH_DEFAULT               Manual-mode width before one is set
 --   ns.BlockTextDynamic(blockType) -> r, g, b   state-driven Text Color swatch
 --   ns.UpdateAllBarVisibility()
---   ns.MakePreviewBackdrop(host, themeCfg, showBorder)
+--   ns.MakePreviewBackdrop(host, themeCfg, showBorder, barCfg)
+--   ns.ApplyPreviewBorder(host, barCfg)
 --   ns.BLOCK_TYPES / ns.BLOCK_DEFAULTS / ns.EDB_VIS_CAPS / ns.EDGE_PAD
 --
 --  The calls that run the other way (options file -> runtime). Both are
@@ -1816,6 +1818,112 @@ local BG_ASPECT = 561 / 433
 local BASE_L, BASE_R, BASE_T, BASE_B = 0.25, 1, 0, 0.75
 local BASE_U, BASE_V = BASE_R - BASE_L, BASE_B - BASE_T
 
+local EUI = EllesmereUI
+local borderOptions = EUI.ApplyBorderStyle and EUI.HideBorderStyle and EUI.BorderPx
+    and EUI.RoundCorners and EUI.RoundedStyleOK and EUI.GetClassColor
+    and EUI.GetBorderStyleSelectDefaults and EUI.GetBorderTextureDropdown and EUI.GetBorderDefaults
+if borderOptions and EUI.RegisterBorderDefaults and EUI.BORDER_DEFAULTS_FRAMES then
+    EUI.RegisterBorderDefaults("databars", EUI.BORDER_DEFAULTS_FRAMES)
+end
+
+function ns.BarBorderSize(cfg)
+    local border = cfg.border
+    if border and border.size ~= nil then return border.size end
+    return cfg.hideBorder and 0 or 1
+end
+
+function ns.BarBorderBehind(border)
+    if not border then return false end
+    if border.behind ~= nil then return border.behind end
+    return border.texture == "shadow"
+end
+
+local defaultBorderTexture, defaultBorderColor
+function ns.BarBorderRGB(border, classColor, useDefault)
+    if classColor then
+        local color = EUI._playerClass and EUI.GetClassColor(EUI._playerClass)
+        if color then return color.r, color.g, color.b end
+        return 1, 1, 1
+    end
+    local color = not useDefault and border and border.color
+    if not color then
+        local texture = border and border.texture or "solid"
+        if defaultBorderTexture ~= texture then
+            defaultBorderTexture = texture
+            defaultBorderColor = EUI.GetBorderStyleSelectDefaults(texture)
+        end
+        color = defaultBorderColor
+    end
+    return color.r, color.g, color.b
+end
+
+local function ApplyLegacyBorder(host, shown)
+    local border = host._edbBorder
+    if shown then
+        local gen = POOL.Gen and POOL.Gen(host)
+        if not border or host._edbLegacyBorderGen ~= gen then
+            border = PP.CreateBorder(host, 0, 0, 0, 0.8, 1, "OVERLAY", 7)
+            host._edbBorder, host._edbLegacyBorderGen = border, gen
+        end
+    end
+    if border then
+        local alpha = shown and (host._edbBackdropOpacity or 1) or 0
+        if border:GetAlpha() ~= alpha then border:SetAlpha(alpha) end
+    end
+end
+
+local function ApplyBorderToHost(host, cfg)
+    local border = cfg.border
+    local gen = POOL.Gen and POOL.Gen(host)
+    local art = host._edbBorderGen == gen and host._edbBorderArt
+    local saved = borderOptions and border
+    ApplyLegacyBorder(host, not saved and not cfg.hideBorder)
+    local size, texture = ns.BarBorderSize(cfg), saved and saved.texture or "solid"
+    local radius = saved and saved.radius or 0
+    local rounded = radius > 0 and saved.corners ~= 0 and EUI.RoundedStyleOK(texture)
+    if not saved or (size <= 0 and not rounded) then
+        if art then
+            if art._edbRounded then
+                EUI.RoundCorners(host, 0)
+                art._edbRounded = nil
+            end
+            if art:IsShown() then
+                EUI.HideBorderStyle(art)
+                art:Hide()
+            end
+        end
+        return
+    end
+    if not art then
+        art = POOL.CreateFrame("Frame", nil, host)
+        art:SetAllPoints(host)
+        art._edbRounded = nil
+        host._edbBorderArt, host._edbBorderGen = art, gen
+    end
+    local level = host:GetFrameLevel()
+    local borderLevel = ns.BarBorderBehind(saved) and math.max(0, level - 1) or (level + 10)
+    if art:GetFrameLevel() ~= borderLevel then art:SetFrameLevel(borderLevel) end
+    local r, g, b = ns.BarBorderRGB(saved, saved.classColor)
+    EUI.ApplyBorderStyle(art, size, r, g, b, saved.alpha or 0.8, texture,
+        saved.offsetX, saved.offsetY, saved.shiftX, saved.shiftY, "databars", size, nil,
+        EUI.BorderPx(saved.sizePx, size, texture))
+    if rounded then
+        local opts = art._edbRoundOpts
+        if not opts or art._edbRoundGen ~= gen then
+            opts = { border = art, roots = {}, textures = {
+                host._edbBgAtlas, host._edbBgOverlay, host._edbModernBg, host._edbBarTex,
+            } }
+            art._edbRoundOpts, art._edbRoundGen = opts, gen
+        end
+        opts.style, opts.corners = texture, saved.corners
+        EUI.RoundCorners(host, radius, opts)
+        art._edbRounded = true
+    elseif art._edbRounded then
+        EUI.RoundCorners(host, 0)
+        art._edbRounded = nil
+    end
+end
+
 local function EnsureThemeTextures(host)
     -- Made once per host. An options preview strip is a frame of the options
     -- page pool that every header build dresses again for another use: the
@@ -1907,19 +2015,17 @@ local function ApplyThemeToHost(host, theme, texKey, showBorder)
     -- is baked into the strip textures, frame alpha multiplies on top.
     -- SetAlpha is combat-legal even on implicitly protected bars. Off
     -- (cfg.hideBorder == true) zeros it rather than Hide(), same reason.
-    if host._edbBorder then
-        if showBorder == false then
-            host._edbBorder:SetAlpha(0)
-        else
-            host._edbBorder:SetAlpha(op)
-        end
-    end
+    host._edbBackdropOpacity = op
+    ApplyLegacyBorder(host, showBorder ~= false)
 end
 
 -- Exposed so the options preview strip renders the exact same recipe.
-function ns.MakePreviewBackdrop(host, themeCfg, showBorder)
-    ApplyThemeToHost(host, themeCfg, nil, showBorder)
+function ns.MakePreviewBackdrop(host, themeCfg, showBorder, barCfg)
+    ApplyThemeToHost(host, themeCfg, nil, showBorder ~= false and not (borderOptions and barCfg and barCfg.border))
+    if barCfg and (barCfg.border or host._edbBorderArt) then ApplyBorderToHost(host, barCfg) end
 end
+
+if borderOptions then ns.ApplyPreviewBorder = ApplyBorderToHost end
 
 -------------------------------------------------------------------------------
 --  Live registry + bar factory
@@ -2316,7 +2422,6 @@ function ns.ApplyBar(id)
         rec.bar:SetMovable(true)
         rec.bar:EnableMouse(false)
         rec.bar:SetClampedToScreen(true)
-        rec.bar._edbBorder = PP.CreateBorder(rec.bar, 0, 0, 0, 0.8, 1, "OVERLAY", 7)
         -- Anchor-driven size changes (full-length bars stretching with the
         -- screen) re-solve the layout; RequestLayout coalesces, and the
         -- combat gate defers protected bars to regen.
@@ -2362,7 +2467,8 @@ function ns.ApplyBar(id)
     ApplyBarPosition(id)
     -- Back onto its unlock anchor (nil until the unlock core is built).
     if EllesmereUI.ReapplyUnlockAnchor then EllesmereUI.ReapplyUnlockAnchor("EDB_" .. id) end
-    ApplyThemeToHost(rec.bar, cfg.theme, cfg.barTexture, not cfg.hideBorder)
+    ApplyThemeToHost(rec.bar, cfg.theme, cfg.barTexture, not cfg.hideBorder and not (borderOptions and cfg.border))
+    if cfg.border or rec.bar._edbBorderArt then ApplyBorderToHost(rec.bar, cfg) end
 
     -- Reconcile block instances against cfg.blocks
     local want = {}
@@ -2445,7 +2551,24 @@ function ns.ApplyTheme(id)
     local rec = live[id]
     local cfg = ns.GetBar(id)
     if not (rec and rec.bar and cfg) then return end
-    ApplyThemeToHost(rec.bar, cfg.theme, cfg.barTexture, not cfg.hideBorder)
+    local showBorder = rec.enabled and not cfg.hideBorder and not (borderOptions and cfg.border)
+    if showBorder and not rec.bar._edbBorder and InCombatLockdown() and rec.bar:IsProtected() then
+        ns.DeferUntilOOC("legacyborder:" .. id, function() ns.ApplyTheme(id) end)
+        showBorder = false
+    end
+    ApplyThemeToHost(rec.bar, cfg.theme, cfg.barTexture, showBorder)
+end
+
+if borderOptions then
+    function ns.ApplyBarBorder(id)
+        local rec, cfg = live[id], ns.GetBar(id)
+        if not (rec and rec.enabled and cfg) then return end
+        if InCombatLockdown() and rec.bar:IsProtected() then
+            ns.DeferUntilOOC("barborder:" .. id, function() ns.ApplyBarBorder(id) end)
+            return
+        end
+        ApplyBorderToHost(rec.bar, cfg)
+    end
 end
 
 function ns.GetLiveAutoLength(barId, blockId)
@@ -3141,6 +3264,7 @@ function ns.CreateBar(templateKey)
         snapEdge    = t.snapEdge,
         sizingMode  = t.sizingMode,
         fontScale   = 100,
+        hideBorder  = true,
         theme = {
             style       = t.theme,
             euiAlpha    = 0.5,

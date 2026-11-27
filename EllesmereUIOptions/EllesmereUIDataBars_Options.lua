@@ -52,6 +52,7 @@ initFrame:SetScript("OnEvent", function(self)
     local _edbStripRelayout      -- set per header build: re-solves + repositions the preview
     local _edbStripBarId         -- set per header build: the bar that preview shows
     local _edbPreviewHost        -- the preview strip frame (live theme feedback)
+    local borderOptionsRevision = 0
     local _edbHeldGlowKey        -- click-target key whose glow pulses until the
                                  -- setting is filled in; outlives page builds
     local _edbHeldGlowY          -- its section offset when last shown: sections
@@ -152,11 +153,20 @@ initFrame:SetScript("OnEvent", function(self)
         end
     end
 
+    local function ApplyPreviewTheme(host, cfg, full)
+        local showLegacy = not cfg.hideBorder and not (ns.ApplyPreviewBorder and cfg.border)
+        if showLegacy and not ns.ApplyPreviewBorder then
+            -- Older DataBars runtimes expect the preview to provide this frame.
+            host._edbBorder = PP.CreateBorder(host, 0, 0, 0, 0.8, 1, "OVERLAY", 7)
+        end
+        ns.MakePreviewBackdrop(host, cfg.theme, showLegacy, full and cfg or nil)
+    end
+
     -- Live theme feedback for the preview strip (swatch drag / dim slider).
     local function RefreshPreviewTheme()
         local cfg = SelectedBar()
         if _edbPreviewHost and _edbPreviewHost:IsShown() and cfg then
-            ns.MakePreviewBackdrop(_edbPreviewHost, cfg.theme, not cfg.hideBorder)
+            ApplyPreviewTheme(_edbPreviewHost, cfg)
         end
     end
 
@@ -751,10 +761,7 @@ initFrame:SetScript("OnEvent", function(self)
             PP.Point(strip, "TOPLEFT", hdr, "TOPLEFT", PAD, fy)
             strip:SetFrameLevel(hdr:GetFrameLevel() + 3)
         end
-        -- Border handle set BEFORE the backdrop so the theme pass can fade
-        -- it with Bar Opacity, exactly like the live bar.
-        strip._edbBorder = PP.CreateBorder(strip, 0, 0, 0, 0.8, 1, "OVERLAY", 7)
-        ns.MakePreviewBackdrop(strip, cfg.theme, not cfg.hideBorder)
+        ApplyPreviewTheme(strip, cfg, true)
         _edbPreviewHost = strip
 
         local stripUsable = stripLen - SEDGE * 2
@@ -1772,6 +1779,13 @@ initFrame:SetScript("OnEvent", function(self)
             return c and ("EDB_" .. c.id) or nil
         end })
 
+        local borderControls = ns.ApplyBarBorder and ns.ApplyPreviewBorder and EllesmereUI.BorderPxSliderCfg
+            and EllesmereUI.BorderOffsetRowCfgs and EllesmereUI.RoundedCornerRows
+        local scaleCfg = { type = "slider", text = "Text Scale", min = 50, max = 150, step = 5,
+              tooltip = "Scales every text element on this bar.",
+              getValue = function() return cfg.fontScale or 100 end,
+              setValue = function(v) cfg.fontScale = v; Apply() end }
+
         -- Visibility | Visibility Options (renaming lives in the selector's
         -- inline edit; "Never" visibility fully disables the bar's work).
         local visRow
@@ -1786,9 +1800,7 @@ initFrame:SetScript("OnEvent", function(self)
                   ns.UpdateAllBarVisibility()
               end,
               onOptionChanged = function() ns.UpdateAllBarVisibility() end },
-            -- Hide Border moved up from the section's old trailing half-row into the slot
-            -- the Visibility Options dropdown left behind, so neither row is half empty.
-            { type = "toggle", text = "Hide Border",
+            borderControls and scaleCfg or { type = "toggle", text = "Hide Border",
               tooltip = "Hide the 1-pixel outline around the bar.",
               getValue = function() return cfg.hideBorder == true end,
               setValue = function(v)
@@ -1928,17 +1940,6 @@ initFrame:SetScript("OnEvent", function(self)
                   if ns.ApplyTheme then ns.ApplyTheme(barId) end
                   Apply()
               end }
-        local scaleCfg = { type = "slider", text = "Text Scale", min = 50, max = 150, step = 5,
-              tooltip = "Scales every text element on this bar.",
-              getValue = function()
-                  local v = cfg.fontScale
-                  if v == nil then v = 100 end
-                  return v
-              end,
-              setValue = function(v)
-                  cfg.fontScale = v
-                  Apply()
-              end }
         -- One bar-wide switch (was a per-block toggle).
         local hoverBlocksCfg = { type = "toggle", text = "Hover Highlight Blocks",
               tooltip = "Shows a faint white wash over each block on mouseover.",
@@ -2013,6 +2014,163 @@ initFrame:SetScript("OnEvent", function(self)
                     EllesmereUI.ShowWidgetTooltip(swatch, EllesmereUI.DisabledTooltip("the Modern background style"))
                 end)
                 blk:SetScript("OnLeave", function() EllesmereUI.HideWidgetTooltip() end)
+            end
+        end
+
+        if borderControls then
+            if not EllesmereUI._prebuilding then borderOptionsRevision = borderOptionsRevision + 1 end
+            local revision = borderOptionsRevision
+            local function Current()
+                return revision == borderOptionsRevision and ns.GetBar(barId) == cfg and SelectedBar() == cfg
+            end
+            local function Get(key) return cfg.border and cfg.border[key] end
+            local function Set(key, value)
+                if Get(key) == value then return false end
+                local border = cfg.border
+                if not border then border = {}; cfg.border = border end
+                border[key] = value
+                if not next(border) then cfg.border = nil end
+                return true
+            end
+            local function Texture() return Get("texture") or "solid" end
+            local function Textured() return Texture() ~= "solid" end
+            local function Size() return ns.BarBorderSize(cfg) end
+            local function ExactSize() return Get("sizePx") end
+            local function SetSize(v)
+                Set("size", v ~= (cfg.hideBorder and 0 or 1) and v or nil)
+            end
+            local function PaintBorder()
+                ns.ApplyBarBorder(barId)
+                if _edbPreviewHost and _edbStripBarId == barId and _edbPreviewHost:IsShown() then
+                    ns.ApplyPreviewBorder(_edbPreviewHost, cfg)
+                end
+            end
+            local function Update(key, value)
+                if Current() and Set(key, value) then PaintBorder() end
+            end
+            local values, order = EllesmereUI.GetBorderTextureDropdown()
+            local borderRow
+            borderRow, h = W:DualRow(parent, y,
+                { type = "dropdown", text = "Border Style", values = values, order = order,
+                  getValue = Texture,
+                  setValue = function(v)
+                      if not Current() or Texture() == v then return end
+                      local size = Size()
+                      local preset = EllesmereUI.GetBorderDefaultSize and EllesmereUI.GetBorderDefaultSize("databars", v)
+                      borderOptionsRevision = borderOptionsRevision + 1
+                      Set("texture", v ~= "solid" and v or nil)
+                      Set("sizePx", nil)
+                      SetSize(size > 0 and (preset or size) or 0)
+                      Set("offsetX", nil); Set("offsetY", nil)
+                      Set("shiftX", nil); Set("shiftY", nil)
+                      Set("behind", nil); Set("color", nil); Set("alpha", 1)
+                      ns.ApplyBarBorder(barId)
+                      HardRefresh()
+                  end },
+                EllesmereUI.BorderPxSliderCfg({ trackWidth = 120,
+                    getStep = Size, getTex = Texture, getPx = ExactSize,
+                    setStep = function(v) if Current() then SetSize(v) end end,
+                    setPx = function(v) if Current() then Set("sizePx", v or nil) end end,
+                    apply = function()
+                        if not Current() then return end
+                        PaintBorder()
+                        EllesmereUI:RefreshPage()
+                    end,
+                })); y = y - h
+
+            if Textured() or EllesmereUI._prebuilding then
+                local width, height = EllesmereUI.BorderOffsetRowCfgs({
+                    addonKey = "databars", getTex = Texture, getStep = Size, getSizeKey = Size, getPx = ExactSize,
+                    getX = function() return Get("offsetX") end,
+                    setX = function(v) Update("offsetX", v) end,
+                    getY = function() return Get("offsetY") end,
+                    setY = function(v) Update("offsetY", v) end,
+                })
+                _, h = W:DualRow(parent, y, width, height); y = y - h
+            end
+            local function ShiftRow(label, key)
+                local function Default()
+                    local _, _, x, shiftY = EllesmereUI.GetBorderDefaults("databars", Texture(), Size())
+                    return key == "shiftX" and x or shiftY
+                end
+                return { type = "slider", label = label, min = -10, max = 10, step = 1,
+                    get = function() return Get(key) or Default() end,
+                    set = function(v) Update(key, v ~= Default() and v or nil) end }
+            end
+            local styleCog = EllesmereUI.BuildInlineCog(borderRow._leftRegion, {
+                title = "Border Options",
+                rows = {
+                    ShiftRow("Shift X", "shiftX"), ShiftRow("Shift Y", "shiftY"),
+                    { type = "toggle", label = "Show Behind",
+                      get = function() return ns.BarBorderBehind(cfg.border) end,
+                      set = function(v)
+                          if v == (Texture() == "shadow") then v = nil end
+                          Update("behind", v)
+                      end },
+                },
+            })
+            if styleCog and not EllesmereUI._prebuilding then styleCog:SetShown(Textured()) end
+
+            EllesmereUI.BuildInlineCog(borderRow._rightRegion, {
+                title = "Corner Radius", tip = "Corner Radius",
+                disabled = function() return not EllesmereUI.RoundedStyleOK(Texture()) end,
+                disabledTooltip = "This option requires the Solid, Glow or Shadow border style.", rawTooltip = true,
+                rows = EllesmereUI.RoundedCornerRows({
+                    { type = "slider", label = "Corner Radius", min = 0, max = EllesmereUI.ROUNDED_MAX_RADIUS, step = 1,
+                      get = function() return Get("radius") or 0 end,
+                      set = function(v) Update("radius", v > 0 and v or nil) end },
+                }, function() return Get("corners") end,
+                   function(v) Update("corners", v ~= 15 and v or nil) end),
+            })
+            if not EllesmereUI._prebuilding then
+                local function StoreColor(r, g, b, a)
+                    local dr, dg, db = ns.BarBorderRGB(cfg.border, false, true)
+                    local color = Get("color")
+                    if r == dr and g == dg and b == db then
+                        color = nil
+                    elseif not color or r ~= color.r or g ~= color.g or b ~= color.b then
+                        color = { r = r, g = g, b = b }
+                    end
+                    local changed = Set("color", color)
+                    if Set("alpha", a ~= 0.8 and a or nil) or changed then PaintBorder(); return true end
+                    return false
+                end
+                local function ClassColor() return Get("classColor") == true end
+                local function PickMode(value)
+                    Update("classColor", value)
+                    EllesmereUI:RefreshPage()
+                end
+                EllesmereUI.BuildInlineSwatches(borderRow._rightRegion, {
+                    { tooltip = "Custom Color", hasAlpha = true,
+                      getValue = function()
+                          local r, g, b = ns.BarBorderRGB(cfg.border)
+                          return r, g, b, Get("alpha") or 0.8
+                      end,
+                      setValue = function(r, g, b, a) if Current() then StoreColor(r, g, b, a) end end,
+                      bindPicker = function()
+                          local oldColor, oldAlpha = Get("color"), Get("alpha")
+                          local lastColor, lastAlpha
+                          return function(r, g, b, a)
+                              if not Current() or ClassColor() or not StoreColor(r, g, b, a) then return false end
+                              lastColor, lastAlpha = Get("color"), Get("alpha")
+                          end, function()
+                              if not Current() or ClassColor() or Get("color") ~= lastColor or Get("alpha") ~= lastAlpha then return false end
+                              Set("color", oldColor); Set("alpha", oldAlpha)
+                              PaintBorder()
+                          end
+                      end,
+                      onClick = function(self)
+                          if not Current() then return end
+                          if ClassColor() then PickMode(nil)
+                          elseif self._eabOrigClick then self._eabOrigClick(self) end
+                      end,
+                      refreshAlpha = function() return ClassColor() and 0.3 or 1 end },
+                    { tooltip = "Class Color",
+                      getValue = function() return ns.BarBorderRGB(cfg.border, true) end,
+                      setValue = function() end,
+                      onClick = function() if Current() and not ClassColor() then PickMode(true) end end,
+                      refreshAlpha = function() return ClassColor() and 1 or 0.3 end },
+                })
             end
         end
 
@@ -2092,7 +2250,11 @@ initFrame:SetScript("OnEvent", function(self)
                   Apply()
               end });  y = y - h
 
-        _, h = W:DualRow(parent, y, scaleCfg, hoverBlocksCfg);  y = y - h
+        if borderControls then
+            _, h = W:DualRow(parent, y, hoverBlocksCfg, EllesmereUI.BlankRowCfg()); y = y - h
+        else
+            _, h = W:DualRow(parent, y, scaleCfg, hoverBlocksCfg); y = y - h
+        end
 
         -- Bar deletion lives in the selector dropdown's inline delete -- no
         -- body row. Visibility moved to the top of the section; rename =
@@ -3969,7 +4131,8 @@ initFrame:SetScript("OnEvent", function(self)
             cfg.thickness = 30
             cfg.fontScale = 100
             cfg.theme = { style = "eui", euiAlpha = 0.5, modernColor = { r = 0.067, g = 0.067, b = 0.067, a = 0.95 } }
-            cfg.hideBorder = nil
+            cfg.hideBorder = true
+            cfg.border = nil
             cfg.visibility = "always"
             cfg.visibilityModes = nil
             cfg.visibilityMatch = nil
