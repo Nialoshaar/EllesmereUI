@@ -437,7 +437,11 @@ local function ResizeBGToContent()
 end
 EQT.ResizeBGToContent = ResizeBGToContent
 
-function EQT.ApplyBackground()
+function EQT.ApplyBorder(cfg)
+    if _bgFrame and ns.ApplyTrackerBorder then ns.ApplyTrackerBorder(_bgFrame, cfg or EQT.DB(), _bgFrame._tex, GetTracker()) end
+end
+
+function EQT.ApplyBackground(skipBorder)
     local bg = EnsureBG()
     if not bg then return end
     local cfg = EQT.DB()
@@ -448,6 +452,7 @@ function EQT.ApplyBackground()
     bg._tex:SetColorTexture(r, g, b, a)
     ResizeBGToContent()
     ApplyTopDivider()
+    if not skipBorder then EQT.ApplyBorder(cfg) end
 end
 
 -- Force Quest Tracker on Screen: when the saved preference is on, keep the

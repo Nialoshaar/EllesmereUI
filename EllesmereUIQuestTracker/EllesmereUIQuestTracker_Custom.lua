@@ -1408,11 +1408,16 @@ end
 -------------------------------------------------------------------------------
 -- Frame
 -------------------------------------------------------------------------------
-local function ApplyBackground()
+local function ApplyBorder(cfg)
+    if frame and ns.ApplyTrackerBorder then ns.ApplyTrackerBorder(frame.bgHolder, cfg or EQT.DB(), frame.bg, frame) end
+end
+
+local function ApplyBackground(skipBorder)
     if not frame then return end
     local c = EQT.DB()
     frame.bg:SetColorTexture(c.bgR or 0, c.bgG or 0, c.bgB or 0, c.bgAlpha or 0.5)
     frame.topLine:SetColorTexture(EQT.GetLineRGB())
+    if not skipBorder then ApplyBorder(c) end
     ShowBackground(true)
     local hr, hg, hb = EQT.GetHeaderRGB()
     header.text:SetTextColor(hr, hg, hb)
@@ -1840,6 +1845,7 @@ function EQT.InitCustom()
     EQT.UpdateVisibility    = UpdateVisibility
     EQT.RefreshStateDriver  = UpdateVisibility
     EQT.ApplyBackground     = ApplyBackground
+    EQT.ApplyBorder         = ApplyBorder
     EQT.RefreshFonts        = RefreshFonts
     EQT.RestyleAll          = function() ApplyBackground(); RefreshFonts() end
     EQT.ApplyForceOnScreen  = function() frame:SetClampedToScreen(Cfg("forceOnScreen") == true) end

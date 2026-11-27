@@ -60,6 +60,8 @@ local QT_DEFAULTS = {
             bgB                  = 0.035,
             bgAlpha              = 0.75,
             showTopLine          = true,
+            trackerBorderTexture = "solid",
+            trackerBorderSize    = 0,
 
             -- Text colors. All apply via SetTextColor on their respective
             -- FontStrings (titles, objective lines, focus override).
@@ -112,6 +114,131 @@ end
 
 function EQT.Cfg(k) return EQT.DB()[k] end
 function EQT.Set(k, v) EQT.DB()[k] = v end
+
+-- Keep the existing tracker usable if only the child addon has been updated.
+if EllesmereUI.ApplySecretSafeBorderStyle and EllesmereUI.BorderPx and EllesmereUI.GetClassColor
+    and EllesmereUI.GetBorderDefaults and EllesmereUI.GetBorderStyleSelectDefaults and EllesmereUI.GetBorderTextureDropdown then
+    if EllesmereUI.RegisterBorderDefaults and EllesmereUI.BORDER_DEFAULTS_FRAMES then
+        EllesmereUI.RegisterBorderDefaults("questtracker", EllesmereUI.BORDER_DEFAULTS_FRAMES)
+    end
+    if EllesmereUI.RoundCorners and EllesmereUI.ApplyBorderStyle then
+        ns.TrackerBorderCanRound = EllesmereUI.RoundedStyleOK
+    end
+
+    function ns.TrackerBorderBehind(cfg)
+        local behind = cfg.trackerBorderBehind
+        if behind ~= nil then return behind end
+        return cfg.trackerBorderTexture == "shadow"
+    end
+
+    local defaultTexture, defaultColor
+    function ns.GetTrackerBorderRGB(cfg, mode)
+        if mode == "class" then
+            local color = EllesmereUI._playerClass and EllesmereUI.GetClassColor(EllesmereUI._playerClass)
+            if color then return color.r, color.g, color.b end
+            return 1, 1, 1
+        end
+        local color = mode ~= "default" and cfg.trackerBorderColor
+        if not color then
+            local texture = cfg.trackerBorderTexture or "solid"
+            if defaultTexture ~= texture then
+                defaultTexture = texture
+                defaultColor = EllesmereUI.GetBorderStyleSelectDefaults(texture)
+            end
+            color = defaultColor
+        end
+        return color.r, color.g, color.b
+    end
+
+    function ns.ApplyTrackerBorder(owner, cfg, background, tracker)
+        local size = cfg.trackerBorderSize or 0
+        local border = owner._questBorder
+        local radius = cfg.trackerBorderRadius or 0
+        if size <= 0 and radius <= 0 and (not border or not (border:IsShown() or border._questRounded)) then return end
+        local texture = cfg.trackerBorderTexture or "solid"
+        local textured = texture ~= "solid" and texture ~= ""
+        local rounded = radius > 0 and cfg.trackerBorderCorners ~= 0
+            and ns.TrackerBorderCanRound and ns.TrackerBorderCanRound(texture)
+        if size <= 0 and not rounded and (not border or not (border:IsShown() or border._questRounded)) then return end
+        local backdrop = textured and size > 0 and EllesmereUI.ApplyBorderStyle ~= nil
+        if backdrop or rounded then
+            -- BackdropTemplate needs ordinary dimensions, while the rounded
+            -- texture path can use secret dimensions but needs readable anchors.
+            local ok, w, h = pcall(owner.GetSize, owner)
+            if not ok then return end
+            backdrop = backdrop and not (issecretvalue and (issecretvalue(w) or issecretvalue(h)))
+                and type(w) == "number" and type(h) == "number"
+        end
+        if not border then
+            border = CreateFrame("Frame", nil, owner)
+            border:SetAllPoints()
+            owner._questBorder = border
+        end
+        local level = owner:GetFrameLevel()
+        local strata = (tracker or owner):GetFrameStrata()
+        if textured then
+            if ns.TrackerBorderBehind(cfg) then
+                -- A level-zero background has no lower level in its own strata.
+                if level == 0 then strata = "BACKGROUND" end
+                level = math.max(0, level - 1)
+            else
+                level = (tracker or owner):GetFrameLevel() + 10
+            end
+        end
+        if border:GetFrameStrata() ~= strata then border:SetFrameStrata(strata) end
+        if border:GetFrameLevel() ~= level then border:SetFrameLevel(level) end
+        local r, g, b = ns.GetTrackerBorderRGB(cfg, cfg.trackerBorderColorMode)
+        local alpha = cfg.trackerBorderAlpha or 1
+        local px = EllesmereUI.BorderPx(cfg.trackerBorderSizePx, size, texture)
+        local ox, oy = cfg.trackerBorderOffsetX, cfg.trackerBorderOffsetY
+        local sx, sy = cfg.trackerBorderShiftX, cfg.trackerBorderShiftY
+        if border._questRounded and not rounded then
+            EllesmereUI.RoundCorners(owner, 0)
+        end
+        local secretGlow = not backdrop and rounded and textured and size > 0
+            and EllesmereUI.ROUND_CORNERS_SECRET_GLOW and EllesmereUI.SecretBorderGeometry ~= nil
+        if backdrop then
+            if not border._questBackdrop then
+                EllesmereUI.ApplySecretSafeBorderStyle(border, border, 0, 0, 0, 0, 1, "solid")
+            end
+            EllesmereUI.ApplyBorderStyle(border, size, r, g, b, alpha, texture, ox, oy, sx, sy,
+                "questtracker", size, nil, px)
+        elseif secretGlow then
+            if not border._questSecretGlow then
+                EllesmereUI.ApplySecretSafeBorderStyle(border, border, 0, 0, 0, 0, 1, "solid")
+                border:Show()
+            end
+        else
+            EllesmereUI.ApplySecretSafeBorderStyle(border, border, size, r, g, b, alpha, texture, ox, oy, sx, sy,
+                "questtracker", size, nil, px)
+        end
+        border._questBackdrop = backdrop
+        border._questSecretGlow = secretGlow
+        border._questRounded = rounded
+        if rounded then
+            local opts = border._questRoundOpts
+            if not opts then
+                opts = { border = border, roots = {}, textures = { background } }
+                border._questRoundOpts = opts
+            end
+            opts.style, opts.corners = texture, cfg.trackerBorderCorners
+            if secretGlow then
+                local glow = border._questGlowSettings
+                if not glow then
+                    glow = { addonKey = "questtracker" }
+                    border._questGlowSettings = glow
+                end
+                glow.size, glow.style, glow.px = size, texture, px
+                glow.offsetX, glow.offsetY, glow.shiftX, glow.shiftY = ox, oy, sx, sy
+                glow.r, glow.g, glow.b, glow.a = r, g, b, alpha
+                opts.secretGlow = glow
+            else
+                opts.secretGlow = nil
+            end
+            EllesmereUI.RoundCorners(owner, radius, opts)
+        end
+    end
+end
 
 -- The style this module RENDERS this session: "eui" | "blizzard" | "classic".
 -- Read from the real profile once and latched for the session (a live profile
@@ -243,7 +370,10 @@ _G._EQT_RefreshAll = function()
     -- Before ApplyBackground: the BG's top anchor depends on whether the
     -- master header is suppressed.
     if EQT.ApplyMasterHeaderVisibility then EQT.ApplyMasterHeaderVisibility() end
-    if EQT.ApplyBackground then EQT.ApplyBackground() end
+    if EQT.ApplyBackground then
+        -- The custom restyle has already reapplied its border.
+        EQT.ApplyBackground(ns.UseCustomTracker() and EQT.RestyleAll ~= nil)
+    end
     if EQT.ApplyForceOnScreen then EQT.ApplyForceOnScreen() end
     if EQT.SyncPosition then EQT.SyncPosition() end
     -- The hotkey is a per-profile setting backed by an override binding, so a

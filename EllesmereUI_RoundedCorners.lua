@@ -15,6 +15,8 @@ if EUI_CLIENT_BLOCKED then return end -- pre-12.1 client failsafe (EllesmereUI_C
 --                  the body; nil slots are fine
 --    opts.textures up to 9 single textures of the body; nil slots are fine
 --    opts.border   the frame EllesmereUI.ApplyBorderStyle draws on (optional)
+--    opts.secretGlow  glow settings for SecretBorderGeometry and RGBA, when
+--                  the border cannot use a backdrop with secret dimensions
 --    opts.clip     a SetClipsChildren frame to switch off while rounded
 --    opts.rect     the region whose rect is the rounded shape (default owner)
 --    opts.corners  the corners that round, as bits (1 top left, 2 top right,
@@ -636,6 +638,7 @@ local GLOW_BACKDROP_PARTS = {
 
 local function HideSquareGlow(gl)
     local bd = gl.bd
+    if not bd then return end
     local hidden = gl.hiddenBackdropParts
     -- Recolouring a backdrop touches its individual slices. Keep the square
     -- art hidden while the rounded copy owns the visible border.
@@ -652,7 +655,7 @@ end
 local function RestoreSquareGlow(gl)
     for part in pairs(gl.hiddenBackdropParts) do part:Show() end
     wipe(gl.hiddenBackdropParts)
-    gl.bd:SetAlpha(1)
+    if gl.bd then gl.bd:SetAlpha(1) end
 end
 
 local function GlowOff(st)
@@ -721,8 +724,14 @@ local function GlowPiece(S, E, half)
 end
 
 local function GlowOn(st, border, bd, radius)
-    -- The edge size from the backdrop's own info (GetBackdrop copies it).
-    local E = bd.backdropInfo and bd:GetEdgeSize()
+    local safe = not bd and st.secretGlow
+    local E, left, top, right, bottom
+    if safe then
+        E, left, top, right, bottom = EllesmereUI.SecretBorderGeometry(border, safe.size, safe.style,
+            safe.offsetX, safe.offsetY, safe.shiftX, safe.shiftY, safe.addonKey, safe.size, nil, safe.px)
+    elseif bd.backdropInfo then
+        E = bd:GetEdgeSize()
+    end
     if not E or E <= 0 then GlowOff(st); return end
     local gl = GlowParts(st, border)
     local f = gl.frame
@@ -738,16 +747,23 @@ local function GlowOn(st, border, bd, radius)
     end
     -- S: from the glow's outer corner to the arc center, at most half the
     -- glow's short side. A square corner takes radius 0.
-    local half = HalfSide(bd)
+    local half = bd and HalfSide(bd)
     local S = E / 2 + radius
     if half and S > half then S = half end
     local corners = st.corners
-    local lvl = bd:GetFrameLevel()
-    if gl.S ~= S or gl.E ~= E or gl.half ~= half or gl.lvl ~= lvl or gl.corners ~= corners then
+    local lvl = (bd or border):GetFrameLevel()
+    if gl.S ~= S or gl.E ~= E or gl.half ~= half or gl.lvl ~= lvl or gl.corners ~= corners
+        or gl.left ~= left or gl.top ~= top or gl.right ~= right or gl.bottom ~= bottom then
         gl.S, gl.E, gl.half, gl.lvl, gl.corners = S, E, half, lvl, corners
+        gl.left, gl.top, gl.right, gl.bottom = left, top, right, bottom
         gl.gradientPainted = nil
         f:ClearAllPoints()
-        f:SetAllPoints(bd)
+        if safe then
+            f:SetPoint("TOPLEFT", border, "TOPLEFT", left, top)
+            f:SetPoint("BOTTOMRIGHT", border, "BOTTOMRIGHT", right, bottom)
+        else
+            f:SetAllPoints(bd)
+        end
         f:SetFrameLevel(lvl)
         local path, size, inset, crop, run, band = GlowPiece(S, E, half)
         local sPath, sSize, sInset, sCrop, sRun
@@ -794,13 +810,15 @@ local function GlowOn(st, border, bd, radius)
         right:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -o, runs[4])
         right:SetWidth(band)
     end
-    local paintGradient = bd._euiBackdropGradient and EllesmereUI.PaintBackdropBorderGradient
+    local paintGradient = bd and bd._euiBackdropGradient and EllesmereUI.PaintBackdropBorderGradient
     if paintGradient then
         gl.gradientPainted = gl.gradientPainted or paintGradient(bd, gl.corner, gl.edge)
         if not gl.gradientPainted then bd._euiBackdropGradient.painted = false end
     else
         gl.gradientPainted = nil
-        local r, g, b, a = bd:GetBackdropBorderColor()
+        local r, g, b, a
+        if safe then r, g, b, a = safe.r, safe.g, safe.b, safe.a
+        else r, g, b, a = bd:GetBackdropBorderColor() end
         for i = 1, 4 do
             gl.corner[i]:SetVertexColor(r, g, b, a)
             gl.edge[i]:SetVertexColor(r, g, b, a)
@@ -834,6 +852,7 @@ local function Clear(st)
     st.kRadius = nil
     SolidOff(st)
     GlowOff(st)
+    st.secretGlow = nil
     if st.border then byBorder[st.border] = nil end
     if st.clip then st.clip:SetClipsChildren(true); st.clip = nil end
     st.on = nil
@@ -911,7 +930,11 @@ end
 
 local function Paint(st, radius, inner, cont, glow)
     if cont then SolidOn(st, cont, radius, inner) else SolidOff(st) end
-    if glow then GlowOn(st, st.border, glow, radius) else GlowOff(st) end
+    if glow or (st.border and st.secretGlow and st.glowStyle) then
+        GlowOn(st, st.border, glow, radius)
+    else
+        GlowOff(st)
+    end
 end
 
 -- The owner's options page pool dress (EllesmereUI_FramePool.lua; nil for a
@@ -971,6 +994,7 @@ function EllesmereUI.RoundCorners(owner, radius, opts)
     end
     st.radius, st.corners = radius, corners
     st.glowStyle = style == "glow" or style == "shadow"
+    st.secretGlow = opts.secretGlow
     local rect = opts.rect or owner
     if st.rect ~= rect then
         st.rect = rect
@@ -1005,6 +1029,7 @@ function EllesmereUI.RoundCorners(owner, radius, opts)
         EllesmereUI.RegisterPxReapply(owner, Refit)
     end
 end
+EllesmereUI.ROUND_CORNERS_SECRET_GLOW = true
 
 -- A RoundCorners pass with only opts.corners changed: the body keeps its
 -- textures, so the mask is reshaped in place (Refit) instead of walked again.

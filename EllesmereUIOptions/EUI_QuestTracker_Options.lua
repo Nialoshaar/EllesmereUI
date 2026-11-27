@@ -33,13 +33,18 @@ initFrame:SetScript("OnEvent", function(self)
     end
     local function Cfg(k)    return DB()[k]  end
     local function Set(k, v) DB()[k] = v     end
+    local borderStyleRevision = 0
 
     local function RefreshAll()
         if EQT.RefreshStateDriver then EQT.RefreshStateDriver() end
         if EQT.UpdateVisibility   then EQT.UpdateVisibility()   end
         if EQT.RestyleAll         then EQT.RestyleAll()         end
-        if EQT.ApplyBackground    then EQT.ApplyBackground()    end
+        if EQT.ApplyBackground    then EQT.ApplyBackground(ns.UseCustomTracker() and EQT.RestyleAll ~= nil) end
         if EQT.ApplyMasterHeaderVisibility then EQT.ApplyMasterHeaderVisibility() end
+    end
+
+    local function RefreshBackgroundAppearance()
+        if EQT.ApplyBackground then EQT.ApplyBackground(true) end
     end
 
     local function BuildPage(_, parent, yOffset)
@@ -317,11 +322,11 @@ initFrame:SetScript("OnEvent", function(self)
             { type="slider", text="Background Opacity",
               min = 0, max = 1, step = 0.05,
               getValue=function() return Cfg("bgAlpha") or 0.5 end,
-              setValue=function(v) Set("bgAlpha", v); if EQT.ApplyBackground then EQT.ApplyBackground() end end },
+              setValue=function(v) Set("bgAlpha", v); RefreshBackgroundAppearance() end },
             { type="toggle", text="Show Top Line",
               tooltip="Draws a 1px accent line above the background at the top of the tracker.",
               getValue=function() return Cfg("showTopLine") ~= false end,
-              setValue=function(v) Set("showTopLine", v); if EQT.ApplyBackground then EQT.ApplyBackground() end end })
+              setValue=function(v) Set("showTopLine", v); RefreshBackgroundAppearance() end })
         do
             local rgn = bgRow._leftRegion
             local ctrl = rgn._control
@@ -349,7 +354,7 @@ initFrame:SetScript("OnEvent", function(self)
                     end,
                     function(r, g, b)
                         Set("bgR", r); Set("bgG", g); Set("bgB", b)
-                        if EQT.ApplyBackground then EQT.ApplyBackground() end
+                        RefreshBackgroundAppearance()
                     end,
                     false, 20)
                 PP.Point(bgSwatch, "RIGHT", rgn._lastInline or ctrl, "LEFT", -8, 0)
@@ -358,6 +363,178 @@ initFrame:SetScript("OnEvent", function(self)
             end
         end
         y = y - h
+
+        if ns.TrackerBorderBehind and EllesmereUI.BorderPxSliderCfg then
+            local values, order = EllesmereUI.GetBorderTextureDropdown()
+            local config, revision = DB(), borderStyleRevision
+            local function IsCurrent() return config == DB() and revision == borderStyleRevision end
+            local function GetTexture() return Cfg("trackerBorderTexture") or "solid" end
+            local function IsTextured()
+                local texture = GetTexture()
+                return texture ~= "solid" and texture ~= ""
+            end
+            local function GetBorderStep() return Cfg("trackerBorderSize") or 0 end
+            local function GetBorderPx() return Cfg("trackerBorderSizePx") end
+            local function ApplyBorder()
+                if EQT.ApplyBorder then EQT.ApplyBorder(config) end
+            end
+            local function RefreshBorder()
+                ApplyBorder()
+                EllesmereUI:RefreshPage()
+            end
+            local sizeCfg = EllesmereUI.BorderPxSliderCfg({
+                trackWidth = 120,
+                getStep = GetBorderStep,
+                setStep = function(v) if IsCurrent() then config.trackerBorderSize = v ~= 0 and v or nil end end,
+                getTex = GetTexture,
+                getPx = GetBorderPx,
+                setPx = function(v) if IsCurrent() then config.trackerBorderSizePx = v or nil end end,
+                apply = function() if IsCurrent() then RefreshBorder() end end,
+            })
+            row, h = W:DualRow(parent, y,
+                { type="dropdown", text="Border Style", values=values, order=order,
+                  getValue=GetTexture,
+                  setValue=function(v)
+                      if not IsCurrent() or v == GetTexture() then return end
+                      local size = GetBorderStep()
+                      local defaultSize = EllesmereUI.GetBorderDefaultSize and EllesmereUI.GetBorderDefaultSize("questtracker", v)
+                      borderStyleRevision = borderStyleRevision + 1
+                      Set("trackerBorderTexture", v ~= "solid" and v or nil)
+                      Set("trackerBorderSizePx", nil)
+                      Set("trackerBorderSize", size > 0 and (defaultSize or size) or nil)
+                      Set("trackerBorderOffsetX", nil)
+                      Set("trackerBorderOffsetY", nil)
+                      Set("trackerBorderShiftX", nil)
+                      Set("trackerBorderShiftY", nil)
+                      Set("trackerBorderBehind", nil)
+                      Set("trackerBorderColor", nil)
+                      Set("trackerBorderAlpha", nil)
+                      ApplyBorder()
+                      EllesmereUI:RefreshPage(true)
+                  end },
+                sizeCfg)
+            local borderRow = row
+            y = y - h
+
+            local function SetBorderOption(key, value)
+                if not IsCurrent() or config[key] == value then return end
+                config[key] = value
+                ApplyBorder()
+            end
+            if EllesmereUI.BorderOffsetRowCfgs and (IsTextured() or EllesmereUI._prebuilding) then
+                local offsetX, offsetY = EllesmereUI.BorderOffsetRowCfgs({
+                    addonKey = "questtracker",
+                    getTex = GetTexture, getStep = GetBorderStep, getSizeKey = GetBorderStep, getPx = GetBorderPx,
+                    getX = function() return Cfg("trackerBorderOffsetX") end,
+                    setX = function(v) SetBorderOption("trackerBorderOffsetX", v) end,
+                    getY = function() return Cfg("trackerBorderOffsetY") end,
+                    setY = function(v) SetBorderOption("trackerBorderOffsetY", v) end,
+                })
+                _, h = W:DualRow(parent, y, offsetX, offsetY)
+                y = y - h
+            end
+
+            local function ShiftRow(label, key, axis)
+                local function DefaultShift()
+                    local _, _, x, shiftY = EllesmereUI.GetBorderDefaults("questtracker", GetTexture(), GetBorderStep())
+                    return axis == "x" and x or shiftY
+                end
+                return { type="slider", label=label, min=-10, max=10, step=1,
+                    get=function() return Cfg(key) or DefaultShift() end,
+                    set=function(v) SetBorderOption(key, v ~= DefaultShift() and v or nil) end }
+            end
+            local styleCog = EllesmereUI.BuildInlineCog(borderRow._leftRegion, {
+                title = "Border Options",
+                rows = {
+                    ShiftRow("Shift X", "trackerBorderShiftX", "x"),
+                    ShiftRow("Shift Y", "trackerBorderShiftY", "y"),
+                    { type="toggle", label="Show Behind",
+                      get=function() return ns.TrackerBorderBehind(DB()) end,
+                      set=function(v)
+                          if v == (GetTexture() == "shadow") then v = nil end
+                          SetBorderOption("trackerBorderBehind", v)
+                      end },
+                },
+            })
+            if styleCog and not EllesmereUI._prebuilding then styleCog:SetShown(IsTextured()) end
+
+            if ns.TrackerBorderCanRound and EllesmereUI.RoundedCornerRows then
+                EllesmereUI.BuildInlineCog(borderRow._rightRegion, {
+                    title = "Corner Radius", tip = "Corner Radius",
+                    disabled = function() return not ns.TrackerBorderCanRound(GetTexture()) end,
+                    disabledTooltip = "This option requires the Solid, Glow or Shadow border style.", rawTooltip = true,
+                    rows = EllesmereUI.RoundedCornerRows({
+                        { type="slider", label="Corner Radius", min=0, max=EllesmereUI.ROUNDED_MAX_RADIUS, step=1,
+                          get=function() return Cfg("trackerBorderRadius") or 0 end,
+                          set=function(v) SetBorderOption("trackerBorderRadius", v > 0 and v or nil) end },
+                    }, function() return Cfg("trackerBorderCorners") end,
+                       function(v) SetBorderOption("trackerBorderCorners", v ~= 15 and v or nil) end),
+                })
+            end
+            if not EllesmereUI._prebuilding then
+                local function StoreColor(cfg, r, g, b, a)
+                    local dr, dg, db = ns.GetTrackerBorderRGB(cfg, "default")
+                    local color = cfg.trackerBorderColor
+                    local newColor = color
+                    if r == dr and g == dg and b == db then
+                        newColor = nil
+                    elseif not color or r ~= color.r or g ~= color.g or b ~= color.b then
+                        newColor = { r = r, g = g, b = b }
+                    end
+                    local alpha = a ~= 1 and a or nil
+                    if newColor == color and alpha == cfg.trackerBorderAlpha then return false end
+                    cfg.trackerBorderColor, cfg.trackerBorderAlpha = newColor, alpha
+                    ApplyBorder()
+                    return true
+                end
+
+                local function MakeBorderSwatch(mode, tooltip)
+                    return {
+                        tooltip = tooltip,
+                        getValue = function() return ns.GetTrackerBorderRGB(DB(), mode) end,
+                        setValue = function() end,
+                        onClick = function(self)
+                            if not IsCurrent() then return end
+                            if Cfg("trackerBorderColorMode") ~= mode then
+                                Set("trackerBorderColorMode", mode)
+                                RefreshBorder()
+                            elseif not mode and self._eabOrigClick then
+                                self._eabOrigClick(self)
+                            end
+                        end,
+                        refreshAlpha = function() return Cfg("trackerBorderColorMode") == mode and 1 or 0.3 end,
+                    }
+                end
+                local custom = MakeBorderSwatch(nil, "Custom Color")
+                custom.hasAlpha = true
+                custom.getValue = function()
+                    local cfg = DB()
+                    local r, g, b = ns.GetTrackerBorderRGB(cfg)
+                    return r, g, b, cfg.trackerBorderAlpha or 1
+                end
+                custom.setValue = function(r, g, b, a)
+                    if IsCurrent() then StoreColor(config, r, g, b, a) end
+                end
+                custom.bindPicker = function()
+                    local originalColor, originalAlpha = config.trackerBorderColor, config.trackerBorderAlpha
+                    local lastColor, lastAlpha
+                    return function(r, g, b, a)
+                        if not IsCurrent() or config.trackerBorderColorMode then return false end
+                        if not StoreColor(config, r, g, b, a) then return false end
+                        lastColor, lastAlpha = config.trackerBorderColor, config.trackerBorderAlpha
+                    end, function()
+                        if not IsCurrent() or config.trackerBorderColorMode or config.trackerBorderColor ~= lastColor
+                            or config.trackerBorderAlpha ~= lastAlpha then return false end
+                        if lastColor == originalColor and lastAlpha == originalAlpha then return false end
+                        config.trackerBorderColor, config.trackerBorderAlpha = originalColor, originalAlpha
+                        ApplyBorder()
+                    end
+                end
+                EllesmereUI.BuildInlineSwatches(borderRow._rightRegion, {
+                    custom, MakeBorderSwatch("class", "Class Color"),
+                })
+            end
+        end
 
         -- Row 3: Header Font Size | Title Font Size
         _, h = W:DualRow(parent, y,
