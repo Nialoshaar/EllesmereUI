@@ -1298,25 +1298,29 @@ local spellPowerConsumables = {
     setting = "spellPowerConsumableByClass",
     items = { { 13454, 35, 17539 }, { 9155, 20, 11390 }, { 250342, 15, 1250971 }, { 247754, 5, 1245244 } },
 }
+local WICKED_REGENERATION_ITEM = 250336
+local WICKED_REGENERATION_AURA = 1250932
+local wickedMana = { WICKED_REGENERATION_ITEM, 10, WICKED_REGENERATION_AURA }
+local wickedHealth = { WICKED_REGENERATION_ITEM, 9, WICKED_REGENERATION_AURA }
 local manaRegenConsumables = {
-    label = "Mana Regen (MP5)", dismissKey = "forever:manaRegen", iconSpell = 24363,
-    setting = "manaRegenConsumableByClass",
+    label = "Mana Regen", dismissKey = "forever:manaRegen", iconSpell = 24363,
+    setting = "manaRegenConsumableByClass", wicked = wickedMana,
     items = {
-        { 250341, 20, 1250948 }, { 20007, 12, 24363 }, { 250336, 10, 1250932 },
+        { 250341, 20, 1250948 }, { 20007, 12, 24363 }, wickedMana,
         { 250340, 6, 1250944 }, { 250339, 3, 1250942 },
     },
+}
+local healthRegenConsumables = {
+    label = "Health Regen", dismissKey = "forever:healthRegen", iconSpell = 24361,
+    setting = "healthRegenConsumableByClass", wicked = wickedHealth,
+    items = { { 20004, 20, 24361 }, { 3826, 12, 3223 }, wickedHealth, { 3388, 6, 3222 }, { 3382, 2, 3219 } },
 }
 -- The single reminder uses the first eligible stat in dropdown order.
 local statConsumables = {
     intellectConsumables, strengthConsumables, agilityConsumables, staminaConsumables, spiritConsumables, protectionConsumables,
 }
 local elixirConsumables = {
-    spellPowerConsumables, manaRegenConsumables,
-    {
-        label = "Health Regen (HP5)", dismissKey = "forever:healthRegen", iconSpell = 24361,
-        setting = "healthRegenConsumableByClass",
-        items = { { 20004, 20, 24361 }, { 3826, 12, 3223 }, { 250336, 9, 1250932 }, { 3388, 6, 3222 }, { 3382, 2, 3219 } },
-    },
+    spellPowerConsumables, manaRegenConsumables, healthRegenConsumables,
     {
         label = "Healing Done", dismissKey = "forever:healingDone", iconSpell = 1250926,
         setting = "healingDoneConsumableByClass",
@@ -1476,7 +1480,22 @@ local function StatBonusToBeat(stat, restricted, warnSec, showUpgrades, campInte
     if showUpgrades and active < items[1][2] then return math.max(amount, active) end
 end
 
-local function PickStatConsumable(stat, activeBonus, level, choices, low)
+-- A refresh of Wicked Regeneration can replace itself near expiry, but it
+-- must beat every other active regen elixir in both stats.
+local function HasBlockingRegenAura(stat, restricted)
+    for _, item in ipairs(stat.items) do
+        if item[2] < stat.wicked[2] then break end
+        local spellID = item[3]
+        if spellID ~= WICKED_REGENERATION_AURA then
+            if restricted and not EABR.IsRuntimeNonSecret(spellID) then return true end
+            local ok, aura = pcall(C_UnitAuras.GetPlayerAuraBySpellID, spellID)
+            if not ok or isSecret(aura) or aura then return true end
+        end
+    end
+    return false
+end
+
+local function PickStatConsumable(stat, activeBonus, level, choices, low, wickedAllowed)
     local watchLevel = false
     local firstID
     local first, last, step = 1, #stat.items, 1
@@ -1486,7 +1505,7 @@ local function PickStatConsumable(stat, activeBonus, level, choices, low)
         local itemID, bonus = consumable[1], consumable[2]
         if not low and bonus <= activeBonus then break end
         local count = bonus > activeBonus and CachedGetItemCount(itemID) or 0
-        if count > 0 then
+        if count > 0 and (itemID ~= WICKED_REGENERATION_ITEM or wickedAllowed) then
             local requiredLevel = EABR.FvConsumableItemLevel(itemID)
             if requiredLevel then
                 if level >= requiredLevel then
@@ -1531,11 +1550,11 @@ local function ReadStatReminderGroup(group, fo, playerClass)
     local statWaitsForItem = false
     local watchStatSpells = false
     local healthBonus, healthExpiration
+    local wickedAllowed
     local separate = fo[group.separateKey] == true
     if separate or not _dismissedUntilLoad[group.dismissKey] then
-        local restricted, campIntellect, firstAidKit
+        local restricted, campIntellect, firstAidKit, warnSec
         local minutes = fo[group.expiryKey] or 0
-        local warnSec = minutes > 0 and EABR.ShowUnderThresholdApplies() and minutes * 60 or nil
         local showUpgrades = fo[group.upgradeKey] == true
         for _, stat in ipairs(group.stats) do
             local picks = fo[stat.setting]
@@ -1551,12 +1570,20 @@ local function ReadStatReminderGroup(group, fo, playerClass)
                     local own = ItemsOwned(stat.items)
                     local ownHealth = stat.health and ItemsOwned(stat.health.items)
                     if own or ownHealth then
-                        if restricted == nil then restricted = EllesmereUI.AuraKit.AurasRestricted() end
+                        if restricted == nil then
+                            restricted = EllesmereUI.AuraKit.AurasRestricted()
+                            warnSec = minutes > 0 and EABR.ShowUnderThresholdApplies() and minutes * 60 or nil
+                        end
                         if own and not restricted and campIntellect == nil and (stat == intellectConsumables or stat == staminaConsumables) then
                             campIntellect, firstAidKit = FvCampStatBonuses()
                         end
                         if own then
                             bonus, expiration = StatBonusToBeat(stat, restricted, warnSec, showUpgrades, campIntellect, firstAidKit)
+                            if wickedAllowed == nil and stat.wicked and bonus and bonus < stat.wicked[2]
+                                and CachedGetItemCount(WICKED_REGENERATION_ITEM) > 0 then
+                                wickedAllowed = not HasBlockingRegenAura(manaRegenConsumables, restricted)
+                                    and not HasBlockingRegenAura(healthRegenConsumables, restricted)
+                            end
                         end
                         if ownHealth then
                             healthBonus, healthExpiration = StatBonusToBeat(stat.health, restricted, warnSec, showUpgrades)
@@ -1573,6 +1600,7 @@ local function ReadStatReminderGroup(group, fo, playerClass)
     end
     group.needed = statConsumableNeeded
     group.healthBonus, group.healthExpiration = healthBonus, healthExpiration
+    group.wickedAllowed = wickedAllowed
     return statConsumableNeeded, statWaitsForItem, watchStatSpells
 end
 
@@ -1607,7 +1635,7 @@ local function AddStatReminderGroup(missing, group, fo, playerClass, level, pick
             local expiration = stat.expiration
             local pinned = separate and familyPicks and familyPicks[stat.dismissKey] or preferred
             if bonus then
-                itemID, blockedByLevel = PickStatConsumable(stat, bonus, level, choices, low)
+                itemID, blockedByLevel = PickStatConsumable(stat, bonus, level, choices, low, group.wickedAllowed)
                 if blockedByLevel then watchLevel = true end
             end
             local pinnedScroll = pinned and choices[pinned]
@@ -1708,7 +1736,7 @@ function EABR.CollectForever(missing, inInstance, inPvP, playerClass)
         and not (EllesmereUI.AuraKit.AurasRestricted() and not EABR.FvRanksReadable(censerIDs))
     if wantCenser and not censerMissing then EABR._fvCenser = nil end
     local censer = censerMissing and EABR.FvCenserOwned() or false
-    local statConsumableNeeded, statWaitsForItem, watchStatSpells
+    local statConsumableNeeded, statWaitsForItem, watchStatSpells = false, false, false
     if itemShows and not inPvP and playerClass then
         for _, group in ipairs(statReminderGroups) do
             local needed, waitsForItem, tracksSpells = ReadStatReminderGroup(group, fo, playerClass)

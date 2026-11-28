@@ -1094,6 +1094,8 @@ initFrame:SetScript("OnEvent", function(self)
                 elseif picks then
                     picks[class] = nil
                 end
+                local cog = rgn._euiCog
+                if cog then cog._euiCogState() end
                 RefreshAll()
             end, nil, nil, nil, nil, nil, { dimLocked = true })
         EllesmereUI.PanelPP.Point(dd, "RIGHT", rgn, "RIGHT", -20, 0)
@@ -1138,19 +1140,22 @@ initFrame:SetScript("OnEvent", function(self)
     end
     local function ElixirsSlot()
         return { type="label", text=EllesmereUI.L("Elixirs"),
-            tooltip=EllesmereUI.L("Reminds you when a selected elixir buff is missing and an eligible elixir is in your bags. Click the icon to use it.") }
+            tooltip=EllesmereUI.L("Reminds you when a selected elixir buff is missing and an eligible elixir is in your bags. Click the icon to use it.\nOne reminder by default. The cog can show one per stat.\nWith Action Picker on, right-click to choose another item.") }
     end
     local function DressElixirsSlot(rgn, class, slotCfg)
         if not EllesmereUI._prebuilding then
             AttachStatDropdown(rgn, class, slotCfg, {
                 { key = "spellPower", label = EllesmereUI.L("Spell Power"), tooltip = EllesmereUI.L("Arcane Elixirs") },
-                { key = "manaRegen", label = EllesmereUI.L("Mana Regen (MP5)"),
-                  tooltip = EllesmereUI.L("Mageblood Elixirs") .. "\n" .. EllesmereUI.L("Elixir of Wicked Regeneration") },
-                { key = "healthRegen", label = EllesmereUI.L("Health Regen (HP5)"),
-                  tooltip = EllesmereUI.L("Troll's Blood Elixirs") .. "\n" .. EllesmereUI.L("Elixir of Wicked Regeneration") },
+                { key = "manaRegen", label = EllesmereUI.L("Mana Regen"),
+                  tooltip = EllesmereUI.L("Mageblood Elixirs") .. "\n" .. EllesmereUI.L("Elixir of Wicked Regeneration")
+                      .. "\n\n" .. EllesmereUI.L("Mageblood Elixirs do not stack with Elixir of Wicked Regeneration.") },
+                { key = "healthRegen", label = EllesmereUI.L("Health Regen"),
+                  tooltip = EllesmereUI.L("Troll's Blood Elixirs") .. "\n" .. EllesmereUI.L("Elixir of Wicked Regeneration")
+                      .. "\n\n" .. EllesmereUI.L("Health Regen from Troll's Blood and Elixir of Wicked Regeneration does not stack.") },
                 { key = "healingDone", label = EllesmereUI.L("Healing Done"), tooltip = EllesmereUI.L("Cleric's Elixirs") },
                 { key = "attackPower", label = EllesmereUI.L("Attack Power"),
-                  tooltip = EllesmereUI.L("Distilled Firewater") .. "\n" .. EllesmereUI.L("Winterfall Firewater") },
+                  tooltip = EllesmereUI.L("Distilled Firewater") .. "\n" .. EllesmereUI.L("Winterfall Firewater")
+                      .. "\n\n" .. EllesmereUI.L("Can stack with Blessing of Might and Battle Shout.") },
             })
         end
         BuildStatReminderCog(rgn, class, slotCfg.text, ELIXIR_STAT_KEYS, "elixirConsumable")
