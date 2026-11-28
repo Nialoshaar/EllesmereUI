@@ -244,6 +244,10 @@ if EABR.FOREVER then
         statConsumableShowBelow = 0,
         statConsumableSeparateReminders = false,
         statConsumableShowUpgrades = false,
+        elixirConsumableLowRank = false,
+        elixirConsumableShowBelow = 0,
+        elixirConsumableSeparateReminders = false,
+        elixirConsumableShowUpgrades = false,
         gather = false,     -- gathering tracking reminder; opt-in, it shows while no tracker is up
         gatherClassTrack = true,  -- an active class tracking also hides it
         hunterTracking = false, -- Hunter: match creature tracking to the current hostile target in combat

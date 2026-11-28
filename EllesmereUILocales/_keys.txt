@@ -1408,6 +1408,7 @@ Remaining
 Remaining uses
 Remaining: %s
 Reminders
+Reminds you when a selected elixir buff is missing and an eligible elixir is in your bags. Click the icon to use it.
 Reminds you when a ticked stat has no scroll or elixir buff while one is in your bags. Click the icon to use it.\nOne reminder by default; the cog can show one per stat.\nWith Action Picker on, right-click to choose another item.
 Remove
 Remove %s from the Alt List? It comes back when you next log into it.
@@ -1523,7 +1524,6 @@ Select a bar
 Select a binding from either sidebar to edit its options
 Select a spec above.
 Select a talent...
-Select additional elixir buffs for this class. Both dropdowns use the settings in the Scrolls and Elixirs cog.
 Select or add an entry
 Select the action bars you want to overwrite
 Select which classes you want %1$s to be assigned to

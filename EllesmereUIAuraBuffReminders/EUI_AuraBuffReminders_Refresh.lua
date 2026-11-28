@@ -1309,6 +1309,8 @@ local manaRegenConsumables = {
 -- The single reminder uses the first eligible stat in dropdown order.
 local statConsumables = {
     intellectConsumables, strengthConsumables, agilityConsumables, staminaConsumables, spiritConsumables, protectionConsumables,
+}
+local elixirConsumables = {
     spellPowerConsumables, manaRegenConsumables,
     {
         label = "Health Regen (HP5)", dismissKey = "forever:healthRegen", iconSpell = 24361,
@@ -1326,10 +1328,21 @@ local statConsumables = {
         items = { { 246948, 35, 17038 }, { 12820, 35, 17038 } },
     },
 }
-local statBonusesToBeat = {}
-local statExpirations = {}
-local statConsumableDismissKey = "forever:scrollsAndElixirs"
-local statConsumableChoices, statConsumableMacros
+local statReminderGroups = {
+    {
+        stats = statConsumables, dismissKey = "forever:scrollsAndElixirs",
+        separateKey = "statConsumableSeparateReminders", upgradeKey = "statConsumableShowUpgrades",
+        rankKey = "statConsumableLowRank", expiryKey = "statConsumableShowBelow",
+        pickerKey = "statConsumablePickerByClass",
+    },
+    {
+        stats = elixirConsumables, dismissKey = "forever:elixirs",
+        separateKey = "elixirConsumableSeparateReminders", upgradeKey = "elixirConsumableShowUpgrades",
+        rankKey = "elixirConsumableLowRank", expiryKey = "elixirConsumableShowBelow",
+        pickerKey = "elixirConsumablePickerByClass",
+    },
+}
+local statConsumableMacros
 local statConsumableBuffClasses = { ai = "MAGE", fort = "PRIEST", spirit = "PRIEST" }
 local campStatAuraID, campStatExpiration, campIntellectAmount, campFirstAidKit
 
@@ -1489,7 +1502,7 @@ local function PickStatConsumable(stat, activeBonus, level, choices, low)
     return firstID, watchLevel
 end
 
-local function AddStatConsumableEntry(missing, stat, itemID, expiration, choices, separate, automaticItemID)
+local function AddStatConsumableEntry(missing, group, stat, itemID, expiration, choices, separate, automaticItemID)
     if not statConsumableMacros then statConsumableMacros = {} end
     local macro = statConsumableMacros[itemID]
     if not macro then
@@ -1504,12 +1517,132 @@ local function AddStatConsumableEntry(missing, stat, itemID, expiration, choices
     e.label = EllesmereUI.L(stat.label)
     e.cooldownItemID = itemID
     e.cat = "forever"
-    e.dismissKey = separate and stat.dismissKey or statConsumableDismissKey
+    e.dismissKey = separate and stat.dismissKey or group.dismissKey
     e.foreverStatItems = choices
+    e.foreverStatGroup = choices and group or nil
     e.foreverStatAutomaticItem = choices and automaticItemID or nil
     e.foreverStatFamily = separate and stat.dismissKey or nil
     if expiration then e.expireAt, e.expireTotal = expiration, expiration - GetTime() end
     missing[#missing + 1] = e
+end
+
+local function ReadStatReminderGroup(group, fo, playerClass)
+    local statConsumableNeeded = false
+    local statWaitsForItem = false
+    local watchStatSpells = false
+    local healthBonus, healthExpiration
+    local separate = fo[group.separateKey] == true
+    if separate or not _dismissedUntilLoad[group.dismissKey] then
+        local restricted, campIntellect, firstAidKit
+        local minutes = fo[group.expiryKey] or 0
+        local warnSec = minutes > 0 and EABR.ShowUnderThresholdApplies() and minutes * 60 or nil
+        local showUpgrades = fo[group.upgradeKey] == true
+        for _, stat in ipairs(group.stats) do
+            local picks = fo[stat.setting]
+            local enabled = picks and picks[playerClass]
+            local bonus, expiration
+            if enabled == true and not (separate and _dismissedUntilLoad[stat.dismissKey]) then
+                local locked, tracksSpell = ns.FvStatConsumableLocked(stat.family, playerClass)
+                if tracksSpell then watchStatSpells = true end
+                if not locked then
+                    -- The bags first (a hash lookup per item): a stat with none of its
+                    -- items owned cannot show, so its buffs are not read; the bag
+                    -- listener stays on to hear one arrive.
+                    local own = ItemsOwned(stat.items)
+                    local ownHealth = stat.health and ItemsOwned(stat.health.items)
+                    if own or ownHealth then
+                        if restricted == nil then restricted = EllesmereUI.AuraKit.AurasRestricted() end
+                        if own and not restricted and campIntellect == nil and (stat == intellectConsumables or stat == staminaConsumables) then
+                            campIntellect, firstAidKit = FvCampStatBonuses()
+                        end
+                        if own then
+                            bonus, expiration = StatBonusToBeat(stat, restricted, warnSec, showUpgrades, campIntellect, firstAidKit)
+                        end
+                        if ownHealth then
+                            healthBonus, healthExpiration = StatBonusToBeat(stat.health, restricted, warnSec, showUpgrades)
+                        end
+                        if bonus ~= nil or (ownHealth and healthBonus ~= nil) then statConsumableNeeded = true end
+                    else
+                        statWaitsForItem = true
+                    end
+                end
+            end
+            stat.bonus = bonus
+            stat.expiration = expiration
+        end
+    end
+    group.needed = statConsumableNeeded
+    group.healthBonus, group.healthExpiration = healthBonus, healthExpiration
+    return statConsumableNeeded, statWaitsForItem, watchStatSpells
+end
+
+local function AddStatReminderGroup(missing, group, fo, playerClass, level, pickerEnabled)
+    local watchLevel = false
+    local separate = fo[group.separateKey] == true
+    local healthBonus, healthExpiration = group.healthBonus, group.healthExpiration
+    local sharedChoices, preferred, familyPicks
+    if pickerEnabled then
+        if separate then
+            familyPicks = fo.statConsumablePickerByFamily and fo.statConsumablePickerByFamily[playerClass]
+        else
+            if not group.choices then group.choices = {} end
+            sharedChoices = group.choices
+            wipe(sharedChoices)
+            preferred = fo[group.pickerKey] and fo[group.pickerKey][playerClass]
+        end
+    end
+    local chosenID, chosenIndex, chosenExpiration, automaticItemID
+    local low = fo[group.rankKey] == true
+    for i, stat in ipairs(group.stats) do
+        local bonus = stat.bonus
+        local canUseHealth = stat.health and healthBonus ~= nil
+        if bonus or canUseHealth then
+            local choices = sharedChoices
+            if separate and pickerEnabled then
+                if not stat.choices then stat.choices = {} end
+                choices = stat.choices
+                wipe(choices)
+            end
+            local itemID, blockedByLevel
+            local expiration = stat.expiration
+            local pinned = separate and familyPicks and familyPicks[stat.dismissKey] or preferred
+            if bonus then
+                itemID, blockedByLevel = PickStatConsumable(stat, bonus, level, choices, low)
+                if blockedByLevel then watchLevel = true end
+            end
+            local pinnedScroll = pinned and choices[pinned]
+            -- Prefer a scroll automatically. A pinned elixir uses its own aura timer.
+            if canUseHealth and (choices or not itemID) then
+                local healthID
+                healthID, blockedByLevel = PickStatConsumable(stat.health, healthBonus, level, choices, low)
+                if blockedByLevel then watchLevel = true end
+                if not itemID then
+                    itemID, expiration = healthID, healthExpiration
+                elseif pinned and choices[pinned] and not pinnedScroll then
+                    expiration = healthExpiration
+                end
+            end
+            local automatic = itemID
+            if pinned and choices[pinned] then itemID = pinned end
+            if separate then
+                if itemID then AddStatConsumableEntry(missing, group, stat, itemID, expiration, choices, true, automatic) end
+            else
+                automaticItemID = automaticItemID or automatic
+                if itemID and not chosenID then
+                    chosenID, chosenIndex, chosenExpiration = itemID, i, expiration
+                    if not choices then break end
+                end
+                if preferred and choices[preferred] then
+                    chosenID, chosenIndex, chosenExpiration = preferred, i, expiration
+                    preferred = nil
+                end
+            end
+        end
+    end
+    if chosenID then
+        AddStatConsumableEntry(missing, group, group.stats[chosenIndex], chosenID, chosenExpiration, sharedChoices, false, automaticItemID)
+    end
+    return watchLevel
 end
 
 -- WoW Forever collector: the Camp Benefits campfire buff, the Sleeping Bag's
@@ -1575,48 +1708,13 @@ function EABR.CollectForever(missing, inInstance, inPvP, playerClass)
         and not (EllesmereUI.AuraKit.AurasRestricted() and not EABR.FvRanksReadable(censerIDs))
     if wantCenser and not censerMissing then EABR._fvCenser = nil end
     local censer = censerMissing and EABR.FvCenserOwned() or false
-    local statConsumableNeeded = false
-    local statWaitsForItem = false
-    local watchStatSpells = false
-    local healthBonus, healthExpiration
-    local separate = fo and fo.statConsumableSeparateReminders == true
-    if itemShows and not inPvP and playerClass and (separate or not _dismissedUntilLoad[statConsumableDismissKey]) then
-        local restricted, campIntellect, firstAidKit
-        local minutes = fo.statConsumableShowBelow or 0
-        local warnSec = minutes > 0 and EABR.ShowUnderThresholdApplies() and minutes * 60 or nil
-        local showUpgrades = fo.statConsumableShowUpgrades == true
-        for i, stat in ipairs(statConsumables) do
-            local picks = fo[stat.setting]
-            local enabled = picks and picks[playerClass]
-            local bonus, expiration
-            if enabled == true and not (separate and _dismissedUntilLoad[stat.dismissKey]) then
-                local locked, tracksSpell = ns.FvStatConsumableLocked(stat.family, playerClass)
-                if tracksSpell then watchStatSpells = true end
-                if not locked then
-                    -- The bags first (a hash lookup per item): a stat with none of its
-                    -- items owned cannot show, so its buffs are not read; the bag
-                    -- listener stays on to hear one arrive.
-                    local own = ItemsOwned(stat.items)
-                    local ownHealth = stat.health and ItemsOwned(stat.health.items)
-                    if own or ownHealth then
-                        if restricted == nil then restricted = EllesmereUI.AuraKit.AurasRestricted() end
-                        if own and not restricted and campIntellect == nil and (stat == intellectConsumables or stat == staminaConsumables) then
-                            campIntellect, firstAidKit = FvCampStatBonuses()
-                        end
-                        if own then
-                            bonus, expiration = StatBonusToBeat(stat, restricted, warnSec, showUpgrades, campIntellect, firstAidKit)
-                        end
-                        if ownHealth then
-                            healthBonus, healthExpiration = StatBonusToBeat(stat.health, restricted, warnSec, showUpgrades)
-                        end
-                        if bonus ~= nil or (ownHealth and healthBonus ~= nil) then statConsumableNeeded = true end
-                    else
-                        statWaitsForItem = true
-                    end
-                end
-            end
-            statBonusesToBeat[i] = bonus
-            statExpirations[i] = expiration
+    local statConsumableNeeded, statWaitsForItem, watchStatSpells
+    if itemShows and not inPvP and playerClass then
+        for _, group in ipairs(statReminderGroups) do
+            local needed, waitsForItem, tracksSpells = ReadStatReminderGroup(group, fo, playerClass)
+            statConsumableNeeded = statConsumableNeeded or needed
+            statWaitsForItem = statWaitsForItem or waitsForItem
+            watchStatSpells = watchStatSpells or tracksSpells
         end
     end
     -- A plain boolean: censer is the item ID, and the listener's sync compares by value.
@@ -1703,67 +1801,10 @@ function EABR.CollectForever(missing, inInstance, inPvP, playerClass)
     local beforeStatCount = #missing
     if statConsumableNeeded then
         local level = UnitLevel("player")
-        local sharedChoices, preferred, familyPicks
-        if pickerEnabled then
-            if separate then
-                familyPicks = fo.statConsumablePickerByFamily and fo.statConsumablePickerByFamily[playerClass]
-            else
-                if not statConsumableChoices then statConsumableChoices = {} end
-                sharedChoices = statConsumableChoices
-                wipe(sharedChoices)
-                preferred = fo.statConsumablePickerByClass and fo.statConsumablePickerByClass[playerClass]
+        for _, group in ipairs(statReminderGroups) do
+            if group.needed and AddStatReminderGroup(missing, group, fo, playerClass, level, pickerEnabled) then
+                watchLevel = true
             end
-        end
-        local chosenID, chosenIndex, chosenExpiration, automaticItemID
-        local low = fo.statConsumableLowRank == true
-        for i, stat in ipairs(statConsumables) do
-            local bonus = statBonusesToBeat[i]
-            local canUseHealth = stat.health and healthBonus ~= nil
-            if bonus or canUseHealth then
-                local choices = sharedChoices
-                if separate and pickerEnabled then
-                    if not stat.choices then stat.choices = {} end
-                    choices = stat.choices
-                    wipe(choices)
-                end
-                local itemID, blockedByLevel
-                local expiration = statExpirations[i]
-                local pinned = separate and familyPicks and familyPicks[stat.dismissKey] or preferred
-                if bonus then
-                    itemID, blockedByLevel = PickStatConsumable(stat, bonus, level, choices, low)
-                    if blockedByLevel then watchLevel = true end
-                end
-                local pinnedScroll = pinned and choices[pinned]
-                -- Prefer a scroll automatically. A pinned elixir uses its own aura timer.
-                if canUseHealth and (choices or not itemID) then
-                    local healthID
-                    healthID, blockedByLevel = PickStatConsumable(stat.health, healthBonus, level, choices, low)
-                    if blockedByLevel then watchLevel = true end
-                    if not itemID then
-                        itemID, expiration = healthID, healthExpiration
-                    elseif pinned and choices[pinned] and not pinnedScroll then
-                        expiration = healthExpiration
-                    end
-                end
-                local automatic = itemID
-                if pinned and choices[pinned] then itemID = pinned end
-                if separate then
-                    if itemID then AddStatConsumableEntry(missing, stat, itemID, expiration, choices, true, automatic) end
-                else
-                    automaticItemID = automaticItemID or automatic
-                    if itemID and not chosenID then
-                        chosenID, chosenIndex, chosenExpiration = itemID, i, expiration
-                        if not choices then break end
-                    end
-                    if preferred and choices[preferred] then
-                        chosenID, chosenIndex, chosenExpiration = preferred, i, expiration
-                        preferred = nil
-                    end
-                end
-            end
-        end
-        if chosenID then
-            AddStatConsumableEntry(missing, statConsumables[chosenIndex], chosenID, chosenExpiration, sharedChoices, false, automaticItemID)
         end
     end
     EABR.FvSyncConsumableItemEvents(statConsumableNeeded, watchLevel, #missing > beforeStatCount)

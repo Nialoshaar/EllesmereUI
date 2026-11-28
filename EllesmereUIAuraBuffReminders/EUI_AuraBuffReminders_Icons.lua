@@ -1707,6 +1707,7 @@ ShowForeverItemMenu = function(btn)
     local statItems = btn._foreverStatItems
     local automaticItem = btn._foreverStatAutomaticItem
     local statFamily = btn._foreverStatFamily
+    local statGroup = btn._foreverStatGroup
     local class = statItems and GetPlayerClass()
     local items = weapon and weapon.actions or statItems or btn._foreverFood
     if not items then return end
@@ -1729,7 +1730,8 @@ ShowForeverItemMenu = function(btn)
         if statItems then
             if not class or GetPlayerClass() ~= class or btn._foreverStatItems ~= statItems
                 or btn._foreverStatFamily ~= statFamily or btn._foreverStatAutomaticItem ~= automaticItem
-                or (fo.statConsumableSeparateReminders == true) ~= (statFamily ~= nil) then return false end
+                or btn._foreverStatGroup ~= statGroup
+                or (fo[statGroup.separateKey] == true) ~= (statFamily ~= nil) then return false end
             local n = 0
             for id, count in pairs(statItems) do
                 if statSnapshot[id] ~= count then return false end
@@ -1767,11 +1769,11 @@ ShowForeverItemMenu = function(btn)
                 if not next(picks) then byClass[class] = nil end
                 if not next(byClass) then fo.statConsumablePickerByFamily = nil end
             else
-                local picks = fo.statConsumablePickerByClass
+                local picks = fo[statGroup.pickerKey]
                 if (picks and picks[class]) == pin then return end
-                if not picks then picks = {}; fo.statConsumablePickerByClass = picks end
+                if not picks then picks = {}; fo[statGroup.pickerKey] = picks end
                 picks[class] = pin
-                if not next(picks) then fo.statConsumablePickerByClass = nil end
+                if not next(picks) then fo[statGroup.pickerKey] = nil end
             end
             if _G._EABR_RequestRefresh then _G._EABR_RequestRefresh() end
             return
@@ -1891,6 +1893,7 @@ do
         e.foreverStatItems = nil
         e.foreverStatAutomaticItem = nil
         e.foreverStatFamily = nil
+        e.foreverStatGroup = nil
         e.fvExtra = nil
         return e
     end
